@@ -1,0 +1,22 @@
+{
+  "name": "@claude-workflow-kit/autopilot",
+  "version": "0.1.0",
+  "description": "Anthropic SDK-based autonomous workflow orchestrator",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "ts-node src/index.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@slack/bolt": "^4.0.0",
+    "chokidar": "^4.0.0",
+    "dotenv": "^16.0.0",
+    "gray-matter": "^4.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0",
+    "ts-node": "^10.9.0"
+  }
+}
