@@ -10,6 +10,7 @@ interface PendingApproval {
   resolve: (result: ApprovalResult) => void;
   channel: string;
   ts: string;
+  message: string;
   originalBlocks: (Block | KnownBlock)[];
 }
 
@@ -68,13 +69,27 @@ export async function requestApproval(
       resolve,
       channel: config.slack.channelId,
       ts: res.ts as string,
+      message,
       originalBlocks: blocks,
     }),
   );
 }
 
-async function updateMessage(app: App, channel: string, ts: string, text: string): Promise<void> {
-  await app.client.chat.update({ channel, ts, text, blocks: [] });
+async function updateMessageWithResult(
+  app: App,
+  entry: PendingApproval,
+  resultText: string,
+): Promise<void> {
+  await app.client.chat.update({
+    channel: entry.channel,
+    ts: entry.ts,
+    text: resultText,
+    blocks: [
+      { type: 'section', text: { type: 'mrkdwn', text: entry.message } },
+      { type: 'divider' },
+      { type: 'section', text: { type: 'mrkdwn', text: resultText } },
+    ],
+  });
 }
 
 async function restoreOriginalMessage(app: App, id: string): Promise<void> {
@@ -101,7 +116,7 @@ export function registerApprovalHandlers(app: App): void {
     const id = action.value as string;
     const label = action.text?.text ?? '承認';
     const entry = pending.get(id);
-    if (entry) await updateMessage(app, entry.channel, entry.ts, `✅ ${label}`);
+    if (entry) await updateMessageWithResult(app, entry, `✅ ${label}`);
     resolveApproval(id, { action: 'approve' });
   });
 
@@ -110,7 +125,7 @@ export function registerApprovalHandlers(app: App): void {
     await ack();
     const id = (body as any).actions[0].value as string;
     const entry = pending.get(id);
-    if (entry) await updateMessage(app, entry.channel, entry.ts, '⏳ やり直し理由を入力中...');
+    if (entry) await updateMessageWithResult(app, entry, '⏳ やり直し理由を入力中...');
     await client.views.open({
       trigger_id: (body as any).trigger_id,
       view: {
@@ -147,7 +162,7 @@ export function registerApprovalHandlers(app: App): void {
     const id = view.private_metadata;
     const reason = view.state.values['reason_block']['reason_input'].value ?? '';
     const entry = pending.get(id);
-    if (entry) await updateMessage(app, entry.channel, entry.ts, `🚫 やり直し: ${reason}`);
+    if (entry) await updateMessageWithResult(app, entry, `🚫 やり直し: ${reason}`);
     resolveApproval(id, { action: 'reject', reason });
   });
 
