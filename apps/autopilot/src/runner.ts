@@ -65,7 +65,7 @@ async function runTask(
     { approve: '開始', reject: 'スキップ' },
   );
 
-  if (startResult === 'reject') {
+  if (startResult.action === 'reject') {
     console.log(`[runner] task skipped: ${task.slug}`);
     return;
   }
@@ -87,10 +87,10 @@ async function runTask(
       { approve: '完了', reject: 'やり直し' },
     );
 
-    if (doneResult === 'approve') break;
+    if (doneResult.action === 'approve') break;
 
-    // やり直し: フィードバックを促してから再実行
-    prompt = `前回の実装を見直してください。タスク: ${task.slug}\n\n${task.content}\n\n作業ディレクトリ: ${repoPath}\n\n前回の実装に問題があったため再実行します。完了条件を再確認して修正してください。`;
+    // やり直し: 理由をプロンプトに含めて再実行
+    prompt = `前回の実装を修正してください。タスク: ${task.slug}\n\n${task.content}\n\n作業ディレクトリ: ${repoPath}\n\n## 修正依頼\n${doneResult.reason}\n\n上記の修正依頼を踏まえて、完了条件を再確認しながら修正してください。`;
     console.log(`[runner] retrying task: ${task.slug}`);
   }
 
