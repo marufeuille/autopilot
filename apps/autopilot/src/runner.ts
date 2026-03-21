@@ -1,3 +1,4 @@
+import { execSync } from 'child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { App } from '@slack/bolt';
 import { StoryFile, TaskFile, getStoryTasks } from './vault/reader';
@@ -79,12 +80,24 @@ async function runTask(
   while (true) {
     await runClaudeAgent(prompt, repoPath);
 
+    // PR URL 取得
+    let prUrl = '';
+    try {
+      prUrl = execSync(`gh pr view feature/${task.slug} --json url -q .url`, {
+        cwd: repoPath,
+        encoding: 'utf-8',
+      }).trim();
+    } catch {
+      // PR未作成の場合は無視
+    }
+    const prLine = prUrl ? `\n*PR*: ${prUrl}` : '';
+
     // タスク完了承認
     const doneId = generateApprovalId(story.slug, `${task.slug}-done`);
     const doneResult = await requestApproval(
       app,
       doneId,
-      `*タスク完了確認*\n\n*タスク*: ${task.slug}\n\n実装を確認してください。`,
+      `*タスク完了確認*\n\n*タスク*: ${task.slug}${prLine}\n\n実装を確認してください。`,
       { approve: '完了', reject: 'やり直し' },
     );
 
