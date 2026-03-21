@@ -56,28 +56,33 @@ async function main(): Promise<void> {
   console.log('[slack] bot started (Socket Mode)');
 
   // Vault 監視：起動時に既存の pending_approval タスクを処理
-  const project = 'claude-workflow-kit';
-  const watchPath = vaultTasksPath(project);
+  // WATCH_PROJECTS: カンマ区切りで複数指定可（例: claude-workflow-kit,cwk-test）
+  const projects = (process.env.WATCH_PROJECTS ?? 'claude-workflow-kit').split(',').map((p) => p.trim());
+
+  for (const project of projects) {
+    const watchPath = vaultTasksPath(project);
   console.log(`[vault] watching ${watchPath}`);
 
-  const watcher = chokidar.watch(path.join(watchPath, '**', '*.md'), {
-    ignoreInitial: false,
-    ignored: /README\.md$/,
-  });
+    console.log(`[vault] watching ${watchPath}`);
+    const watcher = chokidar.watch(path.join(watchPath, '**', '*.md'), {
+      ignoreInitial: false,
+      ignored: /README\.md$/,
+    });
 
-  watcher.on('add', async (filePath) => {
-    const tasks = await getPendingApprovalTasks(project);
-    if (tasks.some((t) => t.filePath === filePath)) {
-      await startWorkflowForTask(temporalClient, filePath, project).catch(console.error);
-    }
-  });
+    watcher.on('add', async (filePath) => {
+      const tasks = await getPendingApprovalTasks(project);
+      if (tasks.some((t) => t.filePath === filePath)) {
+        await startWorkflowForTask(temporalClient, filePath, project).catch(console.error);
+      }
+    });
 
-  watcher.on('change', async (filePath) => {
-    const tasks = await getPendingApprovalTasks(project);
-    if (tasks.some((t) => t.filePath === filePath)) {
-      await startWorkflowForTask(temporalClient, filePath, project).catch(console.error);
-    }
-  });
+    watcher.on('change', async (filePath) => {
+      const tasks = await getPendingApprovalTasks(project);
+      if (tasks.some((t) => t.filePath === filePath)) {
+        await startWorkflowForTask(temporalClient, filePath, project).catch(console.error);
+      }
+    });
+  }
 
   console.log('[orchestrator] ready');
 }
