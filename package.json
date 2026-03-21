@@ -1,18 +1,24 @@
 {
-  "name": "claude-workflow-kit",
+  "name": "autopilot",
   "version": "0.1.0",
-  "private": true,
-  "workspaces": [
-    "apps/*"
-  ],
+  "description": "Anthropic SDK-based autonomous workflow orchestrator",
+  "main": "dist/index.js",
   "scripts": {
-    "build": "npm run build --workspaces",
-    "dev:temporal": "npm run dev --workspace=apps/temporal",
-    "dev:autopilot": "npm run dev --workspace=apps/autopilot"
+    "build": "tsc",
+    "dev": "ts-node src/index.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.81",
+    "@slack/bolt": "^4.0.0",
+    "chokidar": "^4.0.0",
+    "dotenv": "^16.0.0",
+    "glob": "^13.0.6",
+    "gray-matter": "^4.0.3"
   },
   "devDependencies": {
+    "@types/glob": "^8.1.0",
     "@types/node": "^22.0.0",
-    "typescript": "^5.0.0",
-    "ts-node": "^10.9.0"
+    "ts-node": "^10.9.0",
+    "typescript": "^5.0.0"
   }
 }

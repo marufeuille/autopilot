@@ -1,7 +1,8 @@
 import * as dotenv from 'dotenv';
 import * as path from 'path';
 
-dotenv.config();
+// .env をリポジトリルートから読む（src/ → .. がルート）
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 function required(key: string): string {
   const value = process.env[key];
@@ -16,16 +17,20 @@ export const config = {
     appToken: required('SLACK_APP_TOKEN'),
     channelId: required('SLACK_CHANNEL_ID'),
   },
-  temporal: {
-    address: process.env.TEMPORAL_ADDRESS ?? 'localhost:7233',
-    taskQueue: process.env.TEMPORAL_TASK_QUEUE ?? 'claude-workflow-kit',
-  },
+  watchProjects: (process.env.WATCH_PROJECTS ?? 'claude-workflow-kit')
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean),
 } as const;
 
 export function vaultProjectPath(project: string): string {
   return path.join(config.vaultPath, 'Projects', project);
 }
 
-export function vaultTasksPath(project: string): string {
-  return path.join(vaultProjectPath(project), 'tasks');
+export function vaultStoriesPath(project: string): string {
+  return path.join(vaultProjectPath(project), 'stories');
+}
+
+export function vaultTasksPath(project: string, storySlug: string): string {
+  return path.join(vaultProjectPath(project), 'tasks', storySlug);
 }
