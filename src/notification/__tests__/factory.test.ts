@@ -77,4 +77,19 @@ describe('createNotificationBackend (factory)', () => {
     expect(typeof backend.notify).toBe('function');
     expect(typeof backend.requestApproval).toBe('function');
   });
+
+  it('generateApprovalId が notification モジュールからエクスポートされている', async () => {
+    const { generateApprovalId } = await import('../index');
+
+    expect(typeof generateApprovalId).toBe('function');
+    const id = generateApprovalId('story-1', 'task-1');
+    expect(id).toMatch(/^story-1--task-1--\d+$/);
+  });
+
+  it('SlackNotificationBackend が notification モジュールからエクスポートされている', async () => {
+    const { SlackNotificationBackend } = await import('../index');
+
+    expect(SlackNotificationBackend).toBeDefined();
+    expect(typeof SlackNotificationBackend).toBe('function');
+  });
 });

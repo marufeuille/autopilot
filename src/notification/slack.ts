@@ -1,9 +1,7 @@
 import { App } from '@slack/bolt';
 import type { Block, KnownBlock } from '@slack/types';
-import { config } from './config';
-import type { NotificationBackend, ApprovalResult } from './notification';
-
-export type { ApprovalResult };
+import { config } from '../config';
+import type { NotificationBackend, ApprovalResult } from './types';
 
 interface PendingApproval {
   resolve: (result: ApprovalResult) => void;
@@ -14,10 +12,6 @@ interface PendingApproval {
 }
 
 const pending = new Map<string, PendingApproval>();
-
-export function generateApprovalId(storySlug: string, taskSlug: string): string {
-  return `${storySlug}--${taskSlug}--${Date.now()}`;
-}
 
 function buildApprovalBlocks(
   id: string,
@@ -49,29 +43,6 @@ function buildApprovalBlocks(
       ],
     },
   ];
-}
-
-export async function requestApproval(
-  app: App,
-  id: string,
-  message: string,
-  buttons: { approve: string; reject: string },
-): Promise<ApprovalResult> {
-  const blocks = buildApprovalBlocks(id, message, buttons);
-  const res = await app.client.chat.postMessage({
-    channel: config.slack.channelId,
-    blocks,
-  });
-
-  return new Promise((resolve) =>
-    pending.set(id, {
-      resolve,
-      channel: config.slack.channelId,
-      ts: res.ts as string,
-      message,
-      originalBlocks: blocks,
-    }),
-  );
 }
 
 async function updateMessageWithResult(
@@ -107,6 +78,11 @@ function resolveApproval(id: string, result: ApprovalResult): void {
   pending.delete(id);
 }
 
+/**
+ * Slack アクションハンドラーを登録する
+ *
+ * 承認ボタン、却下ボタン、却下理由モーダルのハンドラーを Slack App に登録する。
+ */
 export function registerApprovalHandlers(app: App): void {
   // 承認ボタン: メッセージを更新してすぐ解決
   app.action('cwk_approve', async ({ body, ack }) => {
@@ -174,7 +150,10 @@ export function registerApprovalHandlers(app: App): void {
 }
 
 /**
- * Slack バックエンドを NotificationBackend インターフェースでラップするアダプター
+ * Slack 通知バックエンド
+ *
+ * NotificationBackend インターフェースを実装し、Slack API 経由で
+ * 通知送信と承認フロー（インタラクティブボタン + モーダル）を提供する。
  */
 export class SlackNotificationBackend implements NotificationBackend {
   constructor(private readonly app: App) {}
@@ -191,6 +170,29 @@ export class SlackNotificationBackend implements NotificationBackend {
     message: string,
     buttons: { approve: string; reject: string },
   ): Promise<ApprovalResult> {
-    return requestApproval(this.app, id, message, buttons);
+    return this._postApprovalRequest(id, message, buttons);
+  }
+
+  /** 承認リクエストを Slack に投稿し、結果を待つ */
+  private async _postApprovalRequest(
+    id: string,
+    message: string,
+    buttons: { approve: string; reject: string },
+  ): Promise<ApprovalResult> {
+    const blocks = buildApprovalBlocks(id, message, buttons);
+    const res = await this.app.client.chat.postMessage({
+      channel: config.slack.channelId,
+      blocks,
+    });
+
+    return new Promise((resolve) =>
+      pending.set(id, {
+        resolve,
+        channel: config.slack.channelId,
+        ts: res.ts as string,
+        message,
+        originalBlocks: blocks,
+      }),
+    );
   }
 }
