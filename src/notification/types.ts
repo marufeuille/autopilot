@@ -30,4 +30,3 @@ export interface NotificationBackend {
     buttons: { approve: string; reject: string },
   ): Promise<ApprovalResult>;
 }
-
