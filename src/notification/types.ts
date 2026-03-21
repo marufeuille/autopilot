@@ -30,9 +30,3 @@ export interface NotificationBackend {
     buttons: { approve: string; reject: string },
   ): Promise<ApprovalResult>;
 }
-
-/** LocalNotificationBackend のオプション */
-export interface LocalBackendOptions {
-  /** requestApproval のタイムアウト（ミリ秒）。デフォルト: 300000（5分） */
-  approvalTimeoutMs?: number;
-}

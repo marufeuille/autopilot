@@ -1,0 +1,80 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+describe('createNotificationBackend (factory)', () => {
+  const originalEnv = process.env.NOTIFY_BACKEND;
+
+  beforeEach(() => {
+    // モジュールキャッシュをリセットして環境変数の変更を反映させる
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    // 環境変数を元に戻す
+    if (originalEnv === undefined) {
+      delete process.env.NOTIFY_BACKEND;
+    } else {
+      process.env.NOTIFY_BACKEND = originalEnv;
+    }
+  });
+
+  it('NOTIFY_BACKEND=local で LocalNotificationBackend が生成される', async () => {
+    process.env.NOTIFY_BACKEND = 'local';
+    const { createNotificationBackend, LocalNotificationBackend } = await import('../index');
+
+    const backend = await createNotificationBackend();
+
+    expect(backend).toBeInstanceOf(LocalNotificationBackend);
+  });
+
+  it('環境変数未設定時のデフォルトは local', async () => {
+    delete process.env.NOTIFY_BACKEND;
+    const { createNotificationBackend, LocalNotificationBackend } = await import('../index');
+
+    const backend = await createNotificationBackend();
+
+    expect(backend).toBeInstanceOf(LocalNotificationBackend);
+  });
+
+  it('未知のバックエンド指定時に明確なエラーメッセージが出る', async () => {
+    process.env.NOTIFY_BACKEND = 'unknown-backend';
+    const { createNotificationBackend } = await import('../index');
+
+    await expect(createNotificationBackend()).rejects.toThrow(
+      'Unknown NOTIFY_BACKEND: "unknown-backend"',
+    );
+  });
+
+  it('未知のバックエンド指定時にサポート値が案内される', async () => {
+    process.env.NOTIFY_BACKEND = 'invalid';
+    const { createNotificationBackend } = await import('../index');
+
+    await expect(createNotificationBackend()).rejects.toThrow(
+      /Supported values: "local".*"slack"/,
+    );
+  });
+
+  it('NOTIFY_BACKEND=slack で Slack バックエンドの動的インポートが試みられる', async () => {
+    process.env.NOTIFY_BACKEND = 'slack';
+    const { createNotificationBackend } = await import('../index');
+
+    // Slack 依存が未インストールまたは設定不足の場合はエラーになるが、
+    // "slack" ケースが認識されていることを確認（unknown エラーにならない）
+    try {
+      await createNotificationBackend();
+    } catch (e: any) {
+      // "Unknown NOTIFY_BACKEND" エラーではないことを確認
+      expect(e.message).not.toContain('Unknown NOTIFY_BACKEND');
+    }
+  });
+
+  it('生成されたバックエンドが NotificationBackend インターフェースを満たす', async () => {
+    process.env.NOTIFY_BACKEND = 'local';
+    const { createNotificationBackend } = await import('../index');
+
+    const backend = await createNotificationBackend();
+
+    // インターフェースの必須メソッドが存在する
+    expect(typeof backend.notify).toBe('function');
+    expect(typeof backend.requestApproval).toBe('function');
+  });
+});

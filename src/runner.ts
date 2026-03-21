@@ -1,11 +1,10 @@
 import { execSync } from 'child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import { App } from '@slack/bolt';
 import { StoryFile, TaskFile, getStoryTasks } from './vault/reader';
 import { updateFileStatus, createTaskFile, TaskDraft } from './vault/writer';
-import { requestApproval, generateApprovalId } from './approval';
+import { generateApprovalId } from './approval';
 import { decomposeTasks } from './decomposer';
-import { config } from './config';
+import { NotificationBackend } from './notification';
 
 function buildTaskPrompt(task: TaskFile, story: StoryFile, repoPath: string): string {
   return `あなたは優秀なソフトウェアエンジニアです。以下のタスクを実装してください。
@@ -54,14 +53,13 @@ async function runClaudeAgent(prompt: string, cwd: string): Promise<void> {
 async function runTask(
   task: TaskFile,
   story: StoryFile,
-  app: App,
+  notifier: NotificationBackend,
   repoPath: string,
 ): Promise<void> {
   // タスク開始承認
   console.log(`[runner] requesting start approval: ${task.slug}`);
   const startId = generateApprovalId(story.slug, task.slug);
-  const startResult = await requestApproval(
-    app,
+  const startResult = await notifier.requestApproval(
     startId,
     `*タスク開始確認*\n\n*ストーリー*: ${story.slug}\n*タスク*: ${task.slug}\n\nこのタスクを開始しますか？`,
     { approve: '開始', reject: 'スキップ' },
@@ -94,8 +92,7 @@ async function runTask(
 
     // タスク完了承認
     const doneId = generateApprovalId(story.slug, `${task.slug}-done`);
-    const doneResult = await requestApproval(
-      app,
+    const doneResult = await notifier.requestApproval(
       doneId,
       `*タスク完了確認*\n\n*タスク*: ${task.slug}${prLine}\n\n実装を確認してください。`,
       { approve: '完了', reject: 'やり直し' },
@@ -119,7 +116,7 @@ function formatDecompositionMessage(story: StoryFile, drafts: TaskDraft[]): stri
   return `*タスク分解案*\n\n*ストーリー*: ${story.slug}\n\n${list}\n\n承認するとタスクファイルを作成して実行を開始します。`;
 }
 
-async function runDecomposition(story: StoryFile, app: App): Promise<void> {
+async function runDecomposition(story: StoryFile, notifier: NotificationBackend): Promise<void> {
   let retryReason: string | undefined;
 
   while (true) {
@@ -127,8 +124,7 @@ async function runDecomposition(story: StoryFile, app: App): Promise<void> {
     const drafts = await decomposeTasks(story, retryReason);
 
     const id = generateApprovalId(story.slug, 'decompose');
-    const result = await requestApproval(
-      app,
+    const result = await notifier.requestApproval(
       id,
       formatDecompositionMessage(story, drafts),
       { approve: '承認', reject: 'やり直し' },
@@ -147,14 +143,14 @@ async function runDecomposition(story: StoryFile, app: App): Promise<void> {
   }
 }
 
-export async function runStory(story: StoryFile, app: App): Promise<void> {
+export async function runStory(story: StoryFile, notifier: NotificationBackend): Promise<void> {
   const repoPath = `${process.env.HOME}/dev/${story.project}`;
   console.log(`[runner] starting story: ${story.slug}`);
 
   const tasks = await getStoryTasks(story.project, story.slug);
 
   if (tasks.length === 0) {
-    await runDecomposition(story, app);
+    await runDecomposition(story, notifier);
   }
 
   const todoTasks = (await getStoryTasks(story.project, story.slug)).filter(
@@ -167,7 +163,7 @@ export async function runStory(story: StoryFile, app: App): Promise<void> {
   }
 
   for (const task of todoTasks) {
-    await runTask(task, story, app, repoPath);
+    await runTask(task, story, notifier, repoPath);
   }
 
   // 全タスクがDoneの場合のみストーリーを完了にする
@@ -175,10 +171,7 @@ export async function runStory(story: StoryFile, app: App): Promise<void> {
   const allDone = allTasks.length > 0 && allTasks.every((t) => t.status === 'Done');
   if (allDone) {
     updateFileStatus(story.filePath, 'Done');
-    await app.client.chat.postMessage({
-      channel: config.slack.channelId,
-      text: `:white_check_mark: ストーリー完了: *${story.slug}*`,
-    });
+    await notifier.notify(`✅ ストーリー完了: ${story.slug}`);
     console.log(`[runner] story done: ${story.slug}`);
   } else {
     const remaining = allTasks.filter((t) => t.status !== 'Done');

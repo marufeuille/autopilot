@@ -1,22 +1,18 @@
 import { execFile } from 'child_process';
 import * as readline from 'readline';
-import { NotificationBackend, ApprovalResult, LocalBackendOptions } from './types';
-
-const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5分
+import { NotificationBackend, ApprovalResult } from './types';
 
 /**
  * ローカル通知バックエンド
  *
  * - notify: macOS システム通知（osascript）を送信
- * - requestApproval: macOS 通知 + ターミナル stdin で y/n 承認
+ * - requestApproval: macOS 通知 + ターミナル stdin で y/n 承認（無制限待機）
  */
 export class LocalNotificationBackend implements NotificationBackend {
-  private readonly timeoutMs: number;
   /** テスト用: readline.Interface を外部から注入可能 */
   public _createReadlineInterface: () => readline.Interface;
 
-  constructor(options: LocalBackendOptions = {}) {
-    this.timeoutMs = options.approvalTimeoutMs ?? DEFAULT_TIMEOUT_MS;
+  constructor() {
     this._createReadlineInterface = () =>
       readline.createInterface({ input: process.stdin, output: process.stdout });
   }
@@ -56,7 +52,10 @@ export class LocalNotificationBackend implements NotificationBackend {
   }
 
   /**
-   * ターミナルの標準入力で y/n 承認を受け付ける
+   * ターミナルの標準入力で y/n 承認を受け付ける（無制限待機）
+   *
+   * ターミナル操作は人間が行うため、タイムアウトは設けない。
+   * 人間が離席中に勝手に却下されるのは望ましくないため、入力があるまで待ち続ける。
    */
   private promptTerminal(
     message: string,
@@ -64,21 +63,6 @@ export class LocalNotificationBackend implements NotificationBackend {
   ): Promise<ApprovalResult> {
     return new Promise<ApprovalResult>((resolve) => {
       const rl = this._createReadlineInterface();
-      let settled = false;
-
-      const settle = (result: ApprovalResult) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        rl.close();
-        resolve(result);
-      };
-
-      // タイムアウト
-      const timer = setTimeout(() => {
-        console.log('\n[approval] タイムアウトしました。自動的に却下します。');
-        settle({ action: 'reject', reason: 'タイムアウト' });
-      }, this.timeoutMs);
 
       // プロンプト表示
       console.log('\n' + '='.repeat(60));
@@ -92,11 +76,13 @@ export class LocalNotificationBackend implements NotificationBackend {
         (answer: string) => {
           const normalized = answer.trim().toLowerCase();
           if (normalized === 'y' || normalized === 'yes') {
-            settle({ action: 'approve' });
+            rl.close();
+            resolve({ action: 'approve' });
           } else {
             // reject の場合は理由を聞く
             rl.question('理由を入力してください（省略可）: ', (reason: string) => {
-              settle({ action: 'reject', reason: reason.trim() || '却下' });
+              rl.close();
+              resolve({ action: 'reject', reason: reason.trim() || '却下' });
             });
           }
         },

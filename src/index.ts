@@ -1,17 +1,19 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import chokidar from 'chokidar';
-import { App } from '@slack/bolt';
 import { config, vaultStoriesPath } from './config';
 import { readStoryFile } from './vault/reader';
-import { createSlackApp } from './slack/bot';
-import { registerApprovalHandlers } from './approval';
 import { runStory } from './runner';
+import { NotificationBackend, createNotificationBackend } from './notification';
 
 // 実行中ストーリーの重複起動防止
 const runningStories = new Set<string>();
 
-async function handleStoryFile(filePath: string, project: string, app: App): Promise<void> {
+async function handleStoryFile(
+  filePath: string,
+  project: string,
+  notifier: NotificationBackend,
+): Promise<void> {
   if (!filePath.endsWith('.md')) return;
 
   const story = readStoryFile(filePath);
@@ -25,16 +27,16 @@ async function handleStoryFile(filePath: string, project: string, app: App): Pro
 
   console.log(`[orchestrator] story detected: ${storyId}`);
   runningStories.add(storyId);
-  runStory(story, app)
+  runStory(story, notifier)
     .catch(console.error)
     .finally(() => runningStories.delete(storyId));
 }
 
 async function main(): Promise<void> {
-  const slackApp = createSlackApp();
-  registerApprovalHandlers(slackApp);
-  await slackApp.start();
-  console.log('[slack] bot started (Socket Mode)');
+  // ファクトリ経由で通知バックエンドを生成（環境変数 NOTIFY_BACKEND で切り替え）
+  const notifier = await createNotificationBackend();
+  const backendType = process.env.NOTIFY_BACKEND ?? 'local';
+  console.log(`[notification] backend started: ${backendType}`);
 
   const project = config.watchProject;
   const storiesPath = vaultStoriesPath(project);
@@ -51,11 +53,11 @@ async function main(): Promise<void> {
   });
 
   watcher.on('add', (filePath) => {
-    handleStoryFile(path.resolve(filePath), project, slackApp).catch(console.error);
+    handleStoryFile(path.resolve(filePath), project, notifier).catch(console.error);
   });
 
   watcher.on('change', (filePath) => {
-    handleStoryFile(path.resolve(filePath), project, slackApp).catch(console.error);
+    handleStoryFile(path.resolve(filePath), project, notifier).catch(console.error);
   });
 
   console.log('[orchestrator] ready');

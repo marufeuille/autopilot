@@ -23,7 +23,7 @@ describe('LocalNotificationBackend', () => {
   let backend: LocalNotificationBackend;
 
   beforeEach(() => {
-    backend = new LocalNotificationBackend({ approvalTimeoutMs: 5000 });
+    backend = new LocalNotificationBackend();
     // osascript の実行をモック（テスト環境では通知を送らない）
     vi.spyOn(backend, 'notify').mockResolvedValue();
   });
@@ -111,46 +111,33 @@ describe('LocalNotificationBackend', () => {
         expect.stringContaining('承認リクエスト'),
       );
     });
-  });
 
-  describe('タイムアウト', () => {
-    it('タイムアウト時に reject を返す', async () => {
-      vi.useFakeTimers();
-
-      const shortTimeoutBackend = new LocalNotificationBackend({ approvalTimeoutMs: 1000 });
-      vi.spyOn(shortTimeoutBackend, 'notify').mockResolvedValue();
-
-      // question を呼んでも応答しない（タイムアウトを待つ）
+    it('入力があるまで無制限に待機する（タイムアウトなし）', async () => {
+      // question が呼ばれることを確認し、手動で応答する
       const mockRl = {
         question: vi.fn(),
         close: vi.fn(),
       } as unknown as ReadlineInterface;
-      shortTimeoutBackend._createReadlineInterface = () => mockRl;
+      backend._createReadlineInterface = () => mockRl;
 
-      const promise = shortTimeoutBackend.requestApproval(
-        'timeout-1',
-        'タイムアウトテスト',
-        { approve: '承認', reject: '却下' },
+      const promise = backend.requestApproval(
+        'wait-1',
+        '待機テスト',
+        defaultButtons,
       );
 
-      // notify の mockResolvedValue が microtask なのでフラッシュ
-      await vi.advanceTimersByTimeAsync(1000);
+      // question が呼ばれたことを確認
+      // notify は mockResolvedValue なので microtask をフラッシュ
+      await new Promise((r) => setImmediate(r));
+      expect(mockRl.question).toHaveBeenCalled();
+
+      // 手動で応答を返す
+      const callback = (mockRl.question as ReturnType<typeof vi.fn>).mock.calls[0][1];
+      callback('y');
 
       const result = await promise;
-
-      expect(result.action).toBe('reject');
-      if (result.action === 'reject') {
-        expect(result.reason).toBe('タイムアウト');
-      }
+      expect(result).toEqual({ action: 'approve' });
       expect(mockRl.close).toHaveBeenCalled();
-
-      vi.useRealTimers();
-    });
-
-    it('デフォルトタイムアウトは5分', () => {
-      const defaultBackend = new LocalNotificationBackend();
-      // timeoutMs は private なので、オプションなしで作成してエラーにならないことを確認
-      expect(defaultBackend).toBeDefined();
     });
   });
 
