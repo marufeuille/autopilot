@@ -1,5 +1,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+// @slack/bolt をモックして Slack バックエンド生成時にネットワーク接続しない
+vi.mock('@slack/bolt', () => {
+  class MockApp {
+    client = {
+      chat: {
+        postMessage: vi.fn().mockResolvedValue({ ts: '1234567890.123456' }),
+        update: vi.fn().mockResolvedValue({}),
+      },
+    };
+    action = vi.fn();
+    view = vi.fn();
+    start = vi.fn().mockResolvedValue(undefined);
+  }
+  return { App: MockApp };
+});
+
 describe('createNotificationBackend (factory)', () => {
   const originalEnv = process.env.NOTIFY_BACKEND;
 
@@ -53,18 +69,14 @@ describe('createNotificationBackend (factory)', () => {
     );
   });
 
-  it('NOTIFY_BACKEND=slack で Slack バックエンドの動的インポートが試みられる', async () => {
+  it('NOTIFY_BACKEND=slack で SlackNotificationBackend が生成される', async () => {
     process.env.NOTIFY_BACKEND = 'slack';
     const { createNotificationBackend } = await import('../index');
+    const { SlackNotificationBackend } = await import('../slack');
 
-    // Slack 依存が未インストールまたは設定不足の場合はエラーになるが、
-    // "slack" ケースが認識されていることを確認（unknown エラーにならない）
-    try {
-      await createNotificationBackend();
-    } catch (e: any) {
-      // "Unknown NOTIFY_BACKEND" エラーではないことを確認
-      expect(e.message).not.toContain('Unknown NOTIFY_BACKEND');
-    }
+    const backend = await createNotificationBackend();
+
+    expect(backend).toBeInstanceOf(SlackNotificationBackend);
   });
 
   it('生成されたバックエンドが NotificationBackend インターフェースを満たす', async () => {
