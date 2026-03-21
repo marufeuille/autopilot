@@ -56,9 +56,9 @@ SLACK_APP_TOKEN=xapp-...
 # 通知先の Slack チャンネル ID
 SLACK_CHANNEL_ID=C0XXXXXXXXX
 
-# 監視するプロジェクト名（カンマ区切りで複数指定可）
-# Vault の Projects/{WATCH_PROJECTS}/stories/ を監視する
-WATCH_PROJECTS=claude-workflow-kit
+# 監視するプロジェクト名（1つ指定）
+# Vault の Projects/{WATCH_PROJECT}/stories/ を監視する
+WATCH_PROJECT=claude-workflow-kit
 ```
 
 ### 3. Slack App の設定

@@ -17,10 +17,7 @@ export const config = {
     appToken: required('SLACK_APP_TOKEN'),
     channelId: required('SLACK_CHANNEL_ID'),
   },
-  watchProjects: (process.env.WATCH_PROJECTS ?? 'claude-workflow-kit')
-    .split(',')
-    .map((p) => p.trim())
-    .filter(Boolean),
+  watchProject: process.env.WATCH_PROJECT ?? 'claude-workflow-kit',
 } as const;
 
 export function vaultProjectPath(project: string): string {

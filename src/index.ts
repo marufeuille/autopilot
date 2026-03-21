@@ -36,29 +36,27 @@ async function main(): Promise<void> {
   await slackApp.start();
   console.log('[slack] bot started (Socket Mode)');
 
-  for (const project of config.watchProjects) {
-    const storiesPath = vaultStoriesPath(project);
+  const project = config.watchProject;
+  const storiesPath = vaultStoriesPath(project);
 
-    if (!fs.existsSync(storiesPath)) {
-      console.warn(`[vault] stories dir not found, skipping: ${storiesPath}`);
-      continue;
-    }
-
-    console.log(`[vault] watching: ${storiesPath}`);
-
-    const watcher = chokidar.watch(storiesPath, {
-      ignoreInitial: false,
-      depth: 1,
-    });
-
-    watcher.on('add', (filePath) => {
-      handleStoryFile(path.resolve(filePath), project, slackApp).catch(console.error);
-    });
-
-    watcher.on('change', (filePath) => {
-      handleStoryFile(path.resolve(filePath), project, slackApp).catch(console.error);
-    });
+  if (!fs.existsSync(storiesPath)) {
+    throw new Error(`[vault] stories dir not found: ${storiesPath}`);
   }
+
+  console.log(`[vault] watching: ${storiesPath}`);
+
+  const watcher = chokidar.watch(storiesPath, {
+    ignoreInitial: false,
+    depth: 1,
+  });
+
+  watcher.on('add', (filePath) => {
+    handleStoryFile(path.resolve(filePath), project, slackApp).catch(console.error);
+  });
+
+  watcher.on('change', (filePath) => {
+    handleStoryFile(path.resolve(filePath), project, slackApp).catch(console.error);
+  });
 
   console.log('[orchestrator] ready');
 }
