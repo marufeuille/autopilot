@@ -10,13 +10,23 @@ function required(key: string): string {
   return value;
 }
 
+/** 通知バックエンド種別。"local" | "slack"（デフォルト: "local"） */
+export const notifyBackend = (process.env.NOTIFY_BACKEND ?? 'local') as 'local' | 'slack';
+
 export const config = {
   vaultPath: required('VAULT_PATH'),
-  slack: {
-    botToken: required('SLACK_BOT_TOKEN'),
-    appToken: required('SLACK_APP_TOKEN'),
-    channelId: required('SLACK_CHANNEL_ID'),
-  },
+  /** Slack 設定は notifyBackend === 'slack' のときだけ必須 */
+  slack: notifyBackend === 'slack'
+    ? {
+        botToken: required('SLACK_BOT_TOKEN'),
+        appToken: required('SLACK_APP_TOKEN'),
+        channelId: required('SLACK_CHANNEL_ID'),
+      }
+    : {
+        botToken: process.env.SLACK_BOT_TOKEN ?? '',
+        appToken: process.env.SLACK_APP_TOKEN ?? '',
+        channelId: process.env.SLACK_CHANNEL_ID ?? '',
+      },
   watchProject: process.env.WATCH_PROJECT ?? 'claude-workflow-kit',
 } as const;
 

@@ -1,10 +1,9 @@
 import { App } from '@slack/bolt';
 import type { Block, KnownBlock } from '@slack/types';
 import { config } from './config';
+import type { NotificationBackend, ApprovalResult } from './notification';
 
-export type ApprovalResult =
-  | { action: 'approve' }
-  | { action: 'reject'; reason: string };
+export type { ApprovalResult };
 
 interface PendingApproval {
   resolve: (result: ApprovalResult) => void;
@@ -172,4 +171,26 @@ export function registerApprovalHandlers(app: App): void {
     const id = view.private_metadata;
     await restoreOriginalMessage(app, id);
   });
+}
+
+/**
+ * Slack バックエンドを NotificationBackend インターフェースでラップするアダプター
+ */
+export class SlackNotificationBackend implements NotificationBackend {
+  constructor(private readonly app: App) {}
+
+  async notify(message: string): Promise<void> {
+    await this.app.client.chat.postMessage({
+      channel: config.slack.channelId,
+      text: message,
+    });
+  }
+
+  requestApproval(
+    id: string,
+    message: string,
+    buttons: { approve: string; reject: string },
+  ): Promise<ApprovalResult> {
+    return requestApproval(this.app, id, message, buttons);
+  }
 }
