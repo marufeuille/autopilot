@@ -1,12 +1,9 @@
-import Anthropic from '@anthropic-ai/sdk';
+import { query } from '@anthropic-ai/claude-agent-sdk';
 import { App } from '@slack/bolt';
 import { StoryFile, TaskFile, getStoryTasks } from './vault/reader';
 import { updateFileStatus } from './vault/writer';
 import { requestApproval, generateApprovalId } from './approval';
-import { TOOL_DEFINITIONS, executeTool, ToolContext } from './tools';
 import { config } from './config';
-
-const anthropic = new Anthropic();
 
 function buildTaskPrompt(task: TaskFile, story: StoryFile, repoPath: string): string {
   return `あなたは優秀なソフトウェアエンジニアです。以下のタスクを実装してください。
@@ -22,13 +19,34 @@ ${task.content}
 - ブランチ名規則: feature/${task.slug}
 
 ## 重要なルール
-1. 実装を開始する前に run_command で \`git checkout -b feature/${task.slug}\` を実行すること
-2. 実装が完了したら request_approval で人間に完了確認を求めること
-3. 承認されたら update_vault_status でタスクファイルのstatusを "Done" に更新すること
-4. PRを作成する場合は run_command で \`gh pr create\` を実行すること
-5. タスクの完了条件をすべて満たしてから request_approval を呼ぶこと
+1. 作業は必ず ${repoPath} ディレクトリ内で行うこと
+2. 実装が完了したらタスクの完了条件をすべて確認すること
+3. PRを作成する場合は \`gh pr create\` を実行すること
+4. 実装完了後、最後に「実装完了」と出力すること
 
 それでは実装を開始してください。`;
+}
+
+async function runClaudeAgent(prompt: string, cwd: string): Promise<void> {
+  for await (const message of query({
+    prompt,
+    options: {
+      cwd,
+      allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
+      permissionMode: 'bypassPermissions',
+    },
+  })) {
+    if (message.type === 'assistant') {
+      const content = message.message?.content ?? [];
+      for (const block of content) {
+        if ('text' in block && block.text) {
+          process.stdout.write(`[claude] ${block.text}\n`);
+        }
+      }
+    } else if (message.type === 'result') {
+      console.log(`[runner] agent result: ${message.subtype}`);
+    }
+  }
 }
 
 async function runTask(
@@ -37,13 +55,12 @@ async function runTask(
   app: App,
   repoPath: string,
 ): Promise<void> {
-  const approvalId = generateApprovalId(story.slug, task.slug);
-
   // タスク開始承認
   console.log(`[runner] requesting start approval: ${task.slug}`);
+  const startId = generateApprovalId(story.slug, task.slug);
   const startResult = await requestApproval(
     app,
-    approvalId,
+    startId,
     `*タスク開始確認*\n\n*ストーリー*: ${story.slug}\n*タスク*: ${task.slug}\n\nこのタスクを開始しますか？`,
     { approve: '開始', reject: 'スキップ' },
   );
@@ -53,61 +70,32 @@ async function runTask(
     return;
   }
 
-  // Vault: Doing に更新
   updateFileStatus(task.filePath, 'Doing');
   console.log(`[runner] task started: ${task.slug}`);
 
-  // Claudeエージェントループ
-  const ctx: ToolContext = {
-    app,
-    repoPath,
-    storySlug: story.slug,
-    taskSlug: task.slug,
-  };
-
-  const messages: Anthropic.MessageParam[] = [
-    { role: 'user', content: buildTaskPrompt(task, story, repoPath) },
-  ];
-
+  // Claudeエージェント実行（やり直しループ）
+  let prompt = buildTaskPrompt(task, story, repoPath);
   while (true) {
-    const response = await anthropic.messages.create({
-      model: 'claude-opus-4-6',
-      max_tokens: 8192,
-      tools: TOOL_DEFINITIONS,
-      messages,
-    });
+    await runClaudeAgent(prompt, repoPath);
 
-    console.log(`[runner] claude stop_reason: ${response.stop_reason}`);
-
-    // ツール呼び出しを処理
-    const toolUseBlocks = response.content.filter(
-      (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
+    // タスク完了承認
+    const doneId = generateApprovalId(story.slug, `${task.slug}-done`);
+    const doneResult = await requestApproval(
+      app,
+      doneId,
+      `*タスク完了確認*\n\n*タスク*: ${task.slug}\n\n実装を確認してください。`,
+      { approve: '完了', reject: 'やり直し' },
     );
 
-    if (toolUseBlocks.length > 0) {
-      const toolResults: Anthropic.ToolResultBlockParam[] = [];
-      for (const toolUse of toolUseBlocks) {
-        console.log(`[runner] tool: ${toolUse.name}`);
-        const result = await executeTool(
-          toolUse.name,
-          toolUse.input as Record<string, string>,
-          ctx,
-        );
-        toolResults.push({
-          type: 'tool_result',
-          tool_use_id: toolUse.id,
-          content: result,
-        });
-      }
-      messages.push({ role: 'assistant', content: response.content });
-      messages.push({ role: 'user', content: toolResults });
-    } else {
-      // end_turn またはツールなし → ループ終了
-      break;
-    }
+    if (doneResult === 'approve') break;
+
+    // やり直し: フィードバックを促してから再実行
+    prompt = `前回の実装を見直してください。タスク: ${task.slug}\n\n${task.content}\n\n作業ディレクトリ: ${repoPath}\n\n前回の実装に問題があったため再実行します。完了条件を再確認して修正してください。`;
+    console.log(`[runner] retrying task: ${task.slug}`);
   }
 
-  console.log(`[runner] task completed: ${task.slug}`);
+  updateFileStatus(task.filePath, 'Done');
+  console.log(`[runner] task done: ${task.slug}`);
 }
 
 export async function runStory(story: StoryFile, app: App): Promise<void> {
