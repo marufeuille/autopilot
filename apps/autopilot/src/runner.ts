@@ -1,8 +1,9 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { App } from '@slack/bolt';
 import { StoryFile, TaskFile, getStoryTasks } from './vault/reader';
-import { updateFileStatus } from './vault/writer';
+import { updateFileStatus, createTaskFile, TaskDraft } from './vault/writer';
 import { requestApproval, generateApprovalId } from './approval';
+import { decomposeTasks } from './decomposer';
 import { config } from './config';
 
 function buildTaskPrompt(task: TaskFile, story: StoryFile, repoPath: string): string {
@@ -98,12 +99,54 @@ async function runTask(
   console.log(`[runner] task done: ${task.slug}`);
 }
 
+function formatDecompositionMessage(story: StoryFile, drafts: TaskDraft[]): string {
+  const list = drafts
+    .map((d, i) => `${i + 1}. *${d.title}* (\`${d.slug}\`)\n   ${d.purpose}`)
+    .join('\n');
+  return `*タスク分解案*\n\n*ストーリー*: ${story.slug}\n\n${list}\n\n承認するとタスクファイルを作成して実行を開始します。`;
+}
+
+async function runDecomposition(story: StoryFile, app: App): Promise<void> {
+  let retryReason: string | undefined;
+
+  while (true) {
+    console.log(`[runner] decomposing story: ${story.slug}`);
+    const drafts = await decomposeTasks(story, retryReason);
+
+    const id = generateApprovalId(story.slug, 'decompose');
+    const result = await requestApproval(
+      app,
+      id,
+      formatDecompositionMessage(story, drafts),
+      { approve: '承認', reject: 'やり直し' },
+    );
+
+    if (result.action === 'approve') {
+      for (const draft of drafts) {
+        createTaskFile(story.project, story.slug, draft);
+        console.log(`[runner] task file created: ${draft.slug}`);
+      }
+      return;
+    }
+
+    retryReason = result.reason;
+    console.log(`[runner] decomposition rejected, retrying: ${retryReason}`);
+  }
+}
+
 export async function runStory(story: StoryFile, app: App): Promise<void> {
   const repoPath = `${process.env.HOME}/dev/${story.project}`;
   console.log(`[runner] starting story: ${story.slug}`);
 
   const tasks = await getStoryTasks(story.project, story.slug);
-  const todoTasks = tasks.filter((t) => t.status === 'Todo');
+
+  if (tasks.length === 0) {
+    await runDecomposition(story, app);
+  }
+
+  const todoTasks = (await getStoryTasks(story.project, story.slug)).filter(
+    (t) => t.status === 'Todo',
+  );
 
   if (todoTasks.length === 0) {
     console.log(`[runner] no todo tasks for story: ${story.slug}`);
