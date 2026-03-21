@@ -1,15 +1,17 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import chokidar from 'chokidar';
+import { App } from '@slack/bolt';
 import { config, vaultStoriesPath } from './config';
 import { readStoryFile } from './vault/reader';
 import { createSlackApp } from './slack/bot';
 import { registerApprovalHandlers } from './approval';
+import { runStory } from './runner';
 
 // 実行中ストーリーの重複起動防止
 const runningStories = new Set<string>();
 
-async function handleStoryFile(filePath: string, project: string): Promise<void> {
+async function handleStoryFile(filePath: string, project: string, app: App): Promise<void> {
   if (!filePath.endsWith('.md')) return;
 
   const story = readStoryFile(filePath);
@@ -22,7 +24,10 @@ async function handleStoryFile(filePath: string, project: string): Promise<void>
   }
 
   console.log(`[orchestrator] story detected: ${storyId}`);
-  // TODO: runStory(story, project) — implemented in agent-runner task
+  runningStories.add(storyId);
+  runStory(story, app)
+    .catch(console.error)
+    .finally(() => runningStories.delete(storyId));
 }
 
 async function main(): Promise<void> {
@@ -47,11 +52,11 @@ async function main(): Promise<void> {
     });
 
     watcher.on('add', (filePath) => {
-      handleStoryFile(path.resolve(filePath), project).catch(console.error);
+      handleStoryFile(path.resolve(filePath), project, slackApp).catch(console.error);
     });
 
     watcher.on('change', (filePath) => {
-      handleStoryFile(path.resolve(filePath), project).catch(console.error);
+      handleStoryFile(path.resolve(filePath), project, slackApp).catch(console.error);
     });
   }
 
