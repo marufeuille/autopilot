@@ -152,26 +152,30 @@ export async function runStory(story: StoryFile, notifier: NotificationBackend):
     await runDecomposition(story, notifier);
   }
 
-  const todoTasks = (await getStoryTasks(story.project, story.slug)).filter(
-    (t) => t.status === 'Todo',
-  );
+  const allCurrentTasks = await getStoryTasks(story.project, story.slug);
+  const todoTasks = allCurrentTasks.filter((t) => t.status === 'Todo');
 
-  if (todoTasks.length === 0) {
-    console.log(`[runner] no todo tasks for story: ${story.slug}`);
-    return;
+  if (todoTasks.length > 0) {
+    for (const task of todoTasks) {
+      await runTask(task, story, notifier, repoPath);
+    }
   }
 
-  for (const task of todoTasks) {
-    await runTask(task, story, notifier, repoPath);
-  }
-
-  // 全タスクがDoneの場合のみストーリーを完了にする
-  const allTasks = await getStoryTasks(story.project, story.slug);
+  // 全タスクの最新状態を取得してストーリー完了判定
+  const allTasks = todoTasks.length > 0
+    ? await getStoryTasks(story.project, story.slug)
+    : allCurrentTasks;
   const allDone = allTasks.length > 0 && allTasks.every((t) => t.status === 'Done');
   if (allDone) {
     updateFileStatus(story.filePath, 'Done');
     await notifier.notify(`✅ ストーリー完了: ${story.slug}`);
     console.log(`[runner] story done: ${story.slug}`);
+  } else if (todoTasks.length === 0) {
+    const remaining = allTasks.filter((t) => t.status !== 'Done');
+    console.log(
+      `[runner] no todo tasks but story not complete: ${story.slug}, ` +
+      `remaining: ${remaining.map((t) => `${t.slug}(${t.status})`).join(', ')}`,
+    );
   } else {
     const remaining = allTasks.filter((t) => t.status !== 'Done');
     console.log(`[runner] story not done, remaining tasks: ${remaining.map((t) => t.slug).join(', ')}`);
