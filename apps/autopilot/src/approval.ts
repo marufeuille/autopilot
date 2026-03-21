@@ -53,15 +53,21 @@ export function resolveApproval(id: string, result: ApprovalResult): void {
 }
 
 export function registerApprovalHandlers(app: App): void {
-  app.action('cwk_approve', async ({ body, ack }) => {
+  app.action('cwk_approve', async ({ body, ack, respond }) => {
     await ack();
-    const id = (body as any).actions[0].value as string;
+    const action = (body as any).actions[0];
+    const id = action.value as string;
+    const label = action.text?.text ?? '承認';
+    await respond({ text: `✅ ${label}`, replace_original: true });
     resolveApproval(id, 'approve');
   });
 
-  app.action('cwk_reject', async ({ body, ack }) => {
+  app.action('cwk_reject', async ({ body, ack, respond }) => {
     await ack();
-    const id = (body as any).actions[0].value as string;
+    const action = (body as any).actions[0];
+    const id = action.value as string;
+    const label = action.text?.text ?? '却下';
+    await respond({ text: `🚫 ${label}`, replace_original: true });
     resolveApproval(id, 'reject');
   });
 }
