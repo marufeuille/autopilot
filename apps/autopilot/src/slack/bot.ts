@@ -8,12 +8,3 @@ export function createSlackApp(): App {
     socketMode: true,
   });
 }
-
-// ボタンハンドラは approval.ts と連携して登録する（次タスクで実装）
-export function registerActionHandlers(
-  _app: App,
-  _onApprove: (id: string) => void,
-  _onReject: (id: string) => void,
-): void {
-  // TODO: implemented in approval-gate task
-}

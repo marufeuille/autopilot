@@ -4,6 +4,7 @@ import chokidar from 'chokidar';
 import { config, vaultStoriesPath } from './config';
 import { readStoryFile } from './vault/reader';
 import { createSlackApp } from './slack/bot';
+import { registerApprovalHandlers } from './approval';
 
 // 実行中ストーリーの重複起動防止
 const runningStories = new Set<string>();
@@ -26,6 +27,7 @@ async function handleStoryFile(filePath: string, project: string): Promise<void>
 
 async function main(): Promise<void> {
   const slackApp = createSlackApp();
+  registerApprovalHandlers(slackApp);
   await slackApp.start();
   console.log('[slack] bot started (Socket Mode)');
 
