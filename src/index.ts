@@ -1,4 +1,5 @@
 import * as path from 'path';
+import * as fs from 'fs';
 import chokidar from 'chokidar';
 import { Client, Connection } from '@temporalio/client';
 import { setSlackApp } from './activities/slack';
@@ -26,15 +27,31 @@ async function startWorkflowForTask(
   }
 
   const tasks = await getPendingApprovalTasks(project);
-  const task = tasks.find((t) => t.filePath === filePath);
-  if (!task) return;
+  // path.resolve で正規化して比較
+  const task = tasks.find((t) => path.resolve(t.filePath) === path.resolve(filePath));
+  if (!task) {
+    console.log(`[orchestrator] ${taskSlug} not pending_approval, skipping`);
+    return;
+  }
 
   console.log(`[orchestrator] starting workflow for ${taskSlug}`);
   await temporalClient.workflow.start(taskWorkflow, {
     taskQueue: config.temporal.taskQueue,
     workflowId: taskSlug,
-    args: [{ filePath, project, taskSlug, story: task.story }],
+    args: [{ filePath: task.filePath, project, taskSlug, story: task.story }],
   });
+  console.log(`[orchestrator] workflow started: ${taskSlug}`);
+}
+
+async function handleFileEvent(
+  temporalClient: Client,
+  filePath: string,
+  project: string,
+  event: 'add' | 'change',
+): Promise<void> {
+  if (!filePath.endsWith('.md') || filePath.endsWith('README.md')) return;
+  console.log(`[vault] ${event}: ${path.basename(filePath)}`);
+  await startWorkflowForTask(temporalClient, filePath, project);
 }
 
 async function main(): Promise<void> {
@@ -55,32 +72,34 @@ async function main(): Promise<void> {
   await slackApp.start();
   console.log('[slack] bot started (Socket Mode)');
 
-  // Vault 監視：起動時に既存の pending_approval タスクを処理
   // WATCH_PROJECTS: カンマ区切りで複数指定可（例: claude-workflow-kit,cwk-test）
-  const projects = (process.env.WATCH_PROJECTS ?? 'claude-workflow-kit').split(',').map((p) => p.trim());
+  const projects = (process.env.WATCH_PROJECTS ?? 'claude-workflow-kit')
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean);
 
   for (const project of projects) {
     const watchPath = vaultTasksPath(project);
-  console.log(`[vault] watching ${watchPath}`);
+
+    if (!fs.existsSync(watchPath)) {
+      console.warn(`[vault] tasks dir not found, skipping: ${watchPath}`);
+      continue;
+    }
 
     console.log(`[vault] watching ${watchPath}`);
-    const watcher = chokidar.watch(path.join(watchPath, '**', '*.md'), {
+
+    // ディレクトリを直接 watch（glob パターンは使わない）
+    const watcher = chokidar.watch(watchPath, {
       ignoreInitial: false,
-      ignored: /README\.md$/,
+      depth: 5,
     });
 
-    watcher.on('add', async (filePath) => {
-      const tasks = await getPendingApprovalTasks(project);
-      if (tasks.some((t) => t.filePath === filePath)) {
-        await startWorkflowForTask(temporalClient, filePath, project).catch(console.error);
-      }
+    watcher.on('add', (filePath) => {
+      handleFileEvent(temporalClient, filePath, project, 'add').catch(console.error);
     });
 
-    watcher.on('change', async (filePath) => {
-      const tasks = await getPendingApprovalTasks(project);
-      if (tasks.some((t) => t.filePath === filePath)) {
-        await startWorkflowForTask(temporalClient, filePath, project).catch(console.error);
-      }
+    watcher.on('change', (filePath) => {
+      handleFileEvent(temporalClient, filePath, project, 'change').catch(console.error);
     });
   }
 
