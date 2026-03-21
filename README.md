@@ -1,83 +1,74 @@
-# apps/autopilot
+# autopilot
 
-Anthropic SDK（Claude Agent SDK）+ Slack Socket Mode + Vault ファイルで動くシンプルな自律ワークフローオーケストレーター。
+ObsidianのVaultを監視し、ストーリーのステータスが `Doing` になると Claude エージェントが自動でタスクを実行する自律ワークフローボットです。各ステップの開始・完了はSlackで承認できます。
 
-Temporalを使わず、Story の `status: Doing` を検知して Claude エージェントがタスクを順次実行する。
+## 動作の流れ
 
-## アーキテクチャ
-
-```
-src/
-  index.ts        # エントリポイント（Vault watcher + Slack bot 起動）
-  runner.ts       # Story/Task の実行ループ
-  approval.ts     # request_approval（in-memory Promise + Slack連携）
-  config.ts       # 環境変数読み込み
-  slack/
-    bot.ts        # Slack Bolt Socket Mode
-  vault/
-    reader.ts     # Vault ファイル読み込み
-    writer.ts     # Vault ファイル書き込み（status更新）
-```
+1. Obsidian VaultのストーリーファイルのStatusを `Doing` に変更する
+2. タスクファイルが存在しない場合、Claudeがストーリーを分解してタスク候補をSlackに提示
+3. 承認するとタスクファイルが作成され、順番に実行が始まる
+4. 各タスクの開始・完了時にSlackで承認を求める（やり直しも可能）
+5. 全タスク完了後、ストーリーのStatusが `Done` に更新されSlackに通知
 
 ## セットアップ
 
 ### 1. 依存パッケージのインストール
 
 ```bash
-cd apps/autopilot
 npm install
 ```
 
-### 2. 環境変数の設定
-
-リポジトリルート（`claude-workflow-kit/`）に `.env` ファイルを作成する。
+### 2. `.env` の作成
 
 ```bash
-cp .env.example .env   # テンプレートがある場合
-# または直接作成
+cp .env.example .env
 ```
 
 `.env` の内容:
 
 ```env
-# Vault（Obsidian）のローカルパス
+# ObsidianのVaultのローカルパス
 VAULT_PATH=/path/to/your/obsidian/vault
 
+# 監視するVaultのプロジェクト名（Projects/{WATCH_PROJECT}/stories/ を監視する）
+WATCH_PROJECT=my-project
+
 # Slack Bot Token（xoxb-...）
-# Slack App の "OAuth & Permissions" → Bot Token Scopes に以下が必要:
-#   chat:write, im:write, channels:read
 SLACK_BOT_TOKEN=xoxb-...
 
 # Slack App-Level Token（xapp-...）
-# Slack App の "Basic Information" → App-Level Tokens で生成
-# スコープ: connections:write
 SLACK_APP_TOKEN=xapp-...
 
-# 通知先の Slack チャンネル ID
+# 通知・承認に使うSlackチャンネルID
 SLACK_CHANNEL_ID=C0XXXXXXXXX
-
-# 監視するプロジェクト名（1つ指定）
-# Vault の Projects/{WATCH_PROJECT}/stories/ を監視する
-WATCH_PROJECT=claude-workflow-kit
 ```
 
-### 3. Slack App の設定
+### 3. Slack Appの設定
 
-1. [api.slack.com/apps](https://api.slack.com/apps) で新規 App を作成
-2. **Socket Mode** を有効化（"Socket Mode" メニュー）
-3. **App-Level Token** を生成（スコープ: `connections:write`）→ `SLACK_APP_TOKEN`
-4. **Bot Token Scopes** を追加（"OAuth & Permissions"）:
-   - `chat:write`
-   - `im:write`
-   - `channels:read`
-5. **Interactivity** を有効化（"Interactivity & Shortcuts"）
-6. App をワークスペースにインストール → `SLACK_BOT_TOKEN`
-7. 通知先チャンネルに Bot を招待: `/invite @YourBotName`
+[api.slack.com/apps](https://api.slack.com/apps) で新規Appを作成し、以下を設定します。
+
+**Socket Modeを有効化**
+- "Socket Mode" メニューから有効化
+- App-Level Token（スコープ: `connections:write`）を生成 → `SLACK_APP_TOKEN`
+
+**Bot Token Scopesの追加**（"OAuth & Permissions"）
+- `chat:write`
+- `im:write`
+- `channels:read`
+
+**Interactivityを有効化**（"Interactivity & Shortcuts"）
+
+**Appをワークスペースにインストール** → `SLACK_BOT_TOKEN`
+
+**Botをチャンネルに招待**
+```
+/invite @YourBotName
+```
 
 ### 4. 起動
 
 ```bash
-# 開発モード（ts-node）
+# 開発モード
 npm run dev
 
 # ビルドして実行
@@ -85,36 +76,67 @@ npm run build
 node dist/index.js
 ```
 
-## 使い方
+## Vaultのファイル構造
 
-### ワークフローの起動
+autopilot は Obsidian Vault 内の以下のディレクトリ構造を前提としています。
 
-Obsidian Vault で対象 Story ファイルの `status` を `Doing` に変更する。
-
-```yaml
-# Projects/my-project/stories/my-story.md
----
-status: Doing   # ← これを変更するとワークフローが起動
----
+```
+Projects/
+  {project}/              ← WATCH_PROJECT で指定するプロジェクト名
+    stories/
+      my-story.md         ← ストーリーファイル（status を Doing にすると実行開始）
+    tasks/
+      my-story/           ← ストーリー名と同名のディレクトリ
+        01-task-a.md      ← タスクファイル（Claudeが自動生成、アルファベット順に実行）
+        02-task-b.md
 ```
 
-### ワークフローの流れ
+また、autopilot はリポジトリが `~/dev/{project}` に存在することを前提として Claude エージェントを実行します。
 
-1. Vault watcher が `status: Doing` を検知
-2. ストーリーに紐づくタスク（`tasks/{story-slug}/*.md`）を取得
-3. `status: Todo` のタスクを順番に処理:
-   - Slack に「タスク開始確認」ボタン付きメッセージを送信
-   - 承認 → Claude エージェントがタスクを実装
-   - 完了確認 → 承認で次のタスクへ、やり直しで修正ループ
-4. 全タスクが `Done` になるとストーリーが `Done` に更新され Slack 通知
+### ストーリーファイルの例
 
-### Vault のステータス遷移
+```markdown
+---
+status: Doing
+---
 
-| タイミング | Vault の更新 |
-|---|---|
-| タスク開始承認後 | タスク `status: Doing` |
-| タスク完了承認後 | タスク `status: Done` |
-| 全タスク完了後 | ストーリー `status: Done` |
+## 概要
+認証機能を実装する
+
+## 完了条件
+- ログインAPIが動作する
+- テストが通る
+```
+
+`status` を `Doing` に変更すると autopilot が検知して実行を開始します。
+
+### タスクファイルの例（Claudeが自動生成）
+
+```markdown
+---
+status: Todo
+priority: high
+effort: medium
+story: my-story
+project: my-project
+created: 2025-01-01
+---
+
+# JWTトークン生成の実装
+
+## 目的
+
+ログイン後のセッション管理に使うトークンを発行する
+
+## 詳細
+
+...
+
+## 完了条件
+
+- [ ] トークンが正しく生成される
+- [ ] テストが通る
+```
 
 ## 常駐運用（pm2）
 
@@ -123,5 +145,5 @@ npm install -g pm2
 npm run build
 pm2 start dist/index.js --name autopilot
 pm2 save
-pm2 startup   # OS 起動時の自動起動設定
+pm2 startup
 ```
