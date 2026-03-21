@@ -4,6 +4,8 @@ import matter from 'gray-matter';
 import { glob } from 'glob';
 import { vaultProjectPath, vaultTasksPath } from '../config';
 
+export type TaskStatus = 'Todo' | 'Doing' | 'Done' | 'Failed' | 'Skipped';
+
 export interface StoryFile {
   filePath: string;
   project: string;
@@ -18,7 +20,7 @@ export interface TaskFile {
   project: string;
   storySlug: string;
   slug: string;
-  status: string;
+  status: TaskStatus;
   frontmatter: Record<string, unknown>;
   content: string;
 }
@@ -52,7 +54,7 @@ export async function getStoryTasks(project: string, storySlug: string): Promise
       project,
       storySlug,
       slug: path.basename(filePath, '.md'),
-      status: data.status ?? 'Todo',
+      status: (data.status as TaskStatus) ?? 'Todo',
       frontmatter: data,
       content,
     });

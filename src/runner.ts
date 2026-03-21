@@ -1,6 +1,6 @@
 import { execSync } from 'child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import { StoryFile, TaskFile, getStoryTasks } from './vault/reader';
+import { StoryFile, TaskFile, TaskStatus, getStoryTasks } from './vault/reader';
 import { updateFileStatus, createTaskFile, TaskDraft } from './vault/writer';
 import { decomposeTasks } from './decomposer';
 import { NotificationBackend, generateApprovalId } from './notification';
@@ -49,7 +49,7 @@ async function runClaudeAgent(prompt: string, cwd: string): Promise<void> {
   }
 }
 
-async function runTask(
+export async function runTask(
   task: TaskFile,
   story: StoryFile,
   notifier: NotificationBackend,
@@ -65,6 +65,7 @@ async function runTask(
   );
 
   if (startResult.action === 'reject') {
+    updateFileStatus(task.filePath, 'Skipped');
     console.log(`[runner] task skipped: ${task.slug}`);
     return;
   }
@@ -72,36 +73,42 @@ async function runTask(
   updateFileStatus(task.filePath, 'Doing');
   console.log(`[runner] task started: ${task.slug}`);
 
-  // Claudeエージェント実行（やり直しループ）
-  let prompt = buildTaskPrompt(task, story, repoPath);
-  while (true) {
-    await runClaudeAgent(prompt, repoPath);
+  try {
+    // Claudeエージェント実行（やり直しループ）
+    let prompt = buildTaskPrompt(task, story, repoPath);
+    while (true) {
+      await runClaudeAgent(prompt, repoPath);
 
-    // PR URL 取得
-    let prUrl = '';
-    try {
-      prUrl = execSync(`gh pr view feature/${task.slug} --json url -q .url`, {
-        cwd: repoPath,
-        encoding: 'utf-8',
-      }).trim();
-    } catch {
-      // PR未作成の場合は無視
+      // PR URL 取得
+      let prUrl = '';
+      try {
+        prUrl = execSync(`gh pr view feature/${task.slug} --json url -q .url`, {
+          cwd: repoPath,
+          encoding: 'utf-8',
+        }).trim();
+      } catch {
+        // PR未作成の場合は無視
+      }
+      const prLine = prUrl ? `\n*PR*: ${prUrl}` : '';
+
+      // タスク完了承認
+      const doneId = generateApprovalId(story.slug, `${task.slug}-done`);
+      const doneResult = await notifier.requestApproval(
+        doneId,
+        `*タスク完了確認*\n\n*タスク*: ${task.slug}${prLine}\n\n実装を確認してください。`,
+        { approve: '完了', reject: 'やり直し' },
+      );
+
+      if (doneResult.action === 'approve') break;
+
+      // やり直し: 理由をプロンプトに含めて再実行
+      prompt = `前回の実装を修正してください。タスク: ${task.slug}\n\n${task.content}\n\n作業ディレクトリ: ${repoPath}\n\n## 修正依頼\n${doneResult.reason}\n\n上記の修正依頼を踏まえて、完了条件を再確認しながら修正してください。`;
+      console.log(`[runner] retrying task: ${task.slug}`);
     }
-    const prLine = prUrl ? `\n*PR*: ${prUrl}` : '';
-
-    // タスク完了承認
-    const doneId = generateApprovalId(story.slug, `${task.slug}-done`);
-    const doneResult = await notifier.requestApproval(
-      doneId,
-      `*タスク完了確認*\n\n*タスク*: ${task.slug}${prLine}\n\n実装を確認してください。`,
-      { approve: '完了', reject: 'やり直し' },
-    );
-
-    if (doneResult.action === 'approve') break;
-
-    // やり直し: 理由をプロンプトに含めて再実行
-    prompt = `前回の実装を修正してください。タスク: ${task.slug}\n\n${task.content}\n\n作業ディレクトリ: ${repoPath}\n\n## 修正依頼\n${doneResult.reason}\n\n上記の修正依頼を踏まえて、完了条件を再確認しながら修正してください。`;
-    console.log(`[runner] retrying task: ${task.slug}`);
+  } catch (error) {
+    updateFileStatus(task.filePath, 'Failed');
+    console.error(`[runner] task failed: ${task.slug}`, error);
+    throw error;
   }
 
   updateFileStatus(task.filePath, 'Done');
@@ -157,27 +164,38 @@ export async function runStory(story: StoryFile, notifier: NotificationBackend):
 
   if (todoTasks.length > 0) {
     for (const task of todoTasks) {
-      await runTask(task, story, notifier, repoPath);
+      try {
+        await runTask(task, story, notifier, repoPath);
+      } catch (error) {
+        console.error(`[runner] task execution error, continuing: ${task.slug}`, error);
+      }
     }
   }
 
   // 全タスクの最新状態を取得してストーリー完了判定
+  const terminalStatuses: TaskStatus[] = ['Done', 'Skipped', 'Failed'];
   const allTasks = todoTasks.length > 0
     ? await getStoryTasks(story.project, story.slug)
     : allCurrentTasks;
+  const allTerminal = allTasks.length > 0 && allTasks.every((t) => terminalStatuses.includes(t.status));
   const allDone = allTasks.length > 0 && allTasks.every((t) => t.status === 'Done');
   if (allDone) {
     updateFileStatus(story.filePath, 'Done');
     await notifier.notify(`✅ ストーリー完了: ${story.slug}`);
     console.log(`[runner] story done: ${story.slug}`);
+  } else if (allTerminal) {
+    updateFileStatus(story.filePath, 'Done');
+    const summary = allTasks.map((t) => `${t.slug}(${t.status})`).join(', ');
+    await notifier.notify(`✅ ストーリー完了 (一部スキップ/失敗あり): ${story.slug}\n${summary}`);
+    console.log(`[runner] story done with skipped/failed tasks: ${story.slug}, ${summary}`);
   } else if (todoTasks.length === 0) {
-    const remaining = allTasks.filter((t) => t.status !== 'Done');
+    const remaining = allTasks.filter((t) => !terminalStatuses.includes(t.status));
     console.log(
       `[runner] no todo tasks but story not complete: ${story.slug}, ` +
       `remaining: ${remaining.map((t) => `${t.slug}(${t.status})`).join(', ')}`,
     );
   } else {
-    const remaining = allTasks.filter((t) => t.status !== 'Done');
+    const remaining = allTasks.filter((t) => !terminalStatuses.includes(t.status));
     console.log(`[runner] story not done, remaining tasks: ${remaining.map((t) => t.slug).join(', ')}`);
   }
 }
