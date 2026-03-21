@@ -3,11 +3,13 @@
  *
  * 環境変数 NOTIFY_BACKEND で切り替える。
  * - "local": macOS 通知 + ターミナル入力（デフォルト）
- * - "slack": Slack バックエンド（既存）
+ * - "slack": Slack バックエンド
  * - 未設定: デフォルトは "local"
  */
 export { NotificationBackend, ApprovalResult } from './types';
 export { LocalNotificationBackend } from './local';
+export { SlackNotificationBackend } from './slack';
+export { generateApprovalId } from './approval-id';
 
 import { NotificationBackend } from './types';
 import { LocalNotificationBackend } from './local';
@@ -30,7 +32,7 @@ export async function createNotificationBackend(): Promise<NotificationBackend> 
     case 'slack': {
       // Slack 依存を動的インポート（local 使用時は不要な依存を読み込まない）
       const { createSlackApp } = await import('../slack/bot');
-      const { registerApprovalHandlers, SlackNotificationBackend } = await import('../approval');
+      const { registerApprovalHandlers, SlackNotificationBackend } = await import('./slack');
 
       const slackApp = createSlackApp();
       registerApprovalHandlers(slackApp);

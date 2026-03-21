@@ -2,9 +2,8 @@ import { execSync } from 'child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { StoryFile, TaskFile, getStoryTasks } from './vault/reader';
 import { updateFileStatus, createTaskFile, TaskDraft } from './vault/writer';
-import { generateApprovalId } from './approval';
 import { decomposeTasks } from './decomposer';
-import { NotificationBackend } from './notification';
+import { NotificationBackend, generateApprovalId } from './notification';
 
 function buildTaskPrompt(task: TaskFile, story: StoryFile, repoPath: string): string {
   return `あなたは優秀なソフトウェアエンジニアです。以下のタスクを実装してください。
