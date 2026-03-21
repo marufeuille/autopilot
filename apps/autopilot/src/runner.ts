@@ -114,11 +114,18 @@ export async function runStory(story: StoryFile, app: App): Promise<void> {
     await runTask(task, story, app, repoPath);
   }
 
-  // ストーリー完了
-  updateFileStatus(story.filePath, 'Done');
-  await app.client.chat.postMessage({
-    channel: config.slack.channelId,
-    text: `:white_check_mark: ストーリー完了: *${story.slug}*`,
-  });
-  console.log(`[runner] story done: ${story.slug}`);
+  // 全タスクがDoneの場合のみストーリーを完了にする
+  const allTasks = await getStoryTasks(story.project, story.slug);
+  const allDone = allTasks.length > 0 && allTasks.every((t) => t.status === 'Done');
+  if (allDone) {
+    updateFileStatus(story.filePath, 'Done');
+    await app.client.chat.postMessage({
+      channel: config.slack.channelId,
+      text: `:white_check_mark: ストーリー完了: *${story.slug}*`,
+    });
+    console.log(`[runner] story done: ${story.slug}`);
+  } else {
+    const remaining = allTasks.filter((t) => t.status !== 'Done');
+    console.log(`[runner] story not done, remaining tasks: ${remaining.map((t) => t.slug).join(', ')}`);
+  }
 }
