@@ -12,49 +12,104 @@ function getApp(): App {
   return _app;
 }
 
-export interface ApprovalMessageParams {
-  workflowId: string;
-  taskSlug: string;
-  project: string;
-  story: string;
-  filePath: string;
+async function post(text: string, blocks: unknown[]): Promise<void> {
+  await getApp().client.chat.postMessage({
+    channel: config.slack.channelId,
+    text,
+    blocks: blocks as any,
+  });
 }
 
-export async function sendApprovalMessage(params: ApprovalMessageParams): Promise<void> {
-  const app = getApp();
-  const { workflowId, taskSlug, project, story, filePath } = params;
+export interface TaskStartParams {
+  workflowId: string;
+  taskSlug: string;
+  storySlug: string;
+  project: string;
+}
 
-  await app.client.chat.postMessage({
-    channel: config.slack.channelId,
-    text: `タスクの承認依頼: *${taskSlug}*`,
-    blocks: [
-      {
-        type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: `*タスク承認依頼*\n\nプロジェクト: \`${project}\`\nストーリー: \`${story}\`\nタスク: \`${taskSlug}\`\nファイル: \`${filePath}\``,
+export async function sendTaskStartApproval(params: TaskStartParams): Promise<void> {
+  const { workflowId, taskSlug, storySlug, project } = params;
+  await post(`タスク開始の承認依頼: *${taskSlug}*`, [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*タスク開始を承認してください*\n\nプロジェクト: \`${project}\`\nストーリー: \`${storySlug}\`\nタスク: \`${taskSlug}\``,
+      },
+    },
+    {
+      type: 'actions',
+      block_id: 'task_start_actions',
+      elements: [
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: '▶️ 開始' },
+          style: 'primary',
+          action_id: 'task_start_approve',
+          value: workflowId,
         },
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: '⏭️ スキップ' },
+          action_id: 'task_start_skip',
+          value: workflowId,
+        },
+      ],
+    },
+  ]);
+}
+
+export interface TaskDoneParams {
+  workflowId: string;
+  taskSlug: string;
+  storySlug: string;
+  project: string;
+}
+
+export async function sendTaskDoneApproval(params: TaskDoneParams): Promise<void> {
+  const { workflowId, taskSlug, storySlug, project } = params;
+  await post(`タスク完了の確認: *${taskSlug}*`, [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*タスク完了を確認してください*\n\nプロジェクト: \`${project}\`\nストーリー: \`${storySlug}\`\nタスク: \`${taskSlug}\``,
       },
-      {
-        type: 'actions',
-        block_id: 'approval_actions',
-        elements: [
-          {
-            type: 'button',
-            text: { type: 'plain_text', text: '✅ 承認' },
-            style: 'primary',
-            action_id: 'approve',
-            value: workflowId,
-          },
-          {
-            type: 'button',
-            text: { type: 'plain_text', text: '❌ 却下' },
-            style: 'danger',
-            action_id: 'reject',
-            value: workflowId,
-          },
-        ],
+    },
+    {
+      type: 'actions',
+      block_id: 'task_done_actions',
+      elements: [
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: '✅ 完了' },
+          style: 'primary',
+          action_id: 'task_done_approve',
+          value: workflowId,
+        },
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: '🔁 やり直し' },
+          style: 'danger',
+          action_id: 'task_done_reject',
+          value: workflowId,
+        },
+      ],
+    },
+  ]);
+}
+
+export async function sendStoryDoneNotification(
+  storySlug: string,
+  project: string,
+): Promise<void> {
+  await post(`🎉 ストーリー完了: *${storySlug}*`, [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `*ストーリーが完了しました* 🎉\n\nプロジェクト: \`${project}\`\nストーリー: \`${storySlug}\``,
       },
-    ],
-  });
+    },
+  ]);
 }

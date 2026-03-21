@@ -1,42 +1,67 @@
-import { proxyActivities, setHandler, condition, defineSignal } from '@temporalio/workflow';
-import type { ApprovalMessageParams } from '../activities/slack';
+import {
+  proxyActivities,
+  setHandler,
+  condition,
+  defineSignal,
+  workflowInfo,
+} from '@temporalio/workflow';
+import type { TaskStartParams, TaskDoneParams } from '../activities/slack';
 import type { TaskFile } from '../vault/reader';
 
-const { sendApprovalMessage, updateTaskStatusActivity, readTaskActivity } = proxyActivities<{
-  sendApprovalMessage(params: ApprovalMessageParams): Promise<void>;
+const {
+  sendTaskStartApproval,
+  sendTaskDoneApproval,
+  updateTaskStatusActivity,
+} = proxyActivities<{
+  sendTaskStartApproval(params: TaskStartParams): Promise<void>;
+  sendTaskDoneApproval(params: TaskDoneParams): Promise<void>;
   updateTaskStatusActivity(filePath: string, status: string): Promise<void>;
-  readTaskActivity(filePath: string): Promise<TaskFile>;
 }>({
   startToCloseTimeout: '10 minutes',
 });
 
-export const approvalSignal = defineSignal<[{ decision: 'approve' | 'reject' }]>('approval');
+export const taskStartSignal = defineSignal<[{ action: 'approve' | 'skip' }]>('taskStart');
+export const taskDoneSignal = defineSignal<[{ action: 'approve' | 'reject' }]>('taskDone');
 
 export interface TaskWorkflowParams {
-  filePath: string;
+  task: TaskFile;
   project: string;
-  taskSlug: string;
-  story: string;
+  storySlug: string;
 }
 
-export async function taskWorkflow(params: TaskWorkflowParams): Promise<string> {
-  const { filePath, project, taskSlug, story } = params;
-  const workflowId = taskSlug;
+export type TaskWorkflowResult = 'done' | 'skipped';
 
-  let decision: 'approve' | 'reject' | null = null;
+export async function taskWorkflow(params: TaskWorkflowParams): Promise<TaskWorkflowResult> {
+  const { task, project, storySlug } = params;
+  const workflowId = workflowInfo().workflowId;
 
-  setHandler(approvalSignal, (payload) => {
-    decision = payload.decision;
-  });
+  // --- Gate 1: タスク開始承認 ---
+  let startAction: 'approve' | 'skip' | null = null;
+  setHandler(taskStartSignal, (payload) => { startAction = payload.action; });
 
-  // Slack に承認依頼を送信
-  await sendApprovalMessage({ workflowId, taskSlug, project, story, filePath });
+  await sendTaskStartApproval({ workflowId, taskSlug: task.slug, storySlug, project });
+  await condition(() => startAction !== null);
 
-  // 承認または却下が来るまで待機
-  await condition(() => decision !== null);
+  if (startAction === 'skip') {
+    return 'skipped';
+  }
 
-  const newStatus = decision === 'approve' ? 'approved' : 'rejected';
-  await updateTaskStatusActivity(filePath, newStatus);
+  await updateTaskStatusActivity(task.filePath, 'Doing');
 
-  return newStatus;
+  // --- Gate 2: タスク完了確認 ---
+  // （Story 1 では Claude 実装なし。Story 2 以降でここに Claude 実行を挟む）
+  let doneAction: 'approve' | 'reject' | null = null;
+  setHandler(taskDoneSignal, (payload) => { doneAction = payload.action; });
+
+  while (true) {
+    await sendTaskDoneApproval({ workflowId, taskSlug: task.slug, storySlug, project });
+    await condition(() => doneAction !== null);
+
+    if (doneAction === 'approve') break;
+    // reject の場合は再度確認（Story 2 以降は Claude に修正依頼する）
+    doneAction = null;
+  }
+
+  await updateTaskStatusActivity(task.filePath, 'Done');
+  return 'done';
 }

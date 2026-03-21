@@ -5,101 +5,87 @@ import { Client, Connection } from '@temporalio/client';
 import { setSlackApp } from './activities/slack';
 import { createSlackApp, registerApprovalHandlers } from './slack/bot';
 import { createWorker } from './worker';
-import { getPendingApprovalTasks } from './vault/reader';
-import { taskWorkflow } from './workflows/task-workflow';
-import { config, vaultTasksPath } from './config';
+import { readStoryFile } from './vault/reader';
+import { storyWorkflow } from './workflows/story-workflow';
+import { config } from './config';
 
-async function startWorkflowForTask(
-  temporalClient: Client,
-  filePath: string,
-  project: string,
-): Promise<void> {
-  const taskSlug = path.basename(filePath, '.md');
-
-  // 既に実行中の Workflow があればスキップ
-  try {
-    const handle = temporalClient.workflow.getHandle(taskSlug);
-    await handle.describe();
-    console.log(`[orchestrator] workflow already running for ${taskSlug}, skipping`);
-    return;
-  } catch {
-    // not found → start new workflow
-  }
-
-  const tasks = await getPendingApprovalTasks(project);
-  // path.resolve で正規化して比較
-  const task = tasks.find((t) => path.resolve(t.filePath) === path.resolve(filePath));
-  if (!task) {
-    console.log(`[orchestrator] ${taskSlug} not pending_approval, skipping`);
-    return;
-  }
-
-  console.log(`[orchestrator] starting workflow for ${taskSlug}`);
-  await temporalClient.workflow.start(taskWorkflow, {
-    taskQueue: config.temporal.taskQueue,
-    workflowId: taskSlug,
-    args: [{ filePath: task.filePath, project, taskSlug, story: task.story }],
-  });
-  console.log(`[orchestrator] workflow started: ${taskSlug}`);
+function vaultStoriesPath(project: string): string {
+  return path.join(config.vaultPath, 'Projects', project, 'stories');
 }
 
-async function handleFileEvent(
+async function startStoryWorkflow(
   temporalClient: Client,
   filePath: string,
   project: string,
-  event: 'add' | 'change',
 ): Promise<void> {
-  if (!filePath.endsWith('.md') || filePath.endsWith('README.md')) return;
-  console.log(`[vault] ${event}: ${path.basename(filePath)}`);
-  await startWorkflowForTask(temporalClient, filePath, project);
+  if (!filePath.endsWith('.md')) return;
+
+  const story = readStoryFile(filePath);
+  if (story.status !== 'Doing') return;
+
+  const workflowId = `story--${story.slug}`;
+
+  // 既に実行中なら skip
+  try {
+    const desc = await temporalClient.workflow.getHandle(workflowId).describe();
+    if (desc.status.name === 'RUNNING') {
+      console.log(`[orchestrator] story workflow already running: ${story.slug}`);
+      return;
+    }
+  } catch {
+    // not found → proceed
+  }
+
+  console.log(`[orchestrator] starting story workflow: ${story.slug}`);
+  await temporalClient.workflow.start(storyWorkflow, {
+    taskQueue: config.temporal.taskQueue,
+    workflowId,
+    args: [{ story, project }],
+  });
+  console.log(`[orchestrator] story workflow started: ${workflowId}`);
 }
 
 async function main(): Promise<void> {
-  // Temporal 接続
   const connection = await Connection.connect({ address: config.temporal.address });
   const temporalClient = new Client({ connection });
 
-  // Slack アプリ初期化
   const slackApp = createSlackApp();
   setSlackApp(slackApp);
   registerApprovalHandlers(slackApp, temporalClient);
 
-  // Temporal Worker 起動
   const worker = await createWorker();
   worker.run().catch(console.error);
 
-  // Slack Bot 起動
   await slackApp.start();
   console.log('[slack] bot started (Socket Mode)');
 
-  // WATCH_PROJECTS: カンマ区切りで複数指定可（例: claude-workflow-kit,cwk-test）
+  // WATCH_PROJECTS: カンマ区切りで複数指定可
   const projects = (process.env.WATCH_PROJECTS ?? 'claude-workflow-kit')
     .split(',')
     .map((p) => p.trim())
     .filter(Boolean);
 
   for (const project of projects) {
-    const watchPath = vaultTasksPath(project);
+    const storiesPath = vaultStoriesPath(project);
 
-    if (!fs.existsSync(watchPath)) {
-      console.warn(`[vault] tasks dir not found, skipping: ${watchPath}`);
+    if (!fs.existsSync(storiesPath)) {
+      console.warn(`[vault] stories dir not found, skipping: ${storiesPath}`);
       continue;
     }
 
-    console.log(`[vault] watching ${watchPath}`);
+    console.log(`[vault] watching stories: ${storiesPath}`);
 
-    // ディレクトリを直接 watch（glob パターンは使わない）
-    const watcher = chokidar.watch(watchPath, {
+    const watcher = chokidar.watch(storiesPath, {
       ignoreInitial: false,
-      depth: 5,
+      depth: 1,
     });
 
     watcher.on('add', (filePath) => {
-      handleFileEvent(temporalClient, filePath, project, 'add').catch(console.error);
+      startStoryWorkflow(temporalClient, filePath, project).catch(console.error);
     });
 
     watcher.on('change', (filePath) => {
-      handleFileEvent(temporalClient, filePath, project, 'change').catch(console.error);
+      startStoryWorkflow(temporalClient, filePath, project).catch(console.error);
     });
   }
 
