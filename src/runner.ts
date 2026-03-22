@@ -3,7 +3,14 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import { StoryFile, TaskFile, TaskStatus, getStoryTasks } from './vault/reader';
 import { updateFileStatus, createTaskFile, TaskDraft } from './vault/writer';
 import { decomposeTasks } from './decomposer';
-import { NotificationBackend, generateApprovalId } from './notification';
+import {
+  NotificationBackend,
+  generateApprovalId,
+  buildMergeApprovalMessage,
+  buildReviewEscalationMessage,
+  buildCIEscalationMessage,
+  NotificationContext,
+} from './notification';
 import { syncMainBranch, GitSyncError } from './git';
 import { runReviewLoop, formatReviewLoopResult, ReviewLoopResult } from './review';
 import { runCIPollingLoop, formatCIPollingResult, CIPollingResult, CIPollingOptions } from './ci';
@@ -215,13 +222,23 @@ export async function runTask(
 
       // レビュー結果を通知
       const reviewMessage = formatReviewLoopResult(reviewLoopResult);
-      await notifier.notify(`*セルフレビュー結果* (${task.slug})\n\n${reviewMessage}`);
+      const reviewSummary = reviewMessage;
       console.log(`[runner] self-review complete: verdict=${reviewLoopResult.finalVerdict}, iterations=${reviewLoopResult.iterations.length}, escalation=${reviewLoopResult.escalationRequired}`);
+
+      // 通知コンテキストの基本情報
+      const baseCtx: Omit<NotificationContext, 'eventType'> = {
+        taskSlug: task.slug,
+        storySlug: story.slug,
+        reviewSummary,
+      };
 
       // PR作成ゲート: セルフレビューOKの場合のみPRを作成
       let prUrl = '';
       let ciPollingResult: CIPollingResult | undefined;
       if (reviewLoopResult.finalVerdict === 'OK') {
+        // レビュー通過の情報通知
+        await notifier.notify(`*セルフレビュー結果* (${task.slug})\n\n${reviewMessage}`);
+
         console.log(`[runner] self-review passed, creating PR for: ${task.slug}`);
         prUrl = createPullRequest(repoPath, branch, task, story, reviewLoopResult);
 
@@ -234,13 +251,62 @@ export async function runTask(
             task.content,
           );
           const ciMessage = formatCIPollingResult(ciPollingResult);
-          await notifier.notify(`*CI結果* (${task.slug})\n\n${ciMessage}`);
+          const ciRunUrl = ciPollingResult.lastCIResult?.runUrl;
           console.log(`[runner] CI polling complete: status=${ciPollingResult.finalStatus}, attempts=${ciPollingResult.attempts}`);
+
+          if (ciPollingResult.finalStatus === 'success') {
+            // CI通過 → マージ承認依頼を送信
+            const mergeCtx: NotificationContext = {
+              ...baseCtx,
+              eventType: 'merge_approval',
+              prUrl,
+              ciSummary: ciMessage,
+              ciRunUrl,
+            };
+            const mergeMessage = buildMergeApprovalMessage(mergeCtx);
+            const mergeApprovalId = generateApprovalId(story.slug, `${task.slug}-merge`);
+            const mergeResult = await notifier.requestApproval(
+              mergeApprovalId,
+              mergeMessage,
+              { approve: 'マージ承認', reject: '差し戻し' },
+            );
+            if (mergeResult.action === 'approve') {
+              break;
+            }
+            // 差し戻しの場合はやり直しループへ
+            prompt = `前回の実装を修正してください。タスク: ${task.slug}\n\n${task.content}\n\n作業ディレクトリ: ${repoPath}\n\n## 修正依頼\n${mergeResult.reason}\n\n上記の修正依頼を踏まえて、完了条件を再確認しながら修正してください。`;
+            console.log(`[runner] merge rejected, retrying task: ${task.slug}`);
+            continue;
+          } else if (
+            ciPollingResult.finalStatus === 'max_retries_exceeded' ||
+            ciPollingResult.finalStatus === 'failure' ||
+            ciPollingResult.finalStatus === 'timeout'
+          ) {
+            // CI失敗エスカレーション通知
+            const ciEscCtx: NotificationContext = {
+              ...baseCtx,
+              eventType: 'ci_escalation',
+              prUrl,
+              ciSummary: ciMessage,
+              ciRunUrl,
+            };
+            await notifier.notify(buildCIEscalationMessage(ciEscCtx));
+            console.log(`[runner] CI escalation notified for: ${task.slug}`);
+          }
         }
       } else {
         console.log(`[runner] self-review NG, skipping PR creation for: ${task.slug}`);
         if (reviewLoopResult.escalationRequired) {
-          console.log(`[runner] review escalation required for: ${task.slug}`);
+          // レビューNGエスカレーション通知
+          const reviewEscCtx: NotificationContext = {
+            ...baseCtx,
+            eventType: 'review_escalation',
+          };
+          await notifier.notify(buildReviewEscalationMessage(reviewEscCtx));
+          console.log(`[runner] review escalation notified for: ${task.slug}`);
+        } else {
+          // レビューNG（エスカレーションなし）の情報通知
+          await notifier.notify(`*セルフレビュー結果* (${task.slug})\n\n${reviewMessage}`);
         }
       }
 
