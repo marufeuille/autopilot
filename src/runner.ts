@@ -285,6 +285,24 @@ export async function runTask(
               { approve: 'マージ承認', reject: '差し戻し' },
             );
             if (mergeResult.action === 'approve') {
+              // マージ承認後に実際にPRをマージする
+              try {
+                const mergeOutput = execSync(
+                  `gh pr merge ${prUrl} --merge`,
+                  {
+                    cwd: repoPath,
+                    encoding: 'utf-8',
+                    stdio: 'pipe',
+                  },
+                );
+                console.log(`[runner] PR merged successfully: ${prUrl}`);
+                if (mergeOutput.trim()) {
+                  console.log(`[runner] merge output: ${mergeOutput.trim()}`);
+                }
+              } catch (mergeError) {
+                console.error(`[runner] PR merge failed: ${prUrl}`, mergeError);
+                throw mergeError;
+              }
               break;
             }
             // 差し戻しの場合はやり直しループへ
