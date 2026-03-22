@@ -67,7 +67,7 @@ export function defaultCIPollingResult(): CIPollingResult {
  * すべてのメソッドは vi.fn() でラップされ、呼び出し回数・引数を検証可能。
  * デフォルト動作:
  * - runAgent: 成功（何もしない）
- * - execGh: PR URL 文字列を返す
+ * - execGh: pr view --json ではマージ可能な状態の JSON、pr merge では空文字、その他は PR URL を返す
  * - execCommand: 空文字列を返す
  * - runReviewLoop: verdict OK を返す
  * - runCIPollingLoop: success を返す
@@ -80,7 +80,25 @@ export function defaultCIPollingResult(): CIPollingResult {
 export function createFakeDeps(overrides?: FakeDepsOverrides): RunnerDeps {
   const defaults: RunnerDeps = {
     runAgent: vi.fn().mockResolvedValue(undefined),
-    execGh: vi.fn().mockReturnValue('https://github.com/test/repo/pull/1'),
+    execGh: vi.fn().mockImplementation((args: string[]) => {
+      // pr view --json の場合はマージ可能な状態の JSON を返す
+      if (args.includes('view') && args.includes('--json')) {
+        return JSON.stringify({
+          state: 'OPEN',
+          mergeable: 'MERGEABLE',
+          reviewDecision: 'APPROVED',
+          statusCheckRollup: [
+            { name: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' },
+          ],
+        });
+      }
+      // pr merge の場合は空文字を返す（成功）
+      if (args.includes('merge')) {
+        return '';
+      }
+      // その他は PR URL を返す
+      return 'https://github.com/test/repo/pull/1';
+    }),
     execCommand: vi.fn().mockReturnValue(''),
     runReviewLoop: vi.fn().mockResolvedValue(defaultReviewLoopResult()),
     runCIPollingLoop: vi.fn().mockResolvedValue(defaultCIPollingResult()),

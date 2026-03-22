@@ -16,6 +16,7 @@ import { GitSyncError } from './git';
 import { formatReviewLoopResult, ReviewLoopResult } from './review';
 import { formatCIPollingResult, CIPollingResult } from './ci';
 import { RunnerDeps, createDefaultRunnerDeps } from './runner-deps';
+import { executeMerge, MergeError, formatMergeErrorMessage } from './merge';
 
 export { RunnerDeps, createDefaultRunnerDeps } from './runner-deps';
 
@@ -265,15 +266,12 @@ export async function runTask(
             console.log(`[runner] merge approval result: action=${mergeResult.action}, task=${task.slug}`);
             if (mergeResult.action === 'approve') {
               // マージ承認後に実際にPRをマージする
-              console.log(`[runner] merge approved, executing gh pr merge: ${prUrl}`);
+              console.log(`[runner] merge approved, executing merge: ${prUrl}`);
               try {
-                const mergeOutput = d.execGh(
-                  ['pr', 'merge', prUrl, '--squash', '--delete-branch'],
-                  repoPath,
-                );
+                const result = executeMerge(prUrl, repoPath, d, { skipValidation: false });
                 console.log(`[runner] PR merged successfully: ${prUrl}`);
-                if (mergeOutput.trim()) {
-                  console.log(`[runner] merge output: ${mergeOutput.trim()}`);
+                if (result.output) {
+                  console.log(`[runner] merge output: ${result.output}`);
                 }
                 // マージ成功通知をユーザーに送信
                 await notifier.notify(
@@ -281,14 +279,22 @@ export async function runTask(
                   story.slug,
                 );
               } catch (mergeError) {
-                const errorMessage = mergeError instanceof Error ? mergeError.message : String(mergeError);
-                console.error(`[runner] PR merge failed: ${prUrl}`, mergeError);
-                console.error(`[runner] merge error details: ${errorMessage}`);
-                // マージ失敗通知をユーザーに送信
-                await notifier.notify(
-                  `❌ *マージ失敗*: \`${task.slug}\`\n*PR*: ${prUrl}\n*原因*: ${errorMessage}`,
-                  story.slug,
-                );
+                if (mergeError instanceof MergeError) {
+                  const formattedMessage = formatMergeErrorMessage(mergeError);
+                  console.error(`[runner] PR merge failed [${mergeError.code}] (${mergeError.statusCode}): ${prUrl}`, mergeError.reason);
+                  // 構造化されたエラー情報をユーザーに送信
+                  await notifier.notify(
+                    `❌ *マージ失敗*: \`${task.slug}\`\n*PR*: ${prUrl}\n*エラーコード*: \`${mergeError.code}\`\n*原因*: ${formattedMessage}`,
+                    story.slug,
+                  );
+                } else {
+                  const errorMessage = mergeError instanceof Error ? mergeError.message : String(mergeError);
+                  console.error(`[runner] PR merge failed: ${prUrl}`, mergeError);
+                  await notifier.notify(
+                    `❌ *マージ失敗*: \`${task.slug}\`\n*PR*: ${prUrl}\n*原因*: ${errorMessage}`,
+                    story.slug,
+                  );
+                }
                 throw mergeError;
               }
               break;
