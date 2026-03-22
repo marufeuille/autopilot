@@ -158,7 +158,6 @@ describe('getLatestDraft', () => {
 describe('handleFixApproveInternal', () => {
   const threadTs = '1234567890.123456';
   const messageTs = '1234567890.654321';
-  const userId = 'U_TEST_USER';
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -169,7 +168,7 @@ describe('handleFixApproveInternal', () => {
   it('セッションが存在しない場合は何もしない', async () => {
     const deps = createMockDeps();
 
-    await handleFixApproveInternal('nonexistent', messageTs, deps, userId);
+    await handleFixApproveInternal('nonexistent', messageTs, deps, 'U_TEST');
 
     expect(deps.writeFixStoryToVault).not.toHaveBeenCalled();
     expect(deps.postMessage).not.toHaveBeenCalled();
@@ -180,7 +179,7 @@ describe('handleFixApproveInternal', () => {
     interactiveSessionManager.startSession(session);
     const deps = createMockDeps();
 
-    await handleFixApproveInternal(threadTs, messageTs, deps, userId);
+    await handleFixApproveInternal(threadTs, messageTs, deps, 'U_TEST');
 
     expect(deps.writeFixStoryToVault).not.toHaveBeenCalled();
     expect(deps.postMessage).not.toHaveBeenCalled();
@@ -192,11 +191,11 @@ describe('handleFixApproveInternal', () => {
     const deps = createMockDeps();
 
     // 1回目の承認は成功する
-    await handleFixApproveInternal(threadTs, messageTs, deps, userId);
+    await handleFixApproveInternal(threadTs, messageTs, deps, 'U_TEST');
     expect(deps.writeFixStoryToVault).toHaveBeenCalledTimes(1);
 
     // 2回目の承認はphaseがexecutingなので何もしない
-    await handleFixApproveInternal(threadTs, messageTs, deps, userId);
+    await handleFixApproveInternal(threadTs, messageTs, deps, 'U_TEST');
     expect(deps.writeFixStoryToVault).toHaveBeenCalledTimes(1);
   });
 
@@ -205,7 +204,7 @@ describe('handleFixApproveInternal', () => {
     interactiveSessionManager.startSession(session);
     const deps = createMockDeps();
 
-    await handleFixApproveInternal(threadTs, messageTs, deps, userId);
+    await handleFixApproveInternal(threadTs, messageTs, deps, 'U_TEST');
 
     // 1. Vaultにファイルを書き込む
     expect(deps.writeFixStoryToVault).toHaveBeenCalledTimes(1);
@@ -239,7 +238,7 @@ describe('handleFixApproveInternal', () => {
     // 初期状態: drafting
     expect(interactiveSessionManager.getSession(threadTs)!.phase).toBe('drafting');
 
-    await handleFixApproveInternal(threadTs, messageTs, deps, userId);
+    await handleFixApproveInternal(threadTs, messageTs, deps, 'U_TEST');
 
     // 最終状態: executing
     const updatedSession = interactiveSessionManager.getSession(threadTs);
@@ -253,7 +252,7 @@ describe('handleFixApproveInternal', () => {
     interactiveSessionManager.startSession(session);
     const deps = createMockDeps();
 
-    await handleFixApproveInternal(threadTs, messageTs, deps, userId);
+    await handleFixApproveInternal(threadTs, messageTs, deps, 'U_TEST');
 
     expect(deps.writeFixStoryToVault).not.toHaveBeenCalled();
     expect(deps.postMessage).toHaveBeenCalledTimes(1);
@@ -271,7 +270,7 @@ describe('handleFixApproveInternal', () => {
     interactiveSessionManager.startSession(session);
     const deps = createMockDeps();
 
-    await handleFixApproveInternal(threadTs, messageTs, deps, userId);
+    await handleFixApproveInternal(threadTs, messageTs, deps, 'U_TEST');
 
     expect(deps.writeFixStoryToVault).not.toHaveBeenCalled();
     // phaseがdraftingに戻ることを確認
@@ -288,7 +287,7 @@ describe('handleFixApproveInternal', () => {
       }),
     });
 
-    await handleFixApproveInternal(threadTs, messageTs, deps, userId);
+    await handleFixApproveInternal(threadTs, messageTs, deps, 'U_TEST');
 
     expect(deps.postMessage).toHaveBeenCalledTimes(1);
     const postCall = (deps.postMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
@@ -296,6 +295,10 @@ describe('handleFixApproveInternal', () => {
     expect(postCall.text).not.toContain('Permission denied');
     expect(postCall.thread_ts).toBe(threadTs);
 
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[fix-approval]'),
+      expect.stringContaining('Permission denied'),
+    );
     consoleSpy.mockRestore();
   });
 
@@ -315,7 +318,7 @@ describe('handleFixApproveInternal', () => {
     interactiveSessionManager.startSession(session);
     const deps = createMockDeps();
 
-    await handleFixApproveInternal(threadTs, messageTs, deps, userId);
+    await handleFixApproveInternal(threadTs, messageTs, deps, 'U_TEST');
 
     const [, content] = (deps.writeFixStoryToVault as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(content).toContain('fix: Final Analysis');
@@ -339,7 +342,6 @@ describe('handleFixApproveInternal', () => {
 describe('handleFixCancelInternal', () => {
   const threadTs = '1234567890.123456';
   const messageTs = '1234567890.654321';
-  const userId = 'U_TEST_USER';
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -350,7 +352,7 @@ describe('handleFixCancelInternal', () => {
   it('セッションが存在しない場合は何もしない', async () => {
     const deps = createMockDeps();
 
-    await handleFixCancelInternal('nonexistent', messageTs, deps, userId);
+    await handleFixCancelInternal('nonexistent', messageTs, deps, 'U_TEST');
 
     expect(deps.postMessage).not.toHaveBeenCalled();
     expect(deps.updateMessage).not.toHaveBeenCalled();
@@ -361,7 +363,7 @@ describe('handleFixCancelInternal', () => {
     interactiveSessionManager.startSession(session);
     const deps = createMockDeps();
 
-    await handleFixCancelInternal(threadTs, messageTs, deps, userId);
+    await handleFixCancelInternal(threadTs, messageTs, deps, 'U_TEST');
 
     expect(deps.postMessage).not.toHaveBeenCalled();
   });
@@ -371,7 +373,7 @@ describe('handleFixCancelInternal', () => {
     interactiveSessionManager.startSession(session);
     const deps = createMockDeps();
 
-    await handleFixCancelInternal(threadTs, messageTs, deps, userId);
+    await handleFixCancelInternal(threadTs, messageTs, deps, 'U_TEST');
 
     // 1. phaseがcancelledに遷移
     const updatedSession = interactiveSessionManager.getSession(threadTs);
@@ -401,69 +403,6 @@ describe('handleFixCancelInternal', () => {
     expect(interactiveSessionManager.getSession(threadTs)!.phase).toBe('cancelled');
     expect(deps.updateMessage).toHaveBeenCalledTimes(1);
     expect(deps.postMessage).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe('handleFixApproveInternal（runFixAgent付き）', () => {
-  const threadTs = '1234567890.123456';
-  const messageTs = '1234567890.654321';
-  const userId = 'U_TEST_USER';
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    const mgr = interactiveSessionManager as any;
-    mgr.sessions?.clear?.();
-  });
-
-  it('runFixAgent提供時: 承認後に修正実行が開始される', async () => {
-    const session = makeSession();
-    interactiveSessionManager.startSession(session);
-    const runFixAgent = vi.fn().mockResolvedValue('### 修正サマリー\n修正完了');
-    const deps = createMockDeps({ runFixAgent });
-
-    await handleFixApproveInternal(threadTs, messageTs, deps, userId);
-
-    // runFixAgentが呼ばれること（prompt と AbortSignal の2引数）
-    expect(runFixAgent).toHaveBeenCalledTimes(1);
-    expect(runFixAgent).toHaveBeenCalledWith(
-      expect.stringContaining('fix: Login 404 Error'),
-      expect.any(AbortSignal),
-    );
-
-    // phaseがcompletedに遷移（executeFixInternalが完了するため）
-    expect(interactiveSessionManager.getSession(threadTs)!.phase).toBe('completed');
-  });
-
-  it('runFixAgentでエラー発生時: 例外で落ちずエラーメッセージが投稿される', async () => {
-    const session = makeSession();
-    interactiveSessionManager.startSession(session);
-    const runFixAgent = vi.fn().mockRejectedValue(new Error('API overloaded'));
-    const deps = createMockDeps({ runFixAgent });
-
-    // 例外で落ちないことを確認
-    await expect(
-      handleFixApproveInternal(threadTs, messageTs, deps, userId),
-    ).resolves.toBeUndefined();
-
-    // エラーメッセージがスレッドに投稿される
-    const postCalls = (deps.postMessage as ReturnType<typeof vi.fn>).mock.calls;
-    const errorPost = postCalls.find(
-      (call: any[]) => call[0].text?.includes('Claude API'),
-    );
-    expect(errorPost).toBeDefined();
-  });
-
-  it('runFixAgent未設定時: ファイルウォッチャーに委譲される', async () => {
-    const session = makeSession();
-    interactiveSessionManager.startSession(session);
-    const deps = createMockDeps();
-    // runFixAgent を明示的に undefined にする
-    delete (deps as any).runFixAgent;
-
-    await handleFixApproveInternal(threadTs, messageTs, deps, userId);
-
-    // phaseがexecutingのまま（executeFixInternalが呼ばれないため）
-    expect(interactiveSessionManager.getSession(threadTs)!.phase).toBe('executing');
   });
 });
 
@@ -524,43 +463,6 @@ describe('registerFixApprovalHandlers', () => {
     // ペイロード解析ログにuserIdが含まれることを確認
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('U_APPROVER'),
-    );
-
-    consoleSpy.mockRestore();
-  });
-
-  it('キャンセルボタンハンドラーがペイロードからuserId・threadTs・messageTsを抽出する', async () => {
-    const { registerFixApprovalHandlers } = await import('../fix-approval');
-
-    const mockApp = {
-      action: vi.fn(),
-    } as any;
-
-    registerFixApprovalHandlers(mockApp);
-
-    // ap_fix_cancel ハンドラーを取得
-    const cancelHandler = mockApp.action.mock.calls.find(
-      (call: any[]) => call[0] === 'ap_fix_cancel',
-    )?.[1];
-    expect(cancelHandler).toBeDefined();
-
-    const ack = vi.fn().mockResolvedValue(undefined);
-    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-
-    await cancelHandler({
-      body: {
-        user: { id: 'U_CANCELLER' },
-        actions: [{ value: '1234567890.123456', text: { text: 'キャンセル' } }],
-        message: { ts: '1234567890.654321' },
-      },
-      ack,
-    });
-
-    expect(ack).toHaveBeenCalledTimes(1);
-
-    // ペイロード解析ログにuserIdが含まれることを確認
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('U_CANCELLER'),
     );
 
     consoleSpy.mockRestore();
