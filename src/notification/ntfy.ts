@@ -54,6 +54,13 @@ export class NtfyNotificationBackend implements NotificationBackend {
   }
 
   /**
+   * スレッドセッションを終了する（ntfy では no-op）
+   */
+  endSession(_storySlug: string): void {
+    // ntfy バックエンドではスレッドの概念がないため何もしない
+  }
+
+  /**
    * 承認リクエスト（未実装）
    *
    * 今後の PR で ntfy.sh の HTTP callback を利用した承認フローを実装予定。

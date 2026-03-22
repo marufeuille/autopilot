@@ -175,6 +175,10 @@ export class SlackNotificationBackend implements NotificationBackend {
     return this.threadSession.getThreadTs(storySlug);
   }
 
+  endSession(storySlug: string): void {
+    this.threadSession.endSession(storySlug);
+  }
+
   async notify(message: string, storySlug?: string): Promise<void> {
     const threadTs = storySlug ? this.threadSession.getThreadTs(storySlug) : undefined;
     await this.app.client.chat.postMessage({

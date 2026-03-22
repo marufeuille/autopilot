@@ -6,6 +6,35 @@
  */
 
 import { NotificationContext } from './types';
+import type { TaskFile } from '../vault/reader';
+
+/**
+ * スレッド起点メッセージを生成する
+ *
+ * ストーリー実行開始時にスレッドの起点として投稿するメッセージ。
+ * ストーリータイトル（slug）と実行対象タスク一覧を含む。
+ *
+ * @param storySlug ストーリーの識別子
+ * @param tasks 実行対象のタスク一覧
+ */
+export function buildThreadOriginMessage(storySlug: string, tasks: TaskFile[]): string {
+  const lines: string[] = [
+    `🚀 *ストーリー実行開始*: \`${storySlug}\``,
+    '',
+  ];
+
+  if (tasks.length > 0) {
+    lines.push('*タスク一覧:*');
+    for (const task of tasks) {
+      const statusIcon = task.status === 'Todo' ? '⬜' : task.status === 'Done' ? '✅' : '▶️';
+      lines.push(`${statusIcon} \`${task.slug}\` (${task.status})`);
+    }
+  } else {
+    lines.push('_タスク未分解 — この後タスク分解を実行します_');
+  }
+
+  return lines.join('\n');
+}
 
 /**
  * マージ承認依頼メッセージを生成する

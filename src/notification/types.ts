@@ -51,6 +51,15 @@ export interface NotificationBackend {
    * @returns thread_ts（セッション未開始の場合は undefined）
    */
   getThreadTs(storySlug: string): string | undefined;
+
+  /**
+   * スレッドセッションを終了する
+   *
+   * story 完了時に呼び出し、storySlug に紐づくスレッド情報を破棄する。
+   *
+   * @param storySlug ストーリーの識別子
+   */
+  endSession(storySlug: string): void;
 }
 
 /**

@@ -67,6 +67,13 @@ export class LocalNotificationBackend implements NotificationBackend {
   }
 
   /**
+   * スレッドセッションを終了する（ローカルでは no-op）
+   */
+  endSession(_storySlug: string): void {
+    // ローカルバックエンドではスレッドの概念がないため何もしない
+  }
+
+  /**
    * ターミナルの標準入力で y/n 承認を受け付ける（無制限待機）
    *
    * ターミナル操作は人間が行うため、タイムアウトは設けない。

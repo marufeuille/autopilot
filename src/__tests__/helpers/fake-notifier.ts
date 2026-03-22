@@ -54,6 +54,12 @@ export class FakeNotifier implements NotificationBackend {
   /** 記録された承認リクエストのみ */
   public readonly approvalRequests: RecordedApprovalRequest[] = [];
 
+  /** 記録されたスレッド開始呼び出し */
+  public readonly threadStarts: Array<{ storySlug: string; message: string }> = [];
+
+  /** アクティブなスレッドセッション（storySlug → fake thread_ts） */
+  private readonly threadSessions = new Map<string, string>();
+
   private approvalQueue: ApprovalResult[];
 
   constructor(options?: FakeNotifierOptions) {
@@ -96,12 +102,19 @@ export class FakeNotifier implements NotificationBackend {
     return response;
   }
 
-  async startThread(_storySlug: string, _message: string): Promise<void> {
-    // no-op
+  async startThread(storySlug: string, message: string): Promise<void> {
+    this.threadStarts.push({ storySlug, message });
+    // fake thread_ts を生成してセッションに登録
+    const fakeTs = `fake-thread-ts-${storySlug}-${Date.now()}`;
+    this.threadSessions.set(storySlug, fakeTs);
   }
 
-  getThreadTs(_storySlug: string): string | undefined {
-    return undefined;
+  getThreadTs(storySlug: string): string | undefined {
+    return this.threadSessions.get(storySlug);
+  }
+
+  endSession(storySlug: string): void {
+    this.threadSessions.delete(storySlug);
   }
 
   /**
@@ -119,5 +132,7 @@ export class FakeNotifier implements NotificationBackend {
     this.notifications.length = 0;
     this.approvalRequests.length = 0;
     this.approvalQueue.length = 0;
+    this.threadStarts.length = 0;
+    this.threadSessions.clear();
   }
 }
