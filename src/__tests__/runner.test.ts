@@ -735,16 +735,14 @@ describe('runTask', () => {
 
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    await expect(runTask(task, story, notifier, repoPath)).rejects.toThrow();
+    // マージ失敗後のタスク完了確認で approve → Done になる（throw しない）
+    await runTask(task, story, notifier, repoPath);
 
     // エラーログが記録されること
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       expect.stringContaining('PR merge failed'),
       expect.any(String),
     );
-
-    // タスクが Failed に更新されること
-    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Failed');
 
     // マージ失敗通知がユーザーに送信されること（構造化エラー情報を含む）
     expect(notifier.notify).toHaveBeenCalledWith(
@@ -756,6 +754,14 @@ describe('runTask', () => {
       expect.stringContaining('merge_conflict'),
       'my-story',
     );
+    // マージ処理中通知が送信されること
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('マージ処理中'),
+      'my-story',
+    );
+
+    // マージ失敗後はタスク完了確認フローに遷移し、Done で終了する
+    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Done');
 
     consoleErrorSpy.mockRestore();
   });
@@ -1036,7 +1042,7 @@ describe('runTask - マージ後ステータス更新フロー', () => {
     ]);
   });
 
-  it('executeMerge 失敗時にステータスが Failed になり Done にならない', async () => {
+  it('executeMerge 失敗時にエラー通知が送信され、タスク完了確認フローに遷移する', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
     const notifier = createMockNotifier('approve');
@@ -1046,19 +1052,33 @@ describe('runTask - マージ後ステータス更新フロー', () => {
       mergeImpl: () => { throw new MergeError('merge_conflict', 'マージコンフリクト', 409); },
     });
 
+    // マージ失敗後のタスク完了確認で approve → Done になる
+    (notifier.requestApproval as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ action: 'approve' }); // タスク完了確認
+
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    await expect(runTask(task, story, notifier, repoPath)).rejects.toThrow();
+    // マージ失敗時は throw せず、タスク完了確認フローに遷移する
+    await runTask(task, story, notifier, repoPath);
 
-    // Failed に更新されること
-    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Failed');
-    // Done には絶対に更新されないこと
-    expect(mockedUpdateFileStatus).not.toHaveBeenCalledWith(task.filePath, 'Done');
+    // エラー通知が送信されること
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('マージ失敗'),
+      story.slug,
+    );
+    // エラーコードが通知に含まれること
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('merge_conflict'),
+      story.slug,
+    );
+
+    // タスク完了確認で approve されたので Done になること
+    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Done');
 
     consoleErrorSpy.mockRestore();
   });
 
-  it('executeMerge 失敗時の updateFileStatus 呼び出し順序が Doing → Failed', async () => {
+  it('executeMerge 失敗時にマージ処理中通知とエラー通知が順番に送信される', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
     const notifier = createMockNotifier('approve');
@@ -1068,20 +1088,36 @@ describe('runTask - マージ後ステータス更新フロー', () => {
       mergeImpl: () => { throw new MergeError('unknown', 'API error', 500); },
     });
 
+    // マージ失敗後のタスク完了確認で approve → Done になる
+    (notifier.requestApproval as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ action: 'approve' }); // タスク完了確認
+
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
+    await runTask(task, story, notifier, repoPath);
+
+    // マージ処理中通知が送信されること
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('マージ処理中'),
+      story.slug,
+    );
+    // エラー通知が送信されること
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('マージ失敗'),
+      story.slug,
+    );
+
+    // タスク完了確認フローに遷移し、Done で終了すること
     const callOrder: string[] = [];
-    mockedUpdateFileStatus.mockImplementation((_path, status) => {
-      callOrder.push(`updateFileStatus:${status}`);
-    });
-
-    await expect(runTask(task, story, notifier, repoPath)).rejects.toThrow();
-
-    // Doing → Failed の順序（Done は含まれない）
-    expect(callOrder).toEqual([
-      'updateFileStatus:Doing',
-      'updateFileStatus:Failed',
-    ]);
+    const notifyCalls = (notifier.notify as ReturnType<typeof vi.fn>).mock.calls;
+    const mergeInProgressIdx = notifyCalls.findIndex(
+      (call: unknown[]) => (call[0] as string).includes('マージ処理中'),
+    );
+    const mergeFailedIdx = notifyCalls.findIndex(
+      (call: unknown[]) => (call[0] as string).includes('マージ失敗'),
+    );
+    // マージ処理中 → マージ失敗 の順序
+    expect(mergeInProgressIdx).toBeLessThan(mergeFailedIdx);
 
     consoleErrorSpy.mockRestore();
   });
@@ -1126,6 +1162,139 @@ describe('runTask - マージ後ステータス更新フロー', () => {
 
     // 最終的にDoneになること
     expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Done');
+  });
+
+  it('マージ成功時にマージ処理中通知とマージ完了通知が順番に送信される', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    setupMergeFlowMocks(notifier);
+
+    await runTask(task, story, notifier, repoPath);
+
+    const notifyCalls = (notifier.notify as ReturnType<typeof vi.fn>).mock.calls;
+
+    // マージ処理中通知が送信されること
+    const mergeInProgressCall = notifyCalls.find(
+      (call: unknown[]) => (call[0] as string).includes('マージ処理中'),
+    );
+    expect(mergeInProgressCall).toBeDefined();
+
+    // マージ完了通知が送信されること
+    const mergeCompleteCall = notifyCalls.find(
+      (call: unknown[]) => (call[0] as string).includes('マージ完了'),
+    );
+    expect(mergeCompleteCall).toBeDefined();
+
+    // マージ完了通知にステータス更新情報が含まれること
+    expect(mergeCompleteCall![0]).toContain('merged');
+
+    // マージ処理中 → マージ完了 の順序
+    const inProgressIdx = notifyCalls.indexOf(mergeInProgressCall!);
+    const completeIdx = notifyCalls.indexOf(mergeCompleteCall!);
+    expect(inProgressIdx).toBeLessThan(completeIdx);
+  });
+
+  it('マージ失敗後のタスク完了確認で reject するとやり直しループに入る', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier: NotificationBackend = {
+      notify: vi.fn().mockResolvedValue(undefined),
+      requestApproval: vi.fn()
+        .mockResolvedValueOnce({ action: 'approve' })                             // タスク開始承認
+        .mockResolvedValueOnce({ action: 'approve' })                             // マージ承認（1回目）
+        .mockResolvedValueOnce({ action: 'reject', reason: 'コンフリクト解消して' }) // タスク完了確認（マージ失敗後）→ reject
+        .mockResolvedValueOnce({ action: 'approve' })                             // 2回目マージ承認
+      ,
+      startThread: vi.fn().mockResolvedValue(undefined),
+      getThreadTs: vi.fn().mockReturnValue(undefined),
+      endSession: vi.fn(),
+    };
+    const repoPath = '/Users/test/dev/myproject';
+
+    // 1回目のPR作成
+    mockExecSync
+      .mockReturnValueOnce('') // git push
+      .mockReturnValueOnce('https://github.com/test/repo/pull/42') // gh pr create
+      // 2回目のPR作成
+      .mockReturnValueOnce('') // git push
+      .mockReturnValueOnce('https://github.com/test/repo/pull/42'); // gh pr create
+
+    // 1回目のマージ: 失敗
+    mockExecuteMerge
+      .mockImplementationOnce(() => { throw new MergeError('merge_conflict', 'コンフリクト', 409); })
+      // 2回目のマージ: 成功
+      .mockReturnValueOnce({ success: true, prUrl: 'https://github.com/test/repo/pull/42', output: undefined });
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await runTask(task, story, notifier, repoPath);
+
+    // executeMerge が2回呼ばれること（1回目失敗、2回目成功）
+    expect(mockExecuteMerge).toHaveBeenCalledTimes(2);
+
+    // マージ失敗通知が送信されること
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('マージ失敗'),
+      story.slug,
+    );
+
+    // マージ成功通知も送信されること
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('マージ完了'),
+      story.slug,
+    );
+
+    // 最終的にDoneになること
+    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Done');
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('権限不足(403)でマージ失敗時に適切なエラーメッセージが通知される', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    setupMergeFlowMocks(notifier, {
+      mergeImpl: () => { throw new MergeError('permission_denied', 'マージ権限がありません', 403); },
+    });
+
+    // マージ失敗後のタスク完了確認で approve
+    (notifier.requestApproval as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ action: 'approve' }); // タスク完了確認
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await runTask(task, story, notifier, repoPath);
+
+    // 権限不足のエラーコードが通知に含まれること
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('permission_denied'),
+      story.slug,
+    );
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('マージ成功時に二重実行されないこと（break でループを抜ける）', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    setupMergeFlowMocks(notifier);
+
+    await runTask(task, story, notifier, repoPath);
+
+    // executeMerge が1回だけ呼ばれること
+    expect(mockExecuteMerge).toHaveBeenCalledTimes(1);
+
+    // runAgent も1回だけ呼ばれること（ループが回らない）
+    expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 
   it('CI失敗でマージ承認に到達しない場合、executeMerge は呼ばれずタスク完了確認に遷移する', async () => {

@@ -288,6 +288,152 @@ describe('異常系ワークフロー結合テスト', () => {
   });
 
   // -------------------------------------------------------------------------
+  // テスト 1.5: マージ実行失敗 → タスク完了確認 → リトライ → 成功
+  // -------------------------------------------------------------------------
+  describe('マージ実行失敗 → タスク完了確認 → リトライ → 成功', () => {
+    const PROJECT = 'merge-exec-failure-project';
+    const STORY_SLUG = 'merge-exec-failure-story';
+
+    it(
+      'マージ実行失敗時にエラー通知が送信され、やり直しで再度マージが成功する',
+      withVault(async (vault) => {
+        const notifier = new FakeNotifier();
+        // 承認キュー:
+        //   1. タスク開始 → approve
+        //   2. マージ承認（1回目）→ approve
+        //      → executeMerge 失敗（merge_conflict）
+        //   3. タスク完了確認（マージ失敗後）→ reject（やり直し）
+        //   4. マージ承認（2回目）→ approve
+        //      → executeMerge 成功
+        notifier.enqueueApprovalResponse(
+          { action: 'approve' },                                        // start
+          { action: 'approve' },                                        // merge 1st → approve
+          { action: 'reject', reason: 'コンフリクトを解消してください' },   // done → reject (retry)
+          { action: 'approve' },                                        // merge 2nd → approve
+        );
+
+        // 1回目の execGh(merge): 失敗、2回目: 成功
+        let mergeCallCount = 0;
+        const deps = createIntegrationDeps(vault, {
+          execGh: vi.fn().mockImplementation((args: string[]) => {
+            if (args.includes('view') && args.includes('--json')) {
+              return JSON.stringify({
+                state: 'OPEN',
+                mergeable: 'MERGEABLE',
+                reviewDecision: 'APPROVED',
+                statusCheckRollup: [
+                  { name: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' },
+                ],
+              });
+            }
+            if (args.includes('merge')) {
+              mergeCallCount++;
+              if (mergeCallCount === 1) {
+                throw new Error('Pull request has merge conflicts');
+              }
+              return '';
+            }
+            return 'https://github.com/test/repo/pull/1';
+          }),
+        });
+
+        const story = readStoryFile(vault.storyFilePath);
+        await runStory(story, notifier, deps);
+
+        // マージ失敗通知が送信されること
+        const mergeFailureNotification = notifier.notifications.find((n) =>
+          n.message.includes('マージ失敗'),
+        );
+        expect(mergeFailureNotification).toBeDefined();
+
+        // マージ処理中通知が送信されること
+        const mergeInProgressNotification = notifier.notifications.find((n) =>
+          n.message.includes('マージ処理中'),
+        );
+        expect(mergeInProgressNotification).toBeDefined();
+
+        // マージ成功通知が送信されること
+        const mergeSuccessNotification = notifier.notifications.find((n) =>
+          n.message.includes('マージ完了'),
+        );
+        expect(mergeSuccessNotification).toBeDefined();
+
+        // runAgent が 2 回呼ばれる（初回 + リトライ）
+        expect(deps.runAgent).toHaveBeenCalledTimes(2);
+
+        // タスクが最終的に Done
+        const taskFm = readFrontmatter(vault.taskFilePaths[0]);
+        expect(taskFm.status).toBe('Done');
+
+        // ストーリーが Done
+        const storyFm = readFrontmatter(vault.storyFilePath);
+        expect(storyFm.status).toBe('Done');
+      }, {
+        project: PROJECT,
+        story: { slug: STORY_SLUG, status: 'Doing' },
+        tasks: [
+          { slug: `${STORY_SLUG}-01-task`, status: 'Todo', priority: 'high' },
+        ],
+      }),
+    );
+
+    it(
+      'マージ失敗後のタスク完了確認で approve すると、マージ無しでタスクが Done になる',
+      withVault(async (vault) => {
+        const notifier = new FakeNotifier();
+        // 承認キュー:
+        //   1. タスク開始 → approve
+        //   2. マージ承認 → approve
+        //      → executeMerge 失敗
+        //   3. タスク完了確認 → approve（マージなしで完了）
+        notifier.enqueueApprovalResponse(
+          { action: 'approve' },   // start
+          { action: 'approve' },   // merge → approve (but merge fails)
+          { action: 'approve' },   // done → approve (skip merge)
+        );
+
+        const deps = createIntegrationDeps(vault, {
+          execGh: vi.fn().mockImplementation((args: string[]) => {
+            if (args.includes('view') && args.includes('--json')) {
+              return JSON.stringify({
+                state: 'OPEN',
+                mergeable: 'MERGEABLE',
+                reviewDecision: 'APPROVED',
+                statusCheckRollup: [
+                  { name: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' },
+                ],
+              });
+            }
+            if (args.includes('merge')) {
+              throw new Error('Resource not accessible: permission denied');
+            }
+            return 'https://github.com/test/repo/pull/1';
+          }),
+        });
+
+        const story = readStoryFile(vault.storyFilePath);
+        await runStory(story, notifier, deps);
+
+        // 権限不足エラー通知が送信されること
+        const errorNotification = notifier.notifications.find((n) =>
+          n.message.includes('マージ失敗'),
+        );
+        expect(errorNotification).toBeDefined();
+
+        // タスクが Done（タスク完了確認で approve したため）
+        const taskFm = readFrontmatter(vault.taskFilePaths[0]);
+        expect(taskFm.status).toBe('Done');
+      }, {
+        project: PROJECT,
+        story: { slug: STORY_SLUG, status: 'Doing' },
+        tasks: [
+          { slug: `${STORY_SLUG}-01-task`, status: 'Todo', priority: 'high' },
+        ],
+      }),
+    );
+  });
+
+  // -------------------------------------------------------------------------
   // テスト 2: レビューループが NG 上限到達 → エスカレーション
   // -------------------------------------------------------------------------
   describe('レビューループが NG 上限到達 → エスカレーション', () => {
