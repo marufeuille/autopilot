@@ -10,6 +10,7 @@ vi.mock('@slack/bolt', () => {
       },
     };
     action = vi.fn();
+    event = vi.fn();
     view = vi.fn();
     command = vi.fn();
     start = vi.fn().mockResolvedValue(undefined);
