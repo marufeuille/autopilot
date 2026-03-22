@@ -8,7 +8,7 @@
 import type { App } from '@slack/bolt';
 import type { Block, KnownBlock } from '@slack/types';
 import { config } from '../config';
-import { createCommandLogger, logInfo, logWarn } from '../logger';
+import { createCommandLogger, logInfo, logWarn, logError } from '../logger';
 import {
   interactiveSessionManager,
   type ConversationMessage,
@@ -287,11 +287,18 @@ export function createRedraftDepsFromApp(app: App): RedraftDeps {
 export function registerThreadHandler(app: App): void {
   const deps = createRedraftDepsFromApp(app);
 
+  logInfo('スレッドハンドラーを登録', { phase: 'handler_registered' });
+
   app.event('message', async ({ event }) => {
     const msg = event as any;
 
     // ボットの自メッセージは無視
     if (msg.bot_id || msg.subtype === 'bot_message') {
+      return;
+    }
+
+    // message_changed / message_deleted 等のサブタイプは無視
+    if (msg.subtype) {
       return;
     }
 
@@ -307,12 +314,59 @@ export function registerThreadHandler(app: App): void {
       return;
     }
 
+    const userId = msg.user;
+
     logInfo('スレッドメッセージイベント検出', {
       phase: 'event_received',
       threadTs,
-      userId: msg.user,
+      userId,
     });
 
-    await handleThreadMessageInternal(threadTs, text, deps);
+    // セッションの存在確認をログに出力
+    const session = interactiveSessionManager.getSession(threadTs);
+    if (!session) {
+      logInfo('対応するセッションなし（無視）', {
+        phase: 'session_not_found',
+        threadTs,
+        userId,
+      });
+      return;
+    }
+
+    logInfo('セッション照合成功', {
+      phase: 'session_matched',
+      threadTs,
+      userId,
+      command: session.type,
+      sessionPhase: session.phase,
+    });
+
+    if (session.phase !== 'drafting') {
+      logInfo('セッションが drafting フェーズではないため無視', {
+        phase: 'session_phase_mismatch',
+        threadTs,
+        userId,
+        command: session.type,
+        sessionPhase: session.phase,
+      });
+      return;
+    }
+
+    try {
+      await handleThreadMessageInternal(threadTs, text, deps);
+      logInfo('スレッド返信処理完了', {
+        phase: 'thread_reply_handled',
+        threadTs,
+        userId,
+        command: session.type,
+      });
+    } catch (error) {
+      logError('スレッド返信処理中にエラーが発生', {
+        phase: 'thread_reply_error',
+        threadTs,
+        userId,
+        command: session.type,
+      }, error);
+    }
   });
 }

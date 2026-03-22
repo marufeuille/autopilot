@@ -63,6 +63,16 @@ describe('buildRedraftPrompt', () => {
     expect(prompt).toContain('【ユーザー】');
     expect(prompt).toContain('【アシスタント】');
   });
+
+  it('fix セッションの場合、fix用プロンプトを使用する', () => {
+    const session = makeSession({ type: 'fix' });
+    const prompt = buildRedraftPrompt(session, '修正方針を変更してください');
+
+    expect(prompt).toContain('バグ分析・修正の専門家');
+    expect(prompt).toContain('原因分析');
+    expect(prompt).toContain('修正方針');
+    expect(prompt).toContain('影響範囲');
+  });
 });
 
 describe('buildApprovalBlocks', () => {
@@ -90,6 +100,16 @@ describe('buildApprovalBlocks', () => {
     expect(actions.elements[1].action_id).toBe('ap_story_cancel');
     expect(actions.elements[1].style).toBe('danger');
     expect(actions.elements[1].value).toBe('ts-123');
+  });
+
+  it('fix セッション用のブロックを返す', () => {
+    const blocks = buildApprovalBlocks('fix分析内容', 'ts-456', 'fix');
+
+    const actions = blocks[1] as any;
+    expect(actions.elements[0].action_id).toBe('ap_fix_approve');
+    expect(actions.elements[0].text.text).toContain('承認して修正を開始');
+    expect(actions.elements[1].action_id).toBe('ap_fix_cancel');
+    expect(actions.elements[0].value).toBe('ts-456');
   });
 });
 
@@ -158,6 +178,20 @@ describe('handleThreadMessageInternal', () => {
     expect(postCall.text).toContain('修正版ドラフト');
     expect(postCall.blocks).toBeDefined();
     expect(postCall.blocks).toHaveLength(2);
+  });
+
+  it('fix セッションの再ドラフトに fix 用承認ボタンが含まれる', async () => {
+    const session = makeSession({ type: 'fix' });
+    interactiveSessionManager.startSession(session);
+    const deps = createMockDeps();
+
+    await handleThreadMessageInternal('1234567890.123456', '修正', deps);
+
+    const postCall = (deps.postMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const actionsBlock = postCall.blocks[1];
+    expect(actionsBlock.type).toBe('actions');
+    expect(actionsBlock.elements[0].action_id).toBe('ap_fix_approve');
+    expect(actionsBlock.elements[1].action_id).toBe('ap_fix_cancel');
   });
 
   it('会話履歴にユーザーの修正依頼とClaudeの再ドラフトが追加される', async () => {

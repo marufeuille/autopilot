@@ -2,9 +2,11 @@
  * /ap fix サブコマンドのハンドラー
  *
  * ユーザーのバグ説明からClaudeに原因分析と修正方針を生成させ、
- * Slackスレッドに投稿する。セッションを登録してマルチターン対話に備える。
+ * Slackスレッドに承認ボタン付きで投稿する。
+ * セッションを登録してマルチターン対話に備える。
  */
 import type { App } from '@slack/bolt';
+import type { Block, KnownBlock } from '@slack/types';
 import { config } from '../../config';
 import { createCommandLogger } from '../../logger';
 import type { SubcommandHandler } from '../slash-commands';
@@ -12,16 +14,18 @@ import {
   interactiveSessionManager,
   type InteractiveSession,
 } from '../interactive-session';
+import { buildApprovalBlocks } from '../thread-handler';
 
 /**
  * fix分析生成の依存インターフェース（テスト用DI）
  */
 export interface FixDraftDeps {
-  /** Slackチャンネルにメッセージを投稿する */
+  /** Slackチャンネルにメッセージを投稿する（blocks 対応） */
   postMessage: (params: {
     channel: string;
     text: string;
     thread_ts?: string;
+    blocks?: (Block | KnownBlock)[];
   }) => Promise<{ ts?: string }>;
   /** Claudeにプロンプトを送ってテキストを生成する */
   generateDraft: (prompt: string) => Promise<string>;
@@ -76,6 +80,7 @@ export function createFixDepsFromApp(app: App): FixDraftDeps {
         channel: params.channel,
         text: params.text,
         ...(params.thread_ts ? { thread_ts: params.thread_ts } : {}),
+        ...(params.blocks ? { blocks: params.blocks } : {}),
       });
       return { ts: res.ts };
     },
@@ -148,13 +153,15 @@ export async function handleFixInternal(
     const analysis = await deps.generateDraft(prompt);
     log.info('Claude 分析完了', { phase: 'analysis_complete', threadTs });
 
-    // 分析結果をスレッドに投稿
+    // 承認ボタン付きで分析結果をスレッドに投稿
+    const blocks = buildApprovalBlocks(analysis, threadTs, 'fix');
     await deps.postMessage({
       channel: config.slack.channelId,
       text: analysis,
       thread_ts: threadTs,
+      blocks,
     });
-    log.info('分析結果をスレッドに投稿', { phase: 'result_posted', threadTs });
+    log.info('分析結果をスレッドに投稿（承認ボタン付き）', { phase: 'result_posted', threadTs });
 
     // セッションを登録（phase: drafting, type: fix）
     const session: InteractiveSession = {
