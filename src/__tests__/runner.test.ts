@@ -24,6 +24,12 @@ vi.mock('../notification', () => ({
 
 vi.mock('../git', () => ({
   syncMainBranch: vi.fn().mockResolvedValue(undefined),
+  GitSyncError: class GitSyncError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = 'GitSyncError';
+    }
+  },
 }));
 
 // Claude agent SDK をモック（runTask 内で使われる）
@@ -44,7 +50,7 @@ vi.mock('child_process', () => ({
 import { getStoryTasks } from '../vault/reader';
 import { updateFileStatus } from '../vault/writer';
 import { decomposeTasks } from '../decomposer';
-import { syncMainBranch } from '../git';
+import { syncMainBranch, GitSyncError } from '../git';
 import { runStory, runTask } from '../runner';
 
 const mockedGetStoryTasks = vi.mocked(getStoryTasks);
@@ -371,21 +377,59 @@ describe('runTask', () => {
     ]);
   });
 
-  it('syncMainBranch が失敗した場合、タスクが Failed に更新される', async () => {
+  it('syncMainBranch が GitSyncError で失敗した場合、通知が送信されタスクが Failed になり Agent は実行されない', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
     const notifier = createMockNotifier('approve');
     const repoPath = '/Users/test/dev/myproject';
 
-    mockedSyncMainBranch.mockRejectedValueOnce(new Error('Failed to checkout main'));
+    mockedSyncMainBranch.mockRejectedValueOnce(
+      new GitSyncError('Failed to checkout main: error: Your local changes would be overwritten'),
+    );
 
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    await expect(runTask(task, story, notifier, repoPath)).rejects.toThrow('Failed to checkout main');
+    // GitSyncError の場合は throw せず return する
+    await runTask(task, story, notifier, repoPath);
 
+    // 通知が送信されること
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('main同期失敗'),
+    );
+    // 通知にタスクslugが含まれること
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('task-01'),
+    );
+    // 通知にエラー原因が含まれること
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to checkout main'),
+    );
+    // タスクが Failed に更新されること
     expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Failed');
+    // Doing には遷移しないこと
     expect(mockedUpdateFileStatus).not.toHaveBeenCalledWith(task.filePath, 'Doing');
+    // Done には遷移しないこと
     expect(mockedUpdateFileStatus).not.toHaveBeenCalledWith(task.filePath, 'Done');
+    // Claude Agent が実行されないこと
+    expect(mockQuery).not.toHaveBeenCalled();
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('syncMainBranch が GitSyncError 以外のエラーで失敗した場合は throw される', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    mockedSyncMainBranch.mockRejectedValueOnce(new Error('unexpected error'));
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(runTask(task, story, notifier, repoPath)).rejects.toThrow('unexpected error');
+
+    // notify は呼ばれないこと
+    expect(notifier.notify).not.toHaveBeenCalled();
 
     consoleErrorSpy.mockRestore();
   });

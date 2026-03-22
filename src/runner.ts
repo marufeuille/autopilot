@@ -4,7 +4,7 @@ import { StoryFile, TaskFile, TaskStatus, getStoryTasks } from './vault/reader';
 import { updateFileStatus, createTaskFile, TaskDraft } from './vault/writer';
 import { decomposeTasks } from './decomposer';
 import { NotificationBackend, generateApprovalId } from './notification';
-import { syncMainBranch } from './git';
+import { syncMainBranch, GitSyncError } from './git';
 
 function buildTaskPrompt(task: TaskFile, story: StoryFile, repoPath: string): string {
   return `あなたは優秀なソフトウェアエンジニアです。以下のタスクを実装してください。
@@ -71,12 +71,23 @@ export async function runTask(
     return;
   }
 
+  // mainブランチを最新化してからタスクを開始する
   try {
-    // mainブランチを最新化してからタスクを開始する
     console.log(`[runner] syncing main branch before task: ${task.slug}`);
     await syncMainBranch(repoPath);
     console.log(`[runner] main branch synced successfully`);
+  } catch (error) {
+    if (error instanceof GitSyncError) {
+      const errorMessage = `❌ main同期失敗: ${task.slug}\n原因: ${error.message}`;
+      await notifier.notify(errorMessage);
+      updateFileStatus(task.filePath, 'Failed');
+      console.error(`[runner] main sync failed, task aborted: ${task.slug}`, error);
+      return;
+    }
+    throw error;
+  }
 
+  try {
     updateFileStatus(task.filePath, 'Doing');
     console.log(`[runner] task started: ${task.slug}`);
 
