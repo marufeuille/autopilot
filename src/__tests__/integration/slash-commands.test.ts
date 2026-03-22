@@ -24,6 +24,16 @@ vi.mock('../../config', () => ({
 }));
 
 // ---------------------------------------------------------------------------
+// gray-matter のキャッシュ問題を回避するためモジュールをモックで包む。
+// 実際のパース処理はそのまま使うが、各テストでモジュールキャッシュの影響を受けない。
+// ---------------------------------------------------------------------------
+vi.mock('gray-matter', async (importOriginal) => {
+  const original = await importOriginal<typeof import('gray-matter')>();
+  // デフォルトエクスポートをそのまま返す（キャッシュは vitest のモジュール管理で分離）
+  return { ...original, default: original.default ?? original };
+});
+
+// ---------------------------------------------------------------------------
 // モック設定後にインポート
 // ---------------------------------------------------------------------------
 import { handleStatus } from '../../slack/commands/status';
@@ -31,19 +41,10 @@ import { handleRetry } from '../../slack/commands/retry';
 import {
   registerSlashCommands,
   registerSubcommand,
+  clearSubcommands,
   buildHelpMessage,
+  type SubcommandHandler,
 } from '../../slack/slash-commands';
-
-// ---------------------------------------------------------------------------
-// Helper: gray-matter キャッシュをクリアする
-// ---------------------------------------------------------------------------
-function clearGrayMatterCache() {
-  // gray-matter はコンテンツ文字列でパース結果をキャッシュする。
-  // テスト間でファイルの中身が変わるため、キャッシュを破棄する。
-  (matter as unknown as { clearCache?: () => void }).clearCache?.();
-  // 内部キャッシュにアクセスできない場合もあるため、
-  // ファイル読み直しで最新値が取れることをテスト内で個別に確認する。
-}
 
 // ---------------------------------------------------------------------------
 // Helper: ファイルの frontmatter を直接読み取る
@@ -54,20 +55,29 @@ function readFrontmatter(filePath: string): Record<string, unknown> {
 }
 
 // ---------------------------------------------------------------------------
+// Slack Bolt の command ハンドラーの型
+// ---------------------------------------------------------------------------
+type SlackCommandHandler = (ctx: {
+  command: { text: string };
+  ack: (...args: unknown[]) => Promise<void>;
+  respond: (msg: string) => Promise<void>;
+}) => Promise<void>;
+
+// ---------------------------------------------------------------------------
 // テスト本体
 // ---------------------------------------------------------------------------
 describe('slash-commands integration', () => {
   let vault: FakeVaultResult;
   let respond: ReturnType<typeof vi.fn>;
 
-  afterEach(() => {
-    vault?.cleanup();
-    clearGrayMatterCache();
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
+    clearSubcommands();
     respond = vi.fn().mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vault?.cleanup();
   });
 
   // =========================================================================
@@ -207,23 +217,26 @@ describe('slash-commands integration', () => {
   // registerSlashCommands – 不明コマンドでヘルプが返る
   // =========================================================================
   describe('registerSlashCommands (app-level)', () => {
-    it('不明なサブコマンドでヘルプメッセージが返る', async () => {
-      // Slack App のモック: command() で登録されたハンドラーをキャプチャ
-      let capturedHandler: Function | undefined;
+    /** mockApp から capturedHandler を取り出すヘルパー */
+    function setupMockApp(): { capturedHandler: SlackCommandHandler } {
+      let handler: SlackCommandHandler | undefined;
       const mockApp = {
-        command: vi.fn((name: string, handler: Function) => {
-          capturedHandler = handler;
+        command: vi.fn((_name: string, h: SlackCommandHandler) => {
+          handler = h;
         }),
       };
-
       registerSlashCommands(mockApp as any);
-      expect(capturedHandler).toBeDefined();
+      expect(handler).toBeDefined();
+      return { capturedHandler: handler! };
+    }
 
-      // 不明コマンドを送信
+    it('不明なサブコマンドでヘルプメッセージが返る', async () => {
+      const { capturedHandler } = setupMockApp();
+
       const ack = vi.fn().mockResolvedValue(undefined);
       const respondFn = vi.fn().mockResolvedValue(undefined);
 
-      await capturedHandler!({
+      await capturedHandler({
         command: { text: 'unknown-command' },
         ack,
         respond: respondFn,
@@ -238,19 +251,12 @@ describe('slash-commands integration', () => {
     });
 
     it('空コマンドでもヘルプメッセージが返る', async () => {
-      let capturedHandler: Function | undefined;
-      const mockApp = {
-        command: vi.fn((_name: string, handler: Function) => {
-          capturedHandler = handler;
-        }),
-      };
-
-      registerSlashCommands(mockApp as any);
+      const { capturedHandler } = setupMockApp();
 
       const ack = vi.fn().mockResolvedValue(undefined);
       const respondFn = vi.fn().mockResolvedValue(undefined);
 
-      await capturedHandler!({
+      await capturedHandler({
         command: { text: '' },
         ack,
         respond: respondFn,
@@ -262,23 +268,16 @@ describe('slash-commands integration', () => {
     });
 
     it('既知のサブコマンドでは ack() 後にハンドラーが呼ばれる', async () => {
-      let capturedHandler: Function | undefined;
-      const mockApp = {
-        command: vi.fn((_name: string, handler: Function) => {
-          capturedHandler = handler;
-        }),
-      };
-
       // テスト用ハンドラーを登録
       const mockSubHandler = vi.fn().mockResolvedValue(undefined);
       registerSubcommand('status', mockSubHandler);
 
-      registerSlashCommands(mockApp as any);
+      const { capturedHandler } = setupMockApp();
 
       const ack = vi.fn().mockResolvedValue(undefined);
       const respondFn = vi.fn().mockResolvedValue(undefined);
 
-      await capturedHandler!({
+      await capturedHandler({
         command: { text: 'status' },
         ack,
         respond: respondFn,
@@ -299,6 +298,22 @@ describe('slash-commands integration', () => {
   // E2E: registerSlashCommands + 実際のハンドラー
   // =========================================================================
   describe('E2E: コマンドルーター → ハンドラー → Vault', () => {
+    /** E2E テスト共通: 実際のハンドラーを登録して mockApp をセットアップ */
+    function setupE2E(): { capturedHandler: SlackCommandHandler } {
+      registerSubcommand('status', handleStatus);
+      registerSubcommand('retry', handleRetry);
+
+      let handler: SlackCommandHandler | undefined;
+      const mockApp = {
+        command: vi.fn((_name: string, h: SlackCommandHandler) => {
+          handler = h;
+        }),
+      };
+      registerSlashCommands(mockApp as any);
+      expect(handler).toBeDefined();
+      return { capturedHandler: handler! };
+    }
+
     it('status コマンドが Vault の状態を正しく返す', async () => {
       vault = createFakeVault({
         project: 'test-project',
@@ -310,22 +325,12 @@ describe('slash-commands integration', () => {
       });
       mockConfig.vaultPath = vault.vaultPath;
 
-      // 実際のハンドラーを登録
-      registerSubcommand('status', handleStatus);
-      registerSubcommand('retry', handleRetry);
-
-      let capturedHandler: Function | undefined;
-      const mockApp = {
-        command: vi.fn((_name: string, handler: Function) => {
-          capturedHandler = handler;
-        }),
-      };
-      registerSlashCommands(mockApp as any);
+      const { capturedHandler } = setupE2E();
 
       const ack = vi.fn().mockResolvedValue(undefined);
       const respondFn = vi.fn().mockResolvedValue(undefined);
 
-      await capturedHandler!({
+      await capturedHandler({
         command: { text: 'status' },
         ack,
         respond: respondFn,
@@ -349,20 +354,12 @@ describe('slash-commands integration', () => {
       });
       mockConfig.vaultPath = vault.vaultPath;
 
-      registerSubcommand('retry', handleRetry);
-
-      let capturedHandler: Function | undefined;
-      const mockApp = {
-        command: vi.fn((_name: string, handler: Function) => {
-          capturedHandler = handler;
-        }),
-      };
-      registerSlashCommands(mockApp as any);
+      const { capturedHandler } = setupE2E();
 
       const ack = vi.fn().mockResolvedValue(undefined);
       const respondFn = vi.fn().mockResolvedValue(undefined);
 
-      await capturedHandler!({
+      await capturedHandler({
         command: { text: 'retry e2e-failed-task' },
         ack,
         respond: respondFn,

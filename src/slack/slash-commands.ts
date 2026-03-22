@@ -70,6 +70,13 @@ export function registerSubcommand(name: string, handler: SubcommandHandler): vo
 }
 
 /**
+ * 登録済みのサブコマンドハンドラーをすべてクリアする（テスト用）
+ */
+export function clearSubcommands(): void {
+  handlers.clear();
+}
+
+/**
  * Slack App に `/ap` コマンドハンドラーを登録する。
  *
  * Slack Bolt の command() ハンドラーは 3 秒以内に ack() を返す必要があるため、
