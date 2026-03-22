@@ -48,8 +48,10 @@ export async function createNotificationBackend(): Promise<NotificationBackend> 
 
       const { registerSlashCommands, registerSubcommand } = await import('../slack/slash-commands');
       const { handleStatus } = await import('../slack/commands/status');
+      const { handleRetry } = await import('../slack/commands/retry');
 
       registerSubcommand('status', handleStatus);
+      registerSubcommand('retry', handleRetry);
 
       const slackApp = createSlackApp();
       registerApprovalHandlers(slackApp);
