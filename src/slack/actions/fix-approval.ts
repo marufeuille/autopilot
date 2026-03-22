@@ -13,7 +13,7 @@
 import type { App, BlockAction } from '@slack/bolt';
 import type { Block, KnownBlock } from '@slack/types';
 import { config } from '../../config';
-import { createCommandLogger, logError } from '../../logger';
+import { createCommandLogger, logInfo, logError } from '../../logger';
 import { interactiveSessionManager } from '../interactive-session';
 
 /**
@@ -186,8 +186,9 @@ export async function handleFixApproveInternal(
   threadTs: string,
   messageTs: string,
   deps: FixApprovalDeps,
+  userId?: string,
 ): Promise<void> {
-  const log = createCommandLogger({ command: 'fix', threadTs });
+  const log = createCommandLogger({ command: 'fix', threadTs, userId });
   const session = interactiveSessionManager.getSession(threadTs);
 
   if (!session) {
@@ -296,8 +297,9 @@ export async function handleFixCancelInternal(
   threadTs: string,
   messageTs: string,
   deps: FixApprovalDeps,
+  userId?: string,
 ): Promise<void> {
-  const log = createCommandLogger({ command: 'fix', threadTs });
+  const log = createCommandLogger({ command: 'fix', threadTs, userId });
   const session = interactiveSessionManager.getSession(threadTs);
 
   if (!session || session.phase !== 'drafting') {
@@ -388,39 +390,77 @@ export function createFixApprovalDepsFromApp(app: App): FixApprovalDeps {
 export function registerFixApprovalHandlers(app: App): void {
   const deps = createFixApprovalDepsFromApp(app);
 
+  logInfo('fix承認アクションハンドラーを登録', { command: 'fix', phase: 'handler_registered' });
+
   // 承認ボタン
   app.action('ap_fix_approve', async ({ body, ack }) => {
     await ack();
     const blockBody = body as BlockAction;
+    const userId = blockBody.user?.id;
     const action = blockBody.actions?.[0];
+
+    logInfo('fix承認ボタン押下を受信', {
+      command: 'fix',
+      userId,
+      phase: 'interactive_payload_received',
+      actionId: 'ap_fix_approve',
+    });
+
     if (!action || !('value' in action) || !action.value) {
-      logError('承認アクションの値が取得できません', { command: 'fix', phase: 'action_parse_error' });
+      logError('承認アクションの値が取得できません', { command: 'fix', userId, phase: 'action_parse_error' });
       return;
     }
     const threadTs = action.value;
     const messageTs = blockBody.message?.ts;
     if (!messageTs) {
-      logError('メッセージtsが取得できません', { command: 'fix', phase: 'action_parse_error', threadTs });
+      logError('メッセージtsが取得できません', { command: 'fix', userId, phase: 'action_parse_error', threadTs });
       return;
     }
-    await handleFixApproveInternal(threadTs, messageTs, deps);
+
+    logInfo('fix承認ペイロード解析完了', {
+      command: 'fix',
+      userId,
+      phase: 'payload_parsed',
+      threadTs,
+      messageTs,
+    });
+
+    await handleFixApproveInternal(threadTs, messageTs, deps, userId);
   });
 
   // キャンセルボタン
   app.action('ap_fix_cancel', async ({ body, ack }) => {
     await ack();
     const blockBody = body as BlockAction;
+    const userId = blockBody.user?.id;
     const action = blockBody.actions?.[0];
+
+    logInfo('fixキャンセルボタン押下を受信', {
+      command: 'fix',
+      userId,
+      phase: 'interactive_payload_received',
+      actionId: 'ap_fix_cancel',
+    });
+
     if (!action || !('value' in action) || !action.value) {
-      logError('キャンセルアクションの値が取得できません', { command: 'fix', phase: 'action_parse_error' });
+      logError('キャンセルアクションの値が取得できません', { command: 'fix', userId, phase: 'action_parse_error' });
       return;
     }
     const threadTs = action.value;
     const messageTs = blockBody.message?.ts;
     if (!messageTs) {
-      logError('メッセージtsが取得できません', { command: 'fix', phase: 'action_parse_error', threadTs });
+      logError('メッセージtsが取得できません', { command: 'fix', userId, phase: 'action_parse_error', threadTs });
       return;
     }
-    await handleFixCancelInternal(threadTs, messageTs, deps);
+
+    logInfo('fixキャンセルペイロード解析完了', {
+      command: 'fix',
+      userId,
+      phase: 'payload_parsed',
+      threadTs,
+      messageTs,
+    });
+
+    await handleFixCancelInternal(threadTs, messageTs, deps, userId);
   });
 }
