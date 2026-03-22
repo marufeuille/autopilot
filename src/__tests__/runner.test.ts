@@ -23,6 +23,7 @@ vi.mock('../notification', () => ({
   buildMergeApprovalMessage: vi.fn((ctx: any) => `マージ承認依頼: ${ctx.taskSlug}`),
   buildReviewEscalationMessage: vi.fn((ctx: any) => `レビューエスカレーション: ${ctx.taskSlug}`),
   buildCIEscalationMessage: vi.fn((ctx: any) => `CIエスカレーション: ${ctx.taskSlug}`),
+  buildThreadOriginMessage: vi.fn((slug: string) => `スレッド起点: ${slug}`),
 }));
 
 vi.mock('../git', () => ({
@@ -137,6 +138,9 @@ function createMockNotifier(
         ? { action: 'approve' }
         : { action: 'reject', reason: 'テスト拒否' },
     ),
+    startThread: vi.fn().mockResolvedValue(undefined),
+    getThreadTs: vi.fn().mockReturnValue(undefined),
+    endSession: vi.fn(),
   };
 }
 
@@ -165,6 +169,7 @@ describe('runStory', () => {
     // 完了通知が送信されること
     expect(notifier.notify).toHaveBeenCalledWith(
       expect.stringContaining('ストーリー完了'),
+      'my-story',
     );
   });
 
@@ -262,6 +267,7 @@ describe('runStory', () => {
     expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Done');
     expect(notifier.notify).toHaveBeenCalledWith(
       expect.stringContaining('一部スキップ/失敗あり'),
+      'my-story',
     );
   });
 
@@ -280,6 +286,7 @@ describe('runStory', () => {
     expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Done');
     expect(notifier.notify).toHaveBeenCalledWith(
       expect.stringContaining('一部スキップ/失敗あり'),
+      'my-story',
     );
   });
 
@@ -435,14 +442,17 @@ describe('runTask', () => {
     // 通知が送信されること
     expect(notifier.notify).toHaveBeenCalledWith(
       expect.stringContaining('main同期失敗'),
+      'my-story',
     );
     // 通知にタスクslugが含まれること
     expect(notifier.notify).toHaveBeenCalledWith(
       expect.stringContaining('task-01'),
+      'my-story',
     );
     // 通知にエラー原因が含まれること
     expect(notifier.notify).toHaveBeenCalledWith(
       expect.stringContaining('Failed to checkout main'),
+      'my-story',
     );
     // タスクが Failed に更新されること
     expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Failed');
@@ -513,6 +523,7 @@ describe('runTask', () => {
     // レビュー結果の通知が送信されたことを確認
     expect(notifier.notify).toHaveBeenCalledWith(
       expect.stringContaining('セルフレビュー結果'),
+      'my-story',
     );
   });
 
@@ -546,6 +557,7 @@ describe('runTask', () => {
     // レビューエスカレーション通知が送信されること
     expect(notifier.notify).toHaveBeenCalledWith(
       expect.stringContaining('レビューエスカレーション'),
+      'my-story',
     );
 
     // 完了承認のメッセージにセルフレビュー未通過が含まれること
@@ -719,6 +731,7 @@ describe('runTask', () => {
     // CIエスカレーション通知が送信されること
     expect(notifier.notify).toHaveBeenCalledWith(
       expect.stringContaining('CIエスカレーション'),
+      'my-story',
     );
 
     const approvalCalls = (notifier.requestApproval as ReturnType<typeof vi.fn>).mock.calls;

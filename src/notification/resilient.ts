@@ -68,6 +68,10 @@ export class ResilientNotificationBackend implements NotificationBackend {
     return this.primary.getThreadTs(storySlug);
   }
 
+  endSession(storySlug: string): void {
+    this.primary.endSession(storySlug);
+  }
+
   async requestApproval(
     id: string,
     message: string,

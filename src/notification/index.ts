@@ -18,6 +18,7 @@ export {
   buildMergeApprovalMessage,
   buildReviewEscalationMessage,
   buildCIEscalationMessage,
+  buildThreadOriginMessage,
 } from './message-builder';
 
 import { NotificationBackend } from './types';

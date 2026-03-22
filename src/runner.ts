@@ -9,6 +9,7 @@ import {
   buildMergeApprovalMessage,
   buildReviewEscalationMessage,
   buildCIEscalationMessage,
+  buildThreadOriginMessage,
   NotificationContext,
 } from './notification';
 import { GitSyncError } from './git';
@@ -166,6 +167,7 @@ export async function runTask(
     startId,
     `*タスク開始確認*\n\n*ストーリー*: ${story.slug}\n*タスク*: ${task.slug}\n\nこのタスクを開始しますか？`,
     { approve: '開始', reject: 'スキップ' },
+    story.slug,
   );
 
   if (startResult.action === 'reject') {
@@ -182,7 +184,7 @@ export async function runTask(
   } catch (error) {
     if (error instanceof GitSyncError) {
       const errorMessage = `❌ main同期失敗: ${task.slug}\n原因: ${error.message}`;
-      await notifier.notify(errorMessage);
+      await notifier.notify(errorMessage, story.slug);
       d.updateFileStatus(task.filePath, 'Failed');
       console.error(`[runner] main sync failed, task aborted: ${task.slug}`, error);
       return;
@@ -225,7 +227,7 @@ export async function runTask(
       let ciPollingResult: CIPollingResult | undefined;
       if (reviewLoopResult.finalVerdict === 'OK') {
         // レビュー通過の情報通知
-        await notifier.notify(`*セルフレビュー結果* (${task.slug})\n\n${reviewMessage}`);
+        await notifier.notify(`*セルフレビュー結果* (${task.slug})\n\n${reviewMessage}`, story.slug);
 
         console.log(`[runner] self-review passed, creating PR for: ${task.slug}`);
         prUrl = createPullRequest(repoPath, branch, task, story, reviewLoopResult, d);
@@ -257,6 +259,7 @@ export async function runTask(
               mergeApprovalId,
               mergeMessage,
               { approve: 'マージ承認', reject: '差し戻し' },
+              story.slug,
             );
             if (mergeResult.action === 'approve') {
               // マージ承認後に実際にPRをマージする
@@ -292,7 +295,7 @@ export async function runTask(
               ciSummary: ciMessage,
               ciRunUrl,
             };
-            await notifier.notify(buildCIEscalationMessage(ciEscCtx));
+            await notifier.notify(buildCIEscalationMessage(ciEscCtx), story.slug);
             console.log(`[runner] CI escalation notified for: ${task.slug}`);
           }
         }
@@ -304,11 +307,11 @@ export async function runTask(
             ...baseCtx,
             eventType: 'review_escalation',
           };
-          await notifier.notify(buildReviewEscalationMessage(reviewEscCtx));
+          await notifier.notify(buildReviewEscalationMessage(reviewEscCtx), story.slug);
           console.log(`[runner] review escalation notified for: ${task.slug}`);
         } else {
           // レビューNG（エスカレーションなし）の情報通知
-          await notifier.notify(`*セルフレビュー結果* (${task.slug})\n\n${reviewMessage}`);
+          await notifier.notify(`*セルフレビュー結果* (${task.slug})\n\n${reviewMessage}`, story.slug);
         }
       }
 
@@ -328,6 +331,7 @@ export async function runTask(
         doneId,
         `*タスク完了確認*\n\n*タスク*: ${task.slug}${prLine}${reviewLine}${ciLine}\n\n実装を確認してください。`,
         { approve: '完了', reject: 'やり直し' },
+        story.slug,
       );
 
       if (doneResult.action === 'approve') break;
@@ -369,6 +373,7 @@ async function runDecomposition(
       id,
       formatDecompositionMessage(story, drafts),
       { approve: '承認', reject: 'やり直し' },
+      story.slug,
     );
 
     if (result.action === 'approve') {
@@ -394,6 +399,11 @@ export async function runStory(
   console.log(`[runner] starting story: ${story.slug}`);
 
   const tasks = await d.getStoryTasks(story.project, story.slug);
+
+  // スレッドセッション開始: 起点メッセージを投稿
+  const originMessage = buildThreadOriginMessage(story.slug, tasks);
+  await notifier.startThread(story.slug, originMessage);
+  console.log(`[runner] thread session started for story: ${story.slug}`);
 
   if (tasks.length === 0) {
     await runDecomposition(story, notifier, d);
@@ -421,12 +431,12 @@ export async function runStory(
   const allDone = allTasks.length > 0 && allTasks.every((t) => t.status === 'Done');
   if (allDone) {
     d.updateFileStatus(story.filePath, 'Done');
-    await notifier.notify(`✅ ストーリー完了: ${story.slug}`);
+    await notifier.notify(`✅ ストーリー完了: ${story.slug}`, story.slug);
     console.log(`[runner] story done: ${story.slug}`);
   } else if (allTerminal) {
     d.updateFileStatus(story.filePath, 'Done');
     const summary = allTasks.map((t) => `${t.slug}(${t.status})`).join(', ');
-    await notifier.notify(`✅ ストーリー完了 (一部スキップ/失敗あり): ${story.slug}\n${summary}`);
+    await notifier.notify(`✅ ストーリー完了 (一部スキップ/失敗あり): ${story.slug}\n${summary}`, story.slug);
     console.log(`[runner] story done with skipped/failed tasks: ${story.slug}, ${summary}`);
   } else if (todoTasks.length === 0) {
     const remaining = allTasks.filter((t) => !terminalStatuses.includes(t.status));
@@ -438,4 +448,8 @@ export async function runStory(
     const remaining = allTasks.filter((t) => !terminalStatuses.includes(t.status));
     console.log(`[runner] story not done, remaining tasks: ${remaining.map((t) => t.slug).join(', ')}`);
   }
+
+  // スレッドセッション終了: メモリを解放
+  notifier.endSession(story.slug);
+  console.log(`[runner] thread session ended for story: ${story.slug}`);
 }
