@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execSync, execFileSync } from 'child_process';
 import { writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -287,8 +287,9 @@ export async function runTask(
             if (mergeResult.action === 'approve') {
               // マージ承認後に実際にPRをマージする
               try {
-                const mergeOutput = execSync(
-                  `gh pr merge ${prUrl} --merge`,
+                const mergeOutput = execFileSync(
+                  'gh',
+                  ['pr', 'merge', prUrl],
                   {
                     cwd: repoPath,
                     encoding: 'utf-8',

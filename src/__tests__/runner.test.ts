@@ -58,10 +58,12 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: (...args: unknown[]) => mockQuery(...args),
 }));
 
-// child_process の execSync をモック（PR作成・URL取得で使われる）
+// child_process の execSync / execFileSync をモック（PR作成・URL取得・マージで使われる）
 const mockExecSync = vi.fn(() => '');
+const mockExecFileSync = vi.fn(() => '');
 vi.mock('child_process', () => ({
   execSync: (...args: unknown[]) => mockExecSync(...args),
+  execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
 }));
 
 // fs の writeFileSync / unlinkSync をモック（PR body一時ファイルで使われる）
@@ -638,16 +640,17 @@ describe('runTask', () => {
 
     mockExecSync
       .mockReturnValueOnce('') // git push
-      .mockReturnValueOnce('https://github.com/test/repo/pull/1') // gh pr create
-      .mockReturnValueOnce(''); // gh pr merge
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1'); // gh pr create
+    mockExecFileSync.mockReturnValueOnce(''); // gh pr merge
 
     const consoleSpy = vi.spyOn(console, 'log');
 
     await runTask(task, story, notifier, repoPath);
 
-    // gh pr merge が呼ばれること
-    expect(mockExecSync).toHaveBeenCalledWith(
-      'gh pr merge https://github.com/test/repo/pull/1 --merge',
+    // gh pr merge が呼ばれること（execFileSync で引数配列として渡される）
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'gh',
+      ['pr', 'merge', 'https://github.com/test/repo/pull/1'],
       expect.objectContaining({ cwd: repoPath }),
     );
 
@@ -671,8 +674,8 @@ describe('runTask', () => {
     const mergeError = new Error('merge conflict');
     mockExecSync
       .mockReturnValueOnce('') // git push
-      .mockReturnValueOnce('https://github.com/test/repo/pull/1') // gh pr create
-      .mockImplementationOnce(() => { throw mergeError; }); // gh pr merge fails
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1'); // gh pr create
+    mockExecFileSync.mockImplementationOnce(() => { throw mergeError; }); // gh pr merge fails
 
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -684,7 +687,9 @@ describe('runTask', () => {
       expect.any(Error),
     );
 
-    // タスクが Failed に更新されること（例外伝播でcatch節に入る）
+    // タスクが Failed に更新されること
+    // （mergeError が throw され、runTask 外側の catch 節 (runner.ts L369-370) で
+    //   updateFileStatus(task.filePath, 'Failed') が呼ばれる）
     expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Failed');
 
     consoleErrorSpy.mockRestore();
