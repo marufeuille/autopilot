@@ -150,30 +150,7 @@ export function getLatestDraft(threadTs: string): string | undefined {
 /**
  * タイトル文字列からスラッグを生成する（fix用）
  */
-export function generateFixSlug(title: string, now?: Date): string {
-  // "fix:" プレフィックスを除去してスラッグ化
-  const cleaned = title.replace(/^fix:\s*/i, '').trim();
-
-  // NFD正規化でアクセント付き文字を基本文字+結合文字に分解し、
-  // 結合文字（ダイアクリティカルマーク）を除去する
-  const normalized = cleaned.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-
-  // ASCII英数字・スペース・ハイフンのみ残す
-  const ascii = normalized
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, '')
-    .trim();
-
-  if (ascii.length > 0) {
-    const slug = ascii
-      .replace(/\s+/g, '-')
-      .replace(/-+/g, '-')
-      .replace(/^-|-$/g, '')
-      .slice(0, 60);
-    return `fix-${slug}`;
-  }
-
-  // 日本語など非ラテン文字のみの場合はタイムスタンプベースのスラッグ
+export function generateFixSlug(now?: Date): string {
   const timestamp = now ?? new Date();
   const dateStr = timestamp.toISOString().slice(0, 10).replace(/-/g, '');
   const timeStr = timestamp.toISOString().slice(11, 19).replace(/:/g, '');
@@ -242,7 +219,7 @@ export async function handleFixApproveInternal(
     }
 
     // fix用スラッグ生成
-    const slug = generateFixSlug(parsed.title);
+    const slug = generateFixSlug();
     log.info('ドラフトパース完了', { phase: 'approve_parsed', slug });
 
     // fix用ストーリーファイル内容を構築（status: Doing）

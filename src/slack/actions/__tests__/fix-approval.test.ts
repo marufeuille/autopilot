@@ -91,17 +91,9 @@ describe('parseFixDraft', () => {
 });
 
 describe('generateFixSlug', () => {
-  it('fix: プレフィックス付きタイトルからスラッグを生成する', () => {
-    expect(generateFixSlug('fix: Login Error')).toBe('fix-login-error');
-  });
-
-  it('fix: プレフィックスなしでも動作する', () => {
-    expect(generateFixSlug('Session Bug')).toBe('fix-session-bug');
-  });
-
-  it('日本語タイトルの場合はタイムスタンプベースのスラッグ', () => {
+  it('タイムスタンプベースのスラッグを生成する', () => {
     const now = new Date('2025-01-15T10:30:00Z');
-    expect(generateFixSlug('ログインバグ', now)).toBe('fix-20250115-103000');
+    expect(generateFixSlug(now)).toBe('fix-20250115-103000');
   });
 });
 
@@ -211,7 +203,7 @@ describe('handleFixApproveInternal', () => {
     const [project, content, slug] = (deps.writeFixStoryToVault as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(project).toBe('test-project');
     expect(content).toContain('status: Doing');
-    expect(slug).toBe('fix-login-404-error');
+    expect(slug).toMatch(/^fix-\d{8}-\d{6}$/);
 
     // 2. ボタンを削除してメッセージを更新
     expect(deps.updateMessage).toHaveBeenCalledTimes(1);
@@ -227,7 +219,7 @@ describe('handleFixApproveInternal', () => {
     expect(postCall.thread_ts).toBe(threadTs);
     expect(postCall.text).toContain('修正を開始しました');
     expect(postCall.text).toContain('ストーリーファイル');
-    expect(postCall.text).toContain('fix-login-404-error');
+    expect(postCall.text).toMatch(/fix-\d{8}-\d{6}/);
   });
 
   it('phaseが drafting → approved → executing と遷移する', async () => {
