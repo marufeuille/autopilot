@@ -51,6 +51,7 @@ export async function createNotificationBackend(): Promise<NotificationBackend> 
       const { handleRetry } = await import('../slack/commands/retry');
       const { handleHelp } = await import('../slack/commands/help');
       const { createStoryHandler } = await import('../slack/commands/story');
+      const { registerThreadHandler } = await import('../slack/thread-handler');
 
       registerSubcommand('status', handleStatus);
       registerSubcommand('retry', handleRetry);
@@ -60,6 +61,7 @@ export async function createNotificationBackend(): Promise<NotificationBackend> 
       registerSubcommand('story', createStoryHandler(slackApp));
       registerApprovalHandlers(slackApp);
       registerSlashCommands(slackApp);
+      registerThreadHandler(slackApp);
       await slackApp.start();
       console.log('[slack] bot started (Socket Mode)');
 
