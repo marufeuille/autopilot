@@ -29,8 +29,8 @@ export interface FixExecutionDeps {
     ts: string;
     text: string;
   }) => Promise<void>;
-  /** Claudeエージェントを使って修正を実行する */
-  runFixAgent: (prompt: string) => Promise<string>;
+  /** Claudeエージェントを使って修正を実行する（signal でキャンセル可能） */
+  runFixAgent: (prompt: string, signal?: AbortSignal) => Promise<string>;
 }
 
 /**
@@ -83,25 +83,42 @@ ${parsed.impact}
  * タイムアウト付きでPromiseを実行する
  *
  * 指定時間内に完了しない場合はタイムアウトエラーをスローする。
+ * AbortController を渡すことで、タイムアウト時に元の処理のキャンセルをシグナルできる。
  */
 export function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
   message = '処理がタイムアウトしました',
+  abortController?: AbortController,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
+    let settled = false;
+
     const timer = setTimeout(() => {
-      reject(new FixExecutionTimeoutError(message, timeoutMs));
+      if (!settled) {
+        settled = true;
+        // タイムアウト時に AbortController でキャンセルをシグナルする
+        if (abortController) {
+          abortController.abort();
+        }
+        reject(new FixExecutionTimeoutError(message, timeoutMs));
+      }
     }, timeoutMs);
 
     promise
       .then((result) => {
-        clearTimeout(timer);
-        resolve(result);
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(result);
+        }
       })
       .catch((error) => {
-        clearTimeout(timer);
-        reject(error);
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          reject(error);
+        }
       });
   });
 }
@@ -136,15 +153,20 @@ export function classifyExecutionError(error: unknown): {
 
   if (error instanceof Error) {
     // Claude API 関連のエラーを判定
+    // 誤判定を防ぐため、Anthropic / Claude 固有のキーワードに限定する
     const msg = error.message.toLowerCase();
-    if (
-      msg.includes('api') ||
-      msg.includes('rate limit') ||
-      msg.includes('overloaded') ||
+    const name = error.name?.toLowerCase() ?? '';
+    const isAnthropicError =
       msg.includes('anthropic') ||
       msg.includes('claude') ||
-      msg.includes('token')
-    ) {
+      msg.includes('rate limit') ||
+      msg.includes('overloaded') ||
+      msg.includes('rate_limit') ||
+      name.includes('anthropic') ||
+      name.includes('apiconnection') ||
+      name.includes('ratelimit') ||
+      ('status' in error && typeof (error as any).status === 'number' && [429, 529].includes((error as any).status));
+    if (isAnthropicError) {
       return {
         userMessage: `:warning: Claude API エラーが発生しました: ${error.message}\n\nしばらく待ってから再度お試しください。`,
         errorType: 'claude_api',
@@ -167,6 +189,31 @@ export interface FixExecutionResult {
   summary: string;
   error?: string;
   errorType?: 'timeout' | 'claude_api' | 'unknown';
+}
+
+/**
+ * Slack mrkdwn インジェクションを防ぐためにエージェント出力をサニタイズする
+ *
+ * @here, @channel, @everyone などの特殊メンションを無効化し、
+ * 予期しないリンクやメンションが投稿されることを防ぐ。
+ */
+export function sanitizeSlackOutput(text: string): string {
+  // 1. Slack 特殊メンション構文（<!here>, <!channel>, <!everyone>）を無効化
+  let sanitized = text
+    .replace(/<!here\b[^>]*>/gi, '`@here`')
+    .replace(/<!channel\b[^>]*>/gi, '`@channel`')
+    .replace(/<!everyone\b[^>]*>/gi, '`@everyone`');
+
+  // 2. ユーザーメンション (<@U...>) を無効化
+  sanitized = sanitized.replace(/<@([A-Z0-9]+)>/g, '`@$1`');
+
+  // 3. プレーンテキストの @here, @channel, @everyone を無効化
+  //    既にバッククォートで囲まれているものは除外する
+  sanitized = sanitized.replace(/(?<!`)@here\b(?!`)/gi, '`@here`');
+  sanitized = sanitized.replace(/(?<!`)@channel\b(?!`)/gi, '`@channel`');
+  sanitized = sanitized.replace(/(?<!`)@everyone\b(?!`)/gi, '`@everyone`');
+
+  return sanitized;
 }
 
 /**
@@ -203,10 +250,13 @@ export async function executeFixInternal(
     const prompt = buildFixExecutionPrompt(parsed, slug);
     log.info('Claude Agent 実行開始', { phase: 'agent_start', slug });
 
+    // タイムアウト時にエージェント処理のキャンセルをシグナルするための AbortController
+    const abortController = new AbortController();
     const result = await withTimeout(
-      deps.runFixAgent(prompt),
+      deps.runFixAgent(prompt, abortController.signal),
       timeoutMs,
       `修正処理が${Math.round(timeoutMs / 60000)}分以内に完了しませんでした`,
+      abortController,
     );
     log.info('Claude Agent 実行完了', { phase: 'agent_complete', slug });
 
@@ -219,8 +269,9 @@ export async function executeFixInternal(
       });
     }
 
-    // 4. 修正結果をスレッドに投稿
-    const resultMessage = `✅ *修正が完了しました*\n\n📝 *スラッグ*: \`${slug}\`\n\n${result}`;
+    // 4. 修正結果をスレッドに投稿（Slack mrkdwn インジェクション対策でサニタイズ）
+    const sanitizedResult = sanitizeSlackOutput(result);
+    const resultMessage = `✅ *修正が完了しました*\n\n📝 *スラッグ*: \`${slug}\`\n\n${sanitizedResult}`;
     await deps.postMessage({
       channel: channelId,
       text: resultMessage,
@@ -245,22 +296,30 @@ export async function executeFixInternal(
       errorType: classified.errorType,
     }, error);
 
-    // 進捗メッセージをエラーに更新
-    if (progressTs) {
-      await deps.updateMessage({
-        channel: channelId,
-        ts: progressTs,
-        text: '❌ *修正処理でエラーが発生しました*',
-      });
+    // 進捗メッセージをエラーに更新 & エラーメッセージをスレッドに投稿
+    // Slack API 障害時にもエラーが上位に伝播しないよう個別に保護する
+    try {
+      if (progressTs) {
+        await deps.updateMessage({
+          channel: channelId,
+          ts: progressTs,
+          text: '❌ *修正処理でエラーが発生しました*',
+        });
+      }
+    } catch (slackError) {
+      log.error('進捗メッセージのエラー更新に失敗', { phase: 'slack_update_error', slug }, slackError);
     }
 
-    // エラーメッセージをスレッドに投稿
-    await deps.postMessage({
-      channel: channelId,
-      text: classified.userMessage,
-      thread_ts: threadTs,
-    });
-    log.info('エラーメッセージを投稿', { phase: 'fix_error_posted', slug, errorType: classified.errorType });
+    try {
+      await deps.postMessage({
+        channel: channelId,
+        text: classified.userMessage,
+        thread_ts: threadTs,
+      });
+      log.info('エラーメッセージを投稿', { phase: 'fix_error_posted', slug, errorType: classified.errorType });
+    } catch (slackError) {
+      log.error('エラーメッセージの投稿に失敗', { phase: 'slack_post_error', slug }, slackError);
+    }
 
     return {
       success: false,

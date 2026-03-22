@@ -128,8 +128,8 @@ export interface FixApprovalDeps {
     content: string,
     slug: string,
   ) => string;
-  /** Claudeエージェントを使って修正を実行する（省略時はVault書き込みのみ） */
-  runFixAgent?: (prompt: string) => Promise<string>;
+  /** Claudeエージェントを使って修正を実行する（省略時はVault書き込みのみ、signal でキャンセル可能） */
+  runFixAgent?: (prompt: string, signal?: AbortSignal) => Promise<string>;
 }
 
 /**
@@ -413,20 +413,33 @@ export function createFixApprovalDepsFromApp(app: App): FixApprovalDeps {
       });
     },
     writeFixStoryToVault,
-    runFixAgent: async (prompt: string) => {
-      const { query } = await import('@anthropic-ai/claude-agent-sdk');
+    runFixAgent: async (prompt: string, signal?: AbortSignal) => {
+      let queryFn: typeof import('@anthropic-ai/claude-agent-sdk')['query'];
+      try {
+        const mod = await import('@anthropic-ai/claude-agent-sdk');
+        queryFn = mod.query;
+      } catch (importError) {
+        throw new Error(
+          `claude-agent-sdk のインポートに失敗しました: ${importError instanceof Error ? importError.message : String(importError)}`,
+        );
+      }
       let fullText = '';
-      for await (const message of query({
+      for await (const message of queryFn({
         prompt,
         options: {
-          allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-          permissionMode: 'bypassPermissions',
+          allowedTools: ['Read', 'Write', 'Edit', 'Glob', 'Grep'],
+          permissionMode: 'plan',
+          ...(signal ? { abortSignal: signal } : {}),
         },
       })) {
+        // タイムアウトによるキャンセルをチェック
+        if (signal?.aborted) {
+          break;
+        }
         if (message.type === 'assistant') {
           const content = message.message?.content ?? [];
           for (const block of content) {
-            if ('text' in block && block.text) {
+            if ('text' in block && typeof block.text === 'string') {
               fullText += block.text;
             }
           }

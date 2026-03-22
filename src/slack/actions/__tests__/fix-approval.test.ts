@@ -423,9 +423,12 @@ describe('handleFixApproveInternal（runFixAgent付き）', () => {
 
     await handleFixApproveInternal(threadTs, messageTs, deps, userId);
 
-    // runFixAgentが呼ばれること
+    // runFixAgentが呼ばれること（prompt と AbortSignal の2引数）
     expect(runFixAgent).toHaveBeenCalledTimes(1);
-    expect(runFixAgent).toHaveBeenCalledWith(expect.stringContaining('fix: Login 404 Error'));
+    expect(runFixAgent).toHaveBeenCalledWith(
+      expect.stringContaining('fix: Login 404 Error'),
+      expect.any(AbortSignal),
+    );
 
     // phaseがcompletedに遷移（executeFixInternalが完了するため）
     expect(interactiveSessionManager.getSession(threadTs)!.phase).toBe('completed');

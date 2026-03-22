@@ -5,6 +5,7 @@ import {
   buildFixExecutionPrompt,
   withTimeout,
   classifyExecutionError,
+  sanitizeSlackOutput,
   FixExecutionTimeoutError,
   type FixExecutionDeps,
   FIX_EXECUTION_TIMEOUT_MS,
@@ -97,7 +98,7 @@ describe('classifyExecutionError', () => {
     expect(result.userMessage).toContain('5分');
   });
 
-  it('API関連エラーをclaude_apiに分類する', () => {
+  it('rate limit エラーをclaude_apiに分類する', () => {
     const error = new Error('Rate limit exceeded');
     const result = classifyExecutionError(error);
 
@@ -110,6 +111,38 @@ describe('classifyExecutionError', () => {
     const result = classifyExecutionError(error);
 
     expect(result.errorType).toBe('claude_api');
+  });
+
+  it('anthropic キーワードを含むエラーをclaude_apiに分類する', () => {
+    const error = new Error('Anthropic API connection failed');
+    const result = classifyExecutionError(error);
+
+    expect(result.errorType).toBe('claude_api');
+  });
+
+  it('claude キーワードを含むエラーをclaude_apiに分類する', () => {
+    const error = new Error('Claude model not available');
+    const result = classifyExecutionError(error);
+
+    expect(result.errorType).toBe('claude_api');
+  });
+
+  it('status 429 のエラーをclaude_apiに分類する', () => {
+    const error = new Error('Too many requests') as any;
+    error.status = 429;
+    const result = classifyExecutionError(error);
+
+    expect(result.errorType).toBe('claude_api');
+  });
+
+  it('汎用的な "api" や "token" を含むエラーは誤分類しない', () => {
+    // "Invalid API key" のような無関係なエラーは unknown になるべき
+    const apiError = new Error('Invalid API key for external service');
+    expect(classifyExecutionError(apiError).errorType).toBe('unknown');
+
+    // "token expired" のような認証トークンエラーも unknown
+    const tokenError = new Error('Session token expired');
+    expect(classifyExecutionError(tokenError).errorType).toBe('unknown');
   });
 
   it('不明なエラーをunknownに分類する', () => {
@@ -141,6 +174,36 @@ describe('FixExecutionTimeoutError', () => {
 describe('FIX_EXECUTION_TIMEOUT_MS', () => {
   it('5分（300000ms）に設定されている', () => {
     expect(FIX_EXECUTION_TIMEOUT_MS).toBe(300000);
+  });
+});
+
+describe('sanitizeSlackOutput', () => {
+  it('@here, @channel, @everyone を無効化する', () => {
+    const input = 'Hello @here and @channel and @everyone!';
+    const result = sanitizeSlackOutput(input);
+
+    expect(result).toBe('Hello `@here` and `@channel` and `@everyone`!');
+  });
+
+  it('Slack 特殊メンション構文 (<!here> 等) を無効化する', () => {
+    const input = 'Alert <!here> and <!channel|channel> and <!everyone>';
+    const result = sanitizeSlackOutput(input);
+
+    expect(result).toContain('`@here`');
+    expect(result).toContain('`@channel`');
+    expect(result).toContain('`@everyone`');
+  });
+
+  it('ユーザーメンション (<@U...>) を無効化する', () => {
+    const input = 'Check with <@U1234ABCD> and <@U9876ZYXW>';
+    const result = sanitizeSlackOutput(input);
+
+    expect(result).toBe('Check with `@U1234ABCD` and `@U9876ZYXW`');
+  });
+
+  it('通常のテキストはそのまま返す', () => {
+    const input = 'Normal text with *bold* and `code`';
+    expect(sanitizeSlackOutput(input)).toBe(input);
   });
 });
 
@@ -178,9 +241,12 @@ describe('executeFixInternal', () => {
       }),
     );
 
-    // Claude Agent が呼ばれる
+    // Claude Agent が呼ばれる（prompt と AbortSignal の2引数）
     expect(deps.runFixAgent).toHaveBeenCalledTimes(1);
-    expect(deps.runFixAgent).toHaveBeenCalledWith(expect.stringContaining('fix: Login 404 Error'));
+    expect(deps.runFixAgent).toHaveBeenCalledWith(
+      expect.stringContaining('fix: Login 404 Error'),
+      expect.any(AbortSignal),
+    );
 
     // 進捗メッセージが完了に更新される
     expect(deps.updateMessage).toHaveBeenCalledWith(
@@ -304,5 +370,71 @@ describe('executeFixInternal', () => {
     );
 
     expect(result.success).toBe(true);
+  });
+
+  it('エラー時にSlack API呼び出しが失敗しても例外で落ちない', async () => {
+    const session = makeSession();
+    interactiveSessionManager.startSession(session);
+    const parsed = makeParsedDraft();
+    const deps = createMockDeps({
+      runFixAgent: vi.fn().mockRejectedValue(new Error('Agent failed')),
+      updateMessage: vi.fn().mockRejectedValue(new Error('Slack API down')),
+      postMessage: vi.fn()
+        .mockResolvedValueOnce({ ts: '9999999999.999999' }) // 進捗メッセージ
+        .mockRejectedValueOnce(new Error('Slack API down')),  // エラーメッセージ投稿失敗
+    });
+
+    const result = await executeFixInternal(
+      threadTs, channelId, parsed, slug, deps, userId,
+    );
+
+    // Slack API が失敗しても結果は返る
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Agent failed');
+    expect(result.errorType).toBe('unknown');
+  });
+
+  it('修正結果のSlackメンションがサニタイズされる', async () => {
+    const session = makeSession();
+    interactiveSessionManager.startSession(session);
+    const parsed = makeParsedDraft();
+    const deps = createMockDeps({
+      runFixAgent: vi.fn().mockResolvedValue('修正完了 @here <@U1234> <!channel>'),
+    });
+
+    const result = await executeFixInternal(
+      threadTs, channelId, parsed, slug, deps, userId,
+    );
+
+    expect(result.success).toBe(true);
+
+    // 結果投稿のテキストにサニタイズ済みの内容が含まれる
+    const postCalls = (deps.postMessage as ReturnType<typeof vi.fn>).mock.calls;
+    const resultPost = postCalls[postCalls.length - 1][0];
+    // バッククォートで囲まれていない生の @here が含まれないことを確認
+    expect(resultPost.text).not.toMatch(/(?<!`)@here(?!`)/);
+    expect(resultPost.text).toContain('`@here`');
+    expect(resultPost.text).toContain('`@U1234`');
+    expect(resultPost.text).toContain('`@channel`');
+  });
+
+  it('withTimeoutにAbortControllerが渡される', async () => {
+    const session = makeSession();
+    interactiveSessionManager.startSession(session);
+    const parsed = makeParsedDraft();
+
+    // signal が渡されることを確認
+    const runFixAgent = vi.fn().mockImplementation((_prompt: string, signal?: AbortSignal) => {
+      expect(signal).toBeInstanceOf(AbortSignal);
+      return Promise.resolve('### 修正サマリー\n完了');
+    });
+    const deps = createMockDeps({ runFixAgent });
+
+    const result = await executeFixInternal(
+      threadTs, channelId, parsed, slug, deps, userId,
+    );
+
+    expect(result.success).toBe(true);
+    expect(runFixAgent).toHaveBeenCalledWith(expect.any(String), expect.any(AbortSignal));
   });
 });
