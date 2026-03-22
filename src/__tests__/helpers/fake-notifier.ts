@@ -60,7 +60,7 @@ export class FakeNotifier implements NotificationBackend {
     this.approvalQueue = [...(options?.approvalResponses ?? [])];
   }
 
-  async notify(message: string): Promise<void> {
+  async notify(message: string, _storySlug?: string): Promise<void> {
     const record: RecordedNotification = {
       type: 'notify',
       message,
@@ -74,6 +74,7 @@ export class FakeNotifier implements NotificationBackend {
     id: string,
     message: string,
     buttons: { approve: string; reject: string },
+    _storySlug?: string,
   ): Promise<ApprovalResult> {
     // キューから応答を取得。空ならデフォルト approve
     const response: ApprovalResult =
@@ -93,6 +94,14 @@ export class FakeNotifier implements NotificationBackend {
     this.approvalRequests.push(record);
 
     return response;
+  }
+
+  async startThread(_storySlug: string, _message: string): Promise<void> {
+    // no-op
+  }
+
+  getThreadTs(_storySlug: string): string | undefined {
+    return undefined;
   }
 
   /**

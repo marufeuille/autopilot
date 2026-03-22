@@ -6,6 +6,8 @@ function createMockBackend(overrides: Partial<NotificationBackend> = {}): Notifi
   return {
     notify: vi.fn().mockResolvedValue(undefined),
     requestApproval: vi.fn().mockResolvedValue({ action: 'approve' } as ApprovalResult),
+    startThread: vi.fn().mockResolvedValue(undefined),
+    getThreadTs: vi.fn().mockReturnValue(undefined),
     ...overrides,
   };
 }
@@ -32,7 +34,7 @@ describe('ResilientNotificationBackend', () => {
 
       await resilient.notify('テストメッセージ');
 
-      expect(primary.notify).toHaveBeenCalledWith('テストメッセージ');
+      expect(primary.notify).toHaveBeenCalledWith('テストメッセージ', undefined);
       expect(fallback.notify).not.toHaveBeenCalled();
     });
 
@@ -57,7 +59,7 @@ describe('ResilientNotificationBackend', () => {
       await resilient.notify('フォールバックテスト');
 
       expect(mockNotify).toHaveBeenCalledTimes(2); // 1 + 1 retry
-      expect(fallback.notify).toHaveBeenCalledWith('フォールバックテスト');
+      expect(fallback.notify).toHaveBeenCalledWith('フォールバックテスト', undefined);
     });
 
     it('maxRetries=0 の場合は即座にフォールバックする', async () => {
@@ -68,7 +70,7 @@ describe('ResilientNotificationBackend', () => {
       await resilient.notify('即フォールバック');
 
       expect(mockNotify).toHaveBeenCalledTimes(1);
-      expect(fallback.notify).toHaveBeenCalledWith('即フォールバック');
+      expect(fallback.notify).toHaveBeenCalledWith('即フォールバック', undefined);
     });
   });
 
@@ -85,7 +87,7 @@ describe('ResilientNotificationBackend', () => {
       expect(primary.requestApproval).toHaveBeenCalledWith('id-1', 'メッセージ', {
         approve: '承認',
         reject: '却下',
-      });
+      }, undefined);
       expect(fallback.requestApproval).not.toHaveBeenCalled();
     });
 

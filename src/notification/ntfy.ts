@@ -18,7 +18,7 @@ export class NtfyNotificationBackend implements NotificationBackend {
   /**
    * ntfy.sh にプッシュ通知を送信する
    */
-  async notify(message: string): Promise<void> {
+  async notify(message: string, _storySlug?: string): Promise<void> {
     const url = `${this.serverUrl}/${this.topic}`;
 
     const response = await fetch(url, {
@@ -62,6 +62,7 @@ export class NtfyNotificationBackend implements NotificationBackend {
     _id: string,
     _message: string,
     _buttons: { approve: string; reject: string },
+    _storySlug?: string,
   ): Promise<ApprovalResult> {
     throw new Error(
       '[ntfy] requestApproval is not yet implemented. ' +

@@ -40,15 +40,15 @@ export class ResilientNotificationBackend implements NotificationBackend {
     this.retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
   }
 
-  async notify(message: string): Promise<void> {
+  async notify(message: string, storySlug?: string): Promise<void> {
     try {
-      await this.withRetry(() => this.primary.notify(message));
+      await this.withRetry(() => this.primary.notify(message, storySlug));
     } catch (error) {
       console.warn(
         `[resilient-notify] primary notify failed after ${this.maxRetries + 1} attempts, falling back to local:`,
         error instanceof Error ? error.message : error,
       );
-      await this.fallback.notify(message);
+      await this.fallback.notify(message, storySlug);
     }
   }
 
@@ -72,17 +72,18 @@ export class ResilientNotificationBackend implements NotificationBackend {
     id: string,
     message: string,
     buttons: { approve: string; reject: string },
+    storySlug?: string,
   ): Promise<ApprovalResult> {
     try {
       return await this.withRetry(() =>
-        this.primary.requestApproval(id, message, buttons),
+        this.primary.requestApproval(id, message, buttons, storySlug),
       );
     } catch (error) {
       console.warn(
         `[resilient-notify] primary requestApproval failed after ${this.maxRetries + 1} attempts, falling back to local:`,
         error instanceof Error ? error.message : error,
       );
-      return this.fallback.requestApproval(id, message, buttons);
+      return this.fallback.requestApproval(id, message, buttons, storySlug);
     }
   }
 
