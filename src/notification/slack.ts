@@ -2,6 +2,7 @@ import { App } from '@slack/bolt';
 import type { Block, KnownBlock } from '@slack/types';
 import { config } from '../config';
 import type { NotificationBackend, ApprovalResult } from './types';
+import { ThreadSessionManager } from './thread-session';
 
 interface PendingApproval {
   resolve: (result: ApprovalResult) => void;
@@ -156,7 +157,23 @@ export function registerApprovalHandlers(app: App): void {
  * 通知送信と承認フロー（インタラクティブボタン + モーダル）を提供する。
  */
 export class SlackNotificationBackend implements NotificationBackend {
+  private readonly threadSession = new ThreadSessionManager();
+
   constructor(private readonly app: App) {}
+
+  async startThread(storySlug: string, message: string): Promise<void> {
+    const res = await this.app.client.chat.postMessage({
+      channel: config.slack.channelId,
+      text: message,
+    });
+    if (res.ts) {
+      this.threadSession.startSession(storySlug, res.ts);
+    }
+  }
+
+  getThreadTs(storySlug: string): string | undefined {
+    return this.threadSession.getThreadTs(storySlug);
+  }
 
   async notify(message: string): Promise<void> {
     await this.app.client.chat.postMessage({
