@@ -36,6 +36,18 @@ vi.mock('../git', () => ({
   },
 }));
 
+// マージモジュールをモック
+const mockExecuteMerge = vi.fn().mockReturnValue({ success: true, prUrl: '', output: undefined });
+const mockFormatMergeErrorMessage = vi.fn((error: any) => `❌ ${error.reason}`);
+vi.mock('../merge', async (importOriginal) => {
+  const actual = await importOriginal() as Record<string, unknown>;
+  return {
+    ...actual,
+    executeMerge: (...args: unknown[]) => mockExecuteMerge(...args),
+    formatMergeErrorMessage: (...args: unknown[]) => mockFormatMergeErrorMessage(...args),
+  };
+});
+
 // レビューループをモック
 const mockRunReviewLoop = vi.fn().mockResolvedValue({
   finalVerdict: 'OK',
@@ -92,6 +104,7 @@ import { getStoryTasks } from '../vault/reader';
 import { updateFileStatus } from '../vault/writer';
 import { decomposeTasks } from '../decomposer';
 import { syncMainBranch, GitSyncError } from '../git';
+import { MergeError } from '../merge';
 import { runStory, runTask, formatReviewSummaryForPR, createPullRequest } from '../runner';
 
 const mockedGetStoryTasks = vi.mocked(getStoryTasks);
@@ -644,7 +657,7 @@ describe('runTask', () => {
     expect(mergeApprovalCall![2]).toEqual({ approve: 'マージ承認', reject: '差し戻し' });
   });
 
-  it('マージ承認後に gh pr merge が実行されPRがマージされる', async () => {
+  it('マージ承認後に executeMerge が実行されPRがマージされる', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
     const notifier = createMockNotifier('approve');
@@ -653,17 +666,18 @@ describe('runTask', () => {
     mockExecSync
       .mockReturnValueOnce('') // git push
       .mockReturnValueOnce('https://github.com/test/repo/pull/1'); // gh pr create
-    mockExecFileSync.mockReturnValueOnce(''); // gh pr merge
+    mockExecuteMerge.mockReturnValueOnce({ success: true, prUrl: 'https://github.com/test/repo/pull/1', output: undefined });
 
     const consoleSpy = vi.spyOn(console, 'log');
 
     await runTask(task, story, notifier, repoPath);
 
-    // gh pr merge が呼ばれること（execFileSync で引数配列として渡される）
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      'gh',
-      ['pr', 'merge', 'https://github.com/test/repo/pull/1', '--squash', '--delete-branch'],
-      expect.objectContaining({ cwd: repoPath }),
+    // executeMerge が呼ばれること
+    expect(mockExecuteMerge).toHaveBeenCalledWith(
+      'https://github.com/test/repo/pull/1',
+      repoPath,
+      expect.any(Object),
+      { skipValidation: false },
     );
 
     // マージ完了のログが記録されること
@@ -692,7 +706,7 @@ describe('runTask', () => {
     mockExecSync
       .mockReturnValueOnce('') // git push
       .mockReturnValueOnce('https://github.com/test/repo/pull/1'); // gh pr create
-    mockExecFileSync.mockReturnValueOnce(''); // gh pr merge
+    mockExecuteMerge.mockReturnValueOnce({ success: true, prUrl: 'https://github.com/test/repo/pull/1', output: undefined });
 
     await runTask(task, story, notifier, repoPath);
 
@@ -707,41 +721,39 @@ describe('runTask', () => {
     );
   });
 
-  it('マージ失敗時にエラーが適切にハンドリングされる', async () => {
+  it('マージ失敗時に構造化されたMergeErrorが適切にハンドリングされる', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
     const notifier = createMockNotifier('approve');
     const repoPath = '/Users/test/dev/myproject';
 
-    const mergeError = new Error('merge conflict');
+    const mergeError = new MergeError('merge_conflict', 'マージコンフリクトが発生しています: merge conflict', 409);
     mockExecSync
       .mockReturnValueOnce('') // git push
       .mockReturnValueOnce('https://github.com/test/repo/pull/1'); // gh pr create
-    mockExecFileSync.mockImplementationOnce(() => { throw mergeError; }); // gh pr merge fails
+    mockExecuteMerge.mockImplementationOnce(() => { throw mergeError; });
 
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    await expect(runTask(task, story, notifier, repoPath)).rejects.toThrow('merge conflict');
+    await expect(runTask(task, story, notifier, repoPath)).rejects.toThrow();
 
     // エラーログが記録されること
     expect(consoleErrorSpy).toHaveBeenCalledWith(
       expect.stringContaining('PR merge failed'),
-      expect.any(Error),
+      expect.any(String),
     );
 
     // タスクが Failed に更新されること
-    // （mergeError が throw され、runTask 外側の catch 節 (runner.ts L369-370) で
-    //   updateFileStatus(task.filePath, 'Failed') が呼ばれる）
     expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Failed');
 
-    // マージ失敗通知がユーザーに送信されること
+    // マージ失敗通知がユーザーに送信されること（構造化エラー情報を含む）
     expect(notifier.notify).toHaveBeenCalledWith(
       expect.stringContaining('マージ失敗'),
       'my-story',
     );
-    // エラーメッセージが通知に含まれること
+    // エラーコードが通知に含まれること
     expect(notifier.notify).toHaveBeenCalledWith(
-      expect.stringContaining('merge conflict'),
+      expect.stringContaining('merge_conflict'),
       'my-story',
     );
 
@@ -968,7 +980,7 @@ describe('runTask - マージ後ステータス更新フロー', () => {
   function setupMergeFlowMocks(
     notifier: NotificationBackend,
     options?: {
-      mergeImpl?: () => string;
+      mergeImpl?: () => { success: boolean; prUrl: string; output?: string };
     },
   ) {
     // git push + gh pr create
@@ -976,11 +988,11 @@ describe('runTask - マージ後ステータス更新フロー', () => {
       .mockReturnValueOnce('') // git push
       .mockReturnValueOnce('https://github.com/test/repo/pull/42'); // gh pr create
 
-    // gh pr merge
+    // executeMerge
     if (options?.mergeImpl) {
-      mockExecFileSync.mockImplementationOnce(options.mergeImpl);
+      mockExecuteMerge.mockImplementationOnce(options.mergeImpl);
     } else {
-      mockExecFileSync.mockReturnValueOnce('');
+      mockExecuteMerge.mockReturnValueOnce({ success: true, prUrl: 'https://github.com/test/repo/pull/42', output: undefined });
     }
 
     // requestApproval を順番に設定: 開始承認→マージ承認
@@ -989,7 +1001,7 @@ describe('runTask - マージ後ステータス更新フロー', () => {
       .mockResolvedValueOnce({ action: 'approve' }); // マージ承認
   }
 
-  it('gh pr merge 成功後に updateFileStatus(Done) が呼ばれ、呼び出し順序が正しい', async () => {
+  it('executeMerge 成功後に updateFileStatus(Done) が呼ばれ、呼び出し順序が正しい', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
     const notifier = createMockNotifier('approve');
@@ -1009,37 +1021,34 @@ describe('runTask - マージ後ステータス更新フロー', () => {
     mockedUpdateFileStatus.mockImplementation((_path, status) => {
       callOrder.push(`updateFileStatus:${status}`);
     });
-    mockExecFileSync.mockImplementation((...args: unknown[]) => {
-      const cmdArgs = args[1] as string[];
-      if (cmdArgs && cmdArgs.includes('merge')) {
-        callOrder.push('gh-pr-merge');
-      }
-      return '';
+    mockExecuteMerge.mockImplementationOnce(() => {
+      callOrder.push('executeMerge');
+      return { success: true, prUrl: 'https://github.com/test/repo/pull/42', output: undefined };
     });
 
     await runTask(task, story, notifier, repoPath);
 
-    // Doing → gh pr merge → Done の順序で呼ばれること
+    // Doing → executeMerge → Done の順序で呼ばれること
     expect(callOrder).toEqual([
       'updateFileStatus:Doing',
-      'gh-pr-merge',
+      'executeMerge',
       'updateFileStatus:Done',
     ]);
   });
 
-  it('gh pr merge 失敗時にステータスが Failed になり Done にならない', async () => {
+  it('executeMerge 失敗時にステータスが Failed になり Done にならない', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
     const notifier = createMockNotifier('approve');
     const repoPath = '/Users/test/dev/myproject';
 
     setupMergeFlowMocks(notifier, {
-      mergeImpl: () => { throw new Error('merge conflict'); },
+      mergeImpl: () => { throw new MergeError('merge_conflict', 'マージコンフリクト', 409); },
     });
 
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    await expect(runTask(task, story, notifier, repoPath)).rejects.toThrow('merge conflict');
+    await expect(runTask(task, story, notifier, repoPath)).rejects.toThrow();
 
     // Failed に更新されること
     expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Failed');
@@ -1049,14 +1058,14 @@ describe('runTask - マージ後ステータス更新フロー', () => {
     consoleErrorSpy.mockRestore();
   });
 
-  it('gh pr merge 失敗時の updateFileStatus 呼び出し順序が Doing → Failed', async () => {
+  it('executeMerge 失敗時の updateFileStatus 呼び出し順序が Doing → Failed', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
     const notifier = createMockNotifier('approve');
     const repoPath = '/Users/test/dev/myproject';
 
     setupMergeFlowMocks(notifier, {
-      mergeImpl: () => { throw new Error('API error'); },
+      mergeImpl: () => { throw new MergeError('unknown', 'API error', 500); },
     });
 
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -1066,7 +1075,7 @@ describe('runTask - マージ後ステータス更新フロー', () => {
       callOrder.push(`updateFileStatus:${status}`);
     });
 
-    await expect(runTask(task, story, notifier, repoPath)).rejects.toThrow('API error');
+    await expect(runTask(task, story, notifier, repoPath)).rejects.toThrow();
 
     // Doing → Failed の順序（Done は含まれない）
     expect(callOrder).toEqual([
@@ -1077,7 +1086,7 @@ describe('runTask - マージ後ステータス更新フロー', () => {
     consoleErrorSpy.mockRestore();
   });
 
-  it('マージ承認で差し戻された場合、gh pr merge は呼ばれず再実行ループに入る', async () => {
+  it('マージ承認で差し戻された場合、executeMerge は呼ばれず再実行ループに入る', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
     const notifier: NotificationBackend = {
@@ -1086,6 +1095,10 @@ describe('runTask - マージ後ステータス更新フロー', () => {
         .mockResolvedValueOnce({ action: 'approve' })  // タスク開始承認
         .mockResolvedValueOnce({ action: 'reject', reason: '要修正' })  // マージ差し戻し
         .mockResolvedValueOnce({ action: 'approve' })   // 2回目マージ承認
+      ,
+      startThread: vi.fn().mockResolvedValue(undefined),
+      getThreadTs: vi.fn().mockReturnValue(undefined),
+      endSession: vi.fn(),
     };
     const repoPath = '/Users/test/dev/myproject';
 
@@ -1098,23 +1111,24 @@ describe('runTask - マージ後ステータス更新フロー', () => {
       .mockReturnValueOnce('https://github.com/test/repo/pull/42'); // gh pr create (already exists fallback)
 
     // 2回目のマージ
-    mockExecFileSync.mockReturnValueOnce('');
+    mockExecuteMerge.mockReturnValueOnce({ success: true, prUrl: 'https://github.com/test/repo/pull/42', output: undefined });
 
     await runTask(task, story, notifier, repoPath);
 
-    // 差し戻し時にはgh pr mergeが呼ばれず、2回目の承認で呼ばれること
-    expect(mockExecFileSync).toHaveBeenCalledTimes(1);
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      'gh',
-      ['pr', 'merge', 'https://github.com/test/repo/pull/42', '--squash', '--delete-branch'],
+    // 差し戻し時にはexecuteMergeが呼ばれず、2回目の承認で呼ばれること
+    expect(mockExecuteMerge).toHaveBeenCalledTimes(1);
+    expect(mockExecuteMerge).toHaveBeenCalledWith(
+      'https://github.com/test/repo/pull/42',
+      repoPath,
       expect.any(Object),
+      { skipValidation: false },
     );
 
     // 最終的にDoneになること
     expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Done');
   });
 
-  it('CI失敗でマージ承認に到達しない場合、gh pr merge は呼ばれずタスク完了確認に遷移する', async () => {
+  it('CI失敗でマージ承認に到達しない場合、executeMerge は呼ばれずタスク完了確認に遷移する', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
     const notifier = createMockNotifier('approve');
@@ -1136,8 +1150,8 @@ describe('runTask - マージ後ステータス更新フロー', () => {
 
     await runTask(task, story, notifier, repoPath);
 
-    // gh pr merge は呼ばれないこと
-    expect(mockExecFileSync).not.toHaveBeenCalled();
+    // executeMerge は呼ばれないこと
+    expect(mockExecuteMerge).not.toHaveBeenCalled();
 
     // タスクはDoneになること（完了承認で承認された場合）
     expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Done');
