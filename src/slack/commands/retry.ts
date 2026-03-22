@@ -1,6 +1,6 @@
 import { glob } from 'glob';
 import * as path from 'path';
-import { config, vaultProjectPath } from '../../config';
+import { config, vaultProjectPath, vaultStoriesPath } from '../../config';
 import { getStoryTasks, TaskFile } from '../../vault/reader';
 import { updateFileStatus } from '../../vault/writer';
 import type { SubcommandHandler } from '../slash-commands';
@@ -60,9 +60,12 @@ export const handleRetry: SubcommandHandler = async (args, respond) => {
 
     await updateFileStatus(task.filePath, 'Todo');
 
+    const storyFilePath = path.join(vaultStoriesPath(project), `${task.storySlug}.md`);
+    await updateFileStatus(storyFilePath, 'Doing');
+
     await respond(
-      `✅ タスク \`${taskSlug}\` のステータスを \`Todo\` に更新しました。` +
-      `ファイルウォッチャーにより自動的に再実行されます。`,
+      `✅ タスク \`${taskSlug}\` のステータスを \`Todo\` に更新し、` +
+      `ストーリー \`${task.storySlug}\` を \`Doing\` に変更して再実行をトリガーしました。`,
     );
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
