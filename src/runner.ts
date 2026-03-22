@@ -5,6 +5,7 @@ import { updateFileStatus, createTaskFile, TaskDraft } from './vault/writer';
 import { decomposeTasks } from './decomposer';
 import { NotificationBackend, generateApprovalId } from './notification';
 import { syncMainBranch, GitSyncError } from './git';
+import { runReviewLoop, formatReviewLoopResult } from './review';
 
 function buildTaskPrompt(task: TaskFile, story: StoryFile, repoPath: string): string {
   return `あなたは優秀なソフトウェアエンジニアです。以下のタスクを実装してください。
@@ -99,6 +100,25 @@ export async function runTask(
     while (true) {
       await runClaudeAgent(prompt, repoPath);
 
+      // セルフレビューループ実行
+      const branch = `feature/${task.slug}`;
+      console.log(`[runner] starting self-review loop for: ${task.slug}`);
+      const reviewLoopResult = await runReviewLoop(
+        repoPath,
+        branch,
+        task.content,
+      );
+
+      // レビュー結果を通知
+      const reviewMessage = formatReviewLoopResult(reviewLoopResult);
+      await notifier.notify(`*セルフレビュー結果* (${task.slug})\n\n${reviewMessage}`);
+      console.log(`[runner] self-review complete: verdict=${reviewLoopResult.finalVerdict}, iterations=${reviewLoopResult.iterations.length}, escalation=${reviewLoopResult.escalationRequired}`);
+
+      // エスカレーション（最大リトライ到達でNG）の場合は人間に通知
+      if (reviewLoopResult.escalationRequired) {
+        console.log(`[runner] review escalation required for: ${task.slug}`);
+      }
+
       // PR URL 取得
       let prUrl = '';
       try {
@@ -110,12 +130,15 @@ export async function runTask(
         // PR未作成の場合は無視
       }
       const prLine = prUrl ? `\n*PR*: ${prUrl}` : '';
+      const reviewLine = reviewLoopResult.escalationRequired
+        ? '\n⚠️ セルフレビュー未通過（要確認）'
+        : `\n✅ セルフレビュー通過 (${reviewLoopResult.iterations.length}回)`;
 
       // タスク完了承認
       const doneId = generateApprovalId(story.slug, `${task.slug}-done`);
       const doneResult = await notifier.requestApproval(
         doneId,
-        `*タスク完了確認*\n\n*タスク*: ${task.slug}${prLine}\n\n実装を確認してください。`,
+        `*タスク完了確認*\n\n*タスク*: ${task.slug}${prLine}${reviewLine}\n\n実装を確認してください。`,
         { approve: '完了', reject: 'やり直し' },
       );
 
