@@ -404,6 +404,66 @@ describe('handleFixCancelInternal', () => {
   });
 });
 
+describe('handleFixApproveInternal（runFixAgent付き）', () => {
+  const threadTs = '1234567890.123456';
+  const messageTs = '1234567890.654321';
+  const userId = 'U_TEST_USER';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const mgr = interactiveSessionManager as any;
+    mgr.sessions?.clear?.();
+  });
+
+  it('runFixAgent提供時: 承認後に修正実行が開始される', async () => {
+    const session = makeSession();
+    interactiveSessionManager.startSession(session);
+    const runFixAgent = vi.fn().mockResolvedValue('### 修正サマリー\n修正完了');
+    const deps = createMockDeps({ runFixAgent });
+
+    await handleFixApproveInternal(threadTs, messageTs, deps, userId);
+
+    // runFixAgentが呼ばれること
+    expect(runFixAgent).toHaveBeenCalledTimes(1);
+    expect(runFixAgent).toHaveBeenCalledWith(expect.stringContaining('fix: Login 404 Error'));
+
+    // phaseがcompletedに遷移（executeFixInternalが完了するため）
+    expect(interactiveSessionManager.getSession(threadTs)!.phase).toBe('completed');
+  });
+
+  it('runFixAgentでエラー発生時: 例外で落ちずエラーメッセージが投稿される', async () => {
+    const session = makeSession();
+    interactiveSessionManager.startSession(session);
+    const runFixAgent = vi.fn().mockRejectedValue(new Error('API overloaded'));
+    const deps = createMockDeps({ runFixAgent });
+
+    // 例外で落ちないことを確認
+    await expect(
+      handleFixApproveInternal(threadTs, messageTs, deps, userId),
+    ).resolves.toBeUndefined();
+
+    // エラーメッセージがスレッドに投稿される
+    const postCalls = (deps.postMessage as ReturnType<typeof vi.fn>).mock.calls;
+    const errorPost = postCalls.find(
+      (call: any[]) => call[0].text?.includes('Claude API'),
+    );
+    expect(errorPost).toBeDefined();
+  });
+
+  it('runFixAgent未設定時: ファイルウォッチャーに委譲される', async () => {
+    const session = makeSession();
+    interactiveSessionManager.startSession(session);
+    const deps = createMockDeps();
+    // runFixAgent を明示的に undefined にする
+    delete (deps as any).runFixAgent;
+
+    await handleFixApproveInternal(threadTs, messageTs, deps, userId);
+
+    // phaseがexecutingのまま（executeFixInternalが呼ばれないため）
+    expect(interactiveSessionManager.getSession(threadTs)!.phase).toBe('executing');
+  });
+});
+
 describe('registerFixApprovalHandlers', () => {
   it('ハンドラー登録時にログが出力される', async () => {
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
