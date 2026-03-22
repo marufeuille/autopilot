@@ -61,6 +61,19 @@ vi.mock('child_process', () => ({
   execSync: (...args: unknown[]) => mockExecSync(...args),
 }));
 
+// CIポーリングループをモック
+const mockRunCIPollingLoop = vi.fn().mockResolvedValue({
+  finalStatus: 'success',
+  attempts: 1,
+  attemptResults: [{ attempt: 1, ciResult: { status: 'success', summary: 'CI passed' }, timestamp: new Date() }],
+  lastCIResult: { status: 'success', summary: 'CI passed' },
+});
+const mockFormatCIPollingResult = vi.fn().mockReturnValue('✅ CI通過');
+vi.mock('../ci', () => ({
+  runCIPollingLoop: (...args: unknown[]) => mockRunCIPollingLoop(...args),
+  formatCIPollingResult: (...args: unknown[]) => mockFormatCIPollingResult(...args),
+}));
+
 import { getStoryTasks } from '../vault/reader';
 import { updateFileStatus } from '../vault/writer';
 import { decomposeTasks } from '../decomposer';
@@ -559,6 +572,124 @@ describe('runTask', () => {
     expect(doneApprovalCall).toBeDefined();
     expect(doneApprovalCall![1]).toContain('セルフレビュー通過');
     expect(doneApprovalCall![1]).toContain('https://github.com/test/repo/pull/1');
+  });
+
+  it('PR作成後にCIポーリングループが実行される', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    mockExecSync
+      .mockReturnValueOnce('') // git push
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1'); // gh pr create
+
+    await runTask(task, story, notifier, repoPath);
+
+    // CIポーリングが呼ばれたことを確認
+    expect(mockRunCIPollingLoop).toHaveBeenCalledWith(
+      repoPath,
+      'feature/task-01',
+      task.content,
+    );
+    // CI結果通知が送信されたことを確認
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('CI結果'),
+    );
+  });
+
+  it('CI成功時、完了確認メッセージにCI通過が含まれる', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    mockExecSync
+      .mockReturnValueOnce('') // git push
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1');
+
+    await runTask(task, story, notifier, repoPath);
+
+    const approvalCalls = (notifier.requestApproval as ReturnType<typeof vi.fn>).mock.calls;
+    const doneApprovalCall = approvalCalls.find(
+      (call: unknown[]) => (call[1] as string).includes('タスク完了確認'),
+    );
+    expect(doneApprovalCall).toBeDefined();
+    expect(doneApprovalCall![1]).toContain('CI通過');
+  });
+
+  it('CI失敗時、完了確認メッセージにCI未通過が含まれる', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    mockExecSync
+      .mockReturnValueOnce('') // git push
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1');
+
+    mockRunCIPollingLoop.mockResolvedValueOnce({
+      finalStatus: 'max_retries_exceeded',
+      attempts: 4,
+      attemptResults: [
+        { attempt: 1, ciResult: { status: 'failure', summary: 'fail' }, timestamp: new Date() },
+      ],
+      lastCIResult: { status: 'failure', summary: 'fail' },
+    });
+
+    await runTask(task, story, notifier, repoPath);
+
+    const approvalCalls = (notifier.requestApproval as ReturnType<typeof vi.fn>).mock.calls;
+    const doneApprovalCall = approvalCalls.find(
+      (call: unknown[]) => (call[1] as string).includes('タスク完了確認'),
+    );
+    expect(doneApprovalCall).toBeDefined();
+    expect(doneApprovalCall![1]).toContain('CI未通過');
+  });
+
+  it('セルフレビューNG時はCIポーリングが呼ばれない', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    mockRunReviewLoop.mockResolvedValueOnce({
+      finalVerdict: 'NG',
+      escalationRequired: true,
+      iterations: [
+        { iteration: 1, reviewResult: { verdict: 'NG', summary: 'Issues', findings: [] }, timestamp: new Date() },
+      ],
+      lastReviewResult: { verdict: 'NG', summary: 'Issues', findings: [] },
+    });
+
+    const consoleSpy = vi.spyOn(console, 'log');
+
+    await runTask(task, story, notifier, repoPath);
+
+    // CIポーリングが呼ばれないこと
+    expect(mockRunCIPollingLoop).not.toHaveBeenCalled();
+
+    consoleSpy.mockRestore();
+  });
+
+  it('PR作成失敗時（prUrl空）はCIポーリングが呼ばれない', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    // PR作成が完全に失敗するケース
+    mockExecSync.mockImplementation(() => {
+      throw new Error('push failed');
+    });
+
+    await runTask(task, story, notifier, repoPath);
+
+    expect(mockRunCIPollingLoop).not.toHaveBeenCalled();
+
+    consoleErrorSpy.mockRestore();
   });
 
   it('buildTaskPrompt の出力にPR自動作成の旨と gh pr create 不要の指示が含まれる', async () => {

@@ -6,6 +6,7 @@ import { decomposeTasks } from './decomposer';
 import { NotificationBackend, generateApprovalId } from './notification';
 import { syncMainBranch, GitSyncError } from './git';
 import { runReviewLoop, formatReviewLoopResult, ReviewLoopResult } from './review';
+import { runCIPollingLoop, formatCIPollingResult, CIPollingResult, CIPollingOptions } from './ci';
 
 function buildTaskPrompt(task: TaskFile, story: StoryFile, repoPath: string): string {
   return `あなたは優秀なソフトウェアエンジニアです。以下のタスクを実装してください。
@@ -219,9 +220,23 @@ export async function runTask(
 
       // PR作成ゲート: セルフレビューOKの場合のみPRを作成
       let prUrl = '';
+      let ciPollingResult: CIPollingResult | undefined;
       if (reviewLoopResult.finalVerdict === 'OK') {
         console.log(`[runner] self-review passed, creating PR for: ${task.slug}`);
         prUrl = createPullRequest(repoPath, branch, task, story, reviewLoopResult);
+
+        // PR作成成功時、CIポーリングループを実行
+        if (prUrl) {
+          console.log(`[runner] starting CI polling for: ${task.slug}`);
+          ciPollingResult = await runCIPollingLoop(
+            repoPath,
+            branch,
+            task.content,
+          );
+          const ciMessage = formatCIPollingResult(ciPollingResult);
+          await notifier.notify(`*CI結果* (${task.slug})\n\n${ciMessage}`);
+          console.log(`[runner] CI polling complete: status=${ciPollingResult.finalStatus}, attempts=${ciPollingResult.attempts}`);
+        }
       } else {
         console.log(`[runner] self-review NG, skipping PR creation for: ${task.slug}`);
         if (reviewLoopResult.escalationRequired) {
@@ -233,12 +248,17 @@ export async function runTask(
       const reviewLine = reviewLoopResult.escalationRequired
         ? '\n⚠️ セルフレビュー未通過（要確認）'
         : `\n✅ セルフレビュー通過 (${reviewLoopResult.iterations.length}回)`;
+      const ciLine = ciPollingResult
+        ? ciPollingResult.finalStatus === 'success'
+          ? '\n✅ CI通過'
+          : `\n❌ CI未通過 (${ciPollingResult.finalStatus})`
+        : '';
 
       // タスク完了承認
       const doneId = generateApprovalId(story.slug, `${task.slug}-done`);
       const doneResult = await notifier.requestApproval(
         doneId,
-        `*タスク完了確認*\n\n*タスク*: ${task.slug}${prLine}${reviewLine}\n\n実装を確認してください。`,
+        `*タスク完了確認*\n\n*タスク*: ${task.slug}${prLine}${reviewLine}${ciLine}\n\n実装を確認してください。`,
         { approve: '完了', reject: 'やり直し' },
       );
 
