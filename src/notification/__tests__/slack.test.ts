@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Block, KnownBlock } from '@slack/types';
 import { SlackNotificationBackend, registerApprovalHandlers } from '../slack';
 import type { NotificationBackend, ApprovalResult } from '../types';
 
@@ -412,7 +413,7 @@ describe('registerApprovalHandlers - 承認フロー', () => {
 
       // 復元されたブロックにアクションボタンが含まれている
       const actionsBlock = lastUpdateCall.blocks.find(
-        (b: any) => b.type === 'actions',
+        (b: Block | KnownBlock) => b.type === 'actions',
       );
       expect(actionsBlock).toBeDefined();
       expect(actionsBlock.elements).toHaveLength(2);
@@ -621,6 +622,347 @@ describe('スレッド内投稿（thread_ts 対応）', () => {
       await backend.notify('B向け通知', 'story-b');
       const callB = mockApp.client.chat.postMessage.mock.calls[3][0];
       expect(callB.thread_ts).toBe('ts-story-b');
+    });
+  });
+});
+
+describe('スレッド内承認フロー', () => {
+  let mockApp: ReturnType<typeof createMockApp>;
+  let backend: SlackNotificationBackend;
+
+  beforeEach(() => {
+    mockApp = createMockApp();
+    registerApprovalHandlers(mockApp);
+    backend = new SlackNotificationBackend(mockApp);
+  });
+
+  describe('スレッド内 approve ボタン', () => {
+    it('スレッド内の承認ボタン押下で approve が正しく解決される', async () => {
+      // スレッドを開始
+      mockApp.client.chat.postMessage.mockResolvedValueOnce({ ts: 'thread-root-ts' });
+      await backend.startThread('thread-story', 'ストーリー開始');
+
+      // スレッド内に承認リクエストを投稿
+      mockApp.client.chat.postMessage.mockResolvedValueOnce({ ts: 'approval-msg-ts' });
+      const approvalPromise = backend.requestApproval(
+        'thread-approve-id',
+        'タスクを開始しますか？',
+        { approve: '開始', reject: 'スキップ' },
+        'thread-story',
+      );
+
+      // 承認リクエストがスレッド内に投稿されていることを確認
+      const postCall = mockApp.client.chat.postMessage.mock.calls[1][0];
+      expect(postCall.thread_ts).toBe('thread-root-ts');
+
+      // approve ボタンを押す
+      const approveHandler = mockApp._actionHandlers.get('cwk_approve');
+      await approveHandler({
+        ack: vi.fn(),
+        body: {
+          actions: [
+            {
+              value: 'thread-approve-id',
+              text: { type: 'plain_text', text: '開始' },
+            },
+          ],
+        },
+      });
+
+      const result = await approvalPromise;
+      expect(result).toEqual({ action: 'approve' });
+
+      // chat.update はメッセージの ts と channel で特定する（thread_ts は不要）
+      expect(mockApp.client.chat.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ts: 'approval-msg-ts',
+          text: '✅ 開始',
+        }),
+      );
+      // chat.update に thread_ts が含まれていないことを確認
+      const updateCall = mockApp.client.chat.update.mock.calls[0][0];
+      expect(updateCall.thread_ts).toBeUndefined();
+    });
+  });
+
+  describe('スレッド内 reject ボタン → モーダル送信', () => {
+    it('スレッド内の差し戻しボタン → モーダル → 理由送信で reject が正しく解決される', async () => {
+      // スレッドを開始
+      mockApp.client.chat.postMessage.mockResolvedValueOnce({ ts: 'thread-root-ts-2' });
+      await backend.startThread('reject-thread-story', 'ストーリー開始');
+
+      // スレッド内に承認リクエストを投稿
+      mockApp.client.chat.postMessage.mockResolvedValueOnce({ ts: 'reject-msg-ts' });
+      const approvalPromise = backend.requestApproval(
+        'thread-reject-id',
+        'マージしますか？',
+        { approve: 'マージ', reject: 'やり直し' },
+        'reject-thread-story',
+      );
+
+      // 承認リクエストがスレッド内に投稿されていることを確認
+      const postCall = mockApp.client.chat.postMessage.mock.calls[1][0];
+      expect(postCall.thread_ts).toBe('thread-root-ts-2');
+
+      // reject ボタンを押す
+      const rejectHandler = mockApp._actionHandlers.get('cwk_reject');
+      await rejectHandler({
+        ack: vi.fn(),
+        body: {
+          actions: [{ value: 'thread-reject-id' }],
+          trigger_id: 'thread-trigger-1',
+        },
+        client: {
+          views: { open: vi.fn().mockResolvedValue({}) },
+        },
+      });
+
+      // メッセージが「⏳ やり直し理由を入力中...」に更新される
+      expect(mockApp.client.chat.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ts: 'reject-msg-ts',
+          text: '⏳ やり直し理由を入力中...',
+        }),
+      );
+
+      // モーダル送信
+      const viewSubmitHandler = mockApp._viewHandlers.get('submit:cwk_reject_modal');
+      await viewSubmitHandler({
+        ack: vi.fn(),
+        view: {
+          private_metadata: 'thread-reject-id',
+          state: {
+            values: {
+              reason_block: {
+                reason_input: { value: 'テストが不足しています' },
+              },
+            },
+          },
+        },
+      });
+
+      const result = await approvalPromise;
+      expect(result).toEqual({ action: 'reject', reason: 'テストが不足しています' });
+
+      // 最終更新メッセージの確認
+      expect(mockApp.client.chat.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ts: 'reject-msg-ts',
+          text: '🚫 やり直し: テストが不足しています',
+        }),
+      );
+    });
+  });
+
+  describe('スレッド内モーダルキャンセル', () => {
+    it('モーダルキャンセル時にスレッド内の元メッセージが復元される', async () => {
+      // スレッドを開始
+      mockApp.client.chat.postMessage.mockResolvedValueOnce({ ts: 'thread-root-ts-3' });
+      await backend.startThread('cancel-thread-story', 'ストーリー開始');
+
+      // スレッド内に承認リクエストを投稿
+      mockApp.client.chat.postMessage.mockResolvedValueOnce({ ts: 'cancel-msg-ts' });
+      const approvalPromise = backend.requestApproval(
+        'thread-cancel-id',
+        'レビュー結果を確認',
+        { approve: '承認', reject: 'やり直し' },
+        'cancel-thread-story',
+      );
+
+      // reject ボタンでモーダルを開く
+      const rejectHandler = mockApp._actionHandlers.get('cwk_reject');
+      await rejectHandler({
+        ack: vi.fn(),
+        body: {
+          actions: [{ value: 'thread-cancel-id' }],
+          trigger_id: 'thread-trigger-cancel',
+        },
+        client: {
+          views: { open: vi.fn().mockResolvedValue({}) },
+        },
+      });
+
+      const updateCallsBefore = mockApp.client.chat.update.mock.calls.length;
+
+      // モーダルキャンセル
+      const viewCloseHandler = mockApp._viewHandlers.get('view_closed:cwk_reject_modal');
+      await viewCloseHandler({
+        ack: vi.fn(),
+        view: {
+          private_metadata: 'thread-cancel-id',
+        },
+      });
+
+      // 元メッセージが復元される
+      const updateCallsAfter = mockApp.client.chat.update.mock.calls.length;
+      expect(updateCallsAfter).toBe(updateCallsBefore + 1);
+
+      const restoreCall =
+        mockApp.client.chat.update.mock.calls[updateCallsAfter - 1][0];
+      expect(restoreCall.ts).toBe('cancel-msg-ts');
+
+      // 復元されたブロックにアクションボタンが含まれている
+      const actionsBlock = restoreCall.blocks.find(
+        (b: Block | KnownBlock) => b.type === 'actions',
+      );
+      expect(actionsBlock).toBeDefined();
+      expect(actionsBlock.elements).toHaveLength(2);
+      expect(actionsBlock.elements[0].action_id).toBe('cwk_approve');
+      expect(actionsBlock.elements[1].action_id).toBe('cwk_reject');
+
+      // chat.update に thread_ts が含まれないことを確認（ts で特定される）
+      expect(restoreCall.thread_ts).toBeUndefined();
+
+      // クリーンアップ: approve で解決
+      const approveHandler = mockApp._actionHandlers.get('cwk_approve');
+      await approveHandler({
+        ack: vi.fn(),
+        body: {
+          actions: [
+            {
+              value: 'thread-cancel-id',
+              text: { type: 'plain_text', text: '承認' },
+            },
+          ],
+        },
+      });
+
+      const result = await approvalPromise;
+      expect(result).toEqual({ action: 'approve' });
+    });
+
+    it('モーダルキャンセル後にスレッド内で再度承認操作ができる', async () => {
+      // スレッドを開始
+      mockApp.client.chat.postMessage.mockResolvedValueOnce({ ts: 'thread-root-ts-4' });
+      await backend.startThread('retry-thread-story', 'ストーリー開始');
+
+      // スレッド内に承認リクエストを投稿
+      mockApp.client.chat.postMessage.mockResolvedValueOnce({ ts: 'retry-msg-ts' });
+      const approvalPromise = backend.requestApproval(
+        'thread-retry-id',
+        'タスクを確認',
+        { approve: '承認', reject: 'やり直し' },
+        'retry-thread-story',
+      );
+
+      // reject → モーダルキャンセル
+      const rejectHandler = mockApp._actionHandlers.get('cwk_reject');
+      await rejectHandler({
+        ack: vi.fn(),
+        body: {
+          actions: [{ value: 'thread-retry-id' }],
+          trigger_id: 'thread-trigger-retry',
+        },
+        client: {
+          views: { open: vi.fn().mockResolvedValue({}) },
+        },
+      });
+
+      const viewCloseHandler = mockApp._viewHandlers.get('view_closed:cwk_reject_modal');
+      await viewCloseHandler({
+        ack: vi.fn(),
+        view: { private_metadata: 'thread-retry-id' },
+      });
+
+      // キャンセル後に再度 reject → モーダル送信で解決
+      await rejectHandler({
+        ack: vi.fn(),
+        body: {
+          actions: [{ value: 'thread-retry-id' }],
+          trigger_id: 'thread-trigger-retry-2',
+        },
+        client: {
+          views: { open: vi.fn().mockResolvedValue({}) },
+        },
+      });
+
+      const viewSubmitHandler = mockApp._viewHandlers.get('submit:cwk_reject_modal');
+      await viewSubmitHandler({
+        ack: vi.fn(),
+        view: {
+          private_metadata: 'thread-retry-id',
+          state: {
+            values: {
+              reason_block: {
+                reason_input: { value: '再レビューの結果やり直し' },
+              },
+            },
+          },
+        },
+      });
+
+      const result = await approvalPromise;
+      expect(result).toEqual({ action: 'reject', reason: '再レビューの結果やり直し' });
+    });
+  });
+
+  describe('スレッド内承認リクエストのメッセージ特定', () => {
+    it('スレッド内承認リクエストで chat.update が正しい ts を使用する', async () => {
+      // スレッドを開始
+      mockApp.client.chat.postMessage.mockResolvedValueOnce({ ts: 'thread-root-ts-5' });
+      await backend.startThread('pending-thread-story', 'ストーリー開始');
+
+      // スレッド内に承認リクエストを投稿
+      mockApp.client.chat.postMessage.mockResolvedValueOnce({ ts: 'pending-msg-ts' });
+      const approvalPromise = backend.requestApproval(
+        'thread-pending-id',
+        'テスト',
+        { approve: '承認', reject: '却下' },
+        'pending-thread-story',
+      );
+
+      // approve で解決しつつ、chat.update の呼び出しを検証
+      const approveHandler = mockApp._actionHandlers.get('cwk_approve');
+      await approveHandler({
+        ack: vi.fn(),
+        body: {
+          actions: [
+            {
+              value: 'thread-pending-id',
+              text: { type: 'plain_text', text: '承認' },
+            },
+          ],
+        },
+      });
+
+      const result = await approvalPromise;
+      expect(result).toEqual({ action: 'approve' });
+
+      // chat.update が正しい ts を使用している
+      expect(mockApp.client.chat.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ts: 'pending-msg-ts',
+        }),
+      );
+    });
+
+    it('スレッド外の承認リクエストでは thread_ts が postMessage に含まれない', async () => {
+      mockApp.client.chat.postMessage.mockResolvedValueOnce({ ts: 'no-thread-msg-ts' });
+      const approvalPromise = backend.requestApproval(
+        'no-thread-pending-id',
+        'テスト',
+        { approve: '承認', reject: '却下' },
+      );
+
+      // 承認リクエストに thread_ts が含まれないことを確認
+      const postCall = mockApp.client.chat.postMessage.mock.calls[0][0];
+      expect(postCall.thread_ts).toBeUndefined();
+
+      // クリーンアップ
+      const approveHandler = mockApp._actionHandlers.get('cwk_approve');
+      await approveHandler({
+        ack: vi.fn(),
+        body: {
+          actions: [
+            {
+              value: 'no-thread-pending-id',
+              text: { type: 'plain_text', text: '承認' },
+            },
+          ],
+        },
+      });
+
+      await approvalPromise;
     });
   });
 });
