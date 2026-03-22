@@ -9,6 +9,7 @@ import {
 export interface RecordedNotification {
   type: 'notify';
   message: string;
+  storySlug?: string;
   timestamp: Date;
 }
 
@@ -20,6 +21,7 @@ export interface RecordedApprovalRequest {
   id: string;
   message: string;
   buttons: { approve: string; reject: string };
+  storySlug?: string;
   response: ApprovalResult;
   timestamp: Date;
 }
@@ -66,10 +68,11 @@ export class FakeNotifier implements NotificationBackend {
     this.approvalQueue = [...(options?.approvalResponses ?? [])];
   }
 
-  async notify(message: string, _storySlug?: string): Promise<void> {
+  async notify(message: string, storySlug?: string): Promise<void> {
     const record: RecordedNotification = {
       type: 'notify',
       message,
+      storySlug,
       timestamp: new Date(),
     };
     this.events.push(record);
@@ -80,7 +83,7 @@ export class FakeNotifier implements NotificationBackend {
     id: string,
     message: string,
     buttons: { approve: string; reject: string },
-    _storySlug?: string,
+    storySlug?: string,
   ): Promise<ApprovalResult> {
     // キューから応答を取得。空ならデフォルト approve
     const response: ApprovalResult =
@@ -93,6 +96,7 @@ export class FakeNotifier implements NotificationBackend {
       id,
       message,
       buttons,
+      storySlug,
       response,
       timestamp: new Date(),
     };
@@ -104,6 +108,10 @@ export class FakeNotifier implements NotificationBackend {
 
   async startThread(storySlug: string, message: string): Promise<void> {
     this.threadStarts.push({ storySlug, message });
+    // 既にセッションが存在する場合は上書きしない（ThreadSessionManager と同じガード）
+    if (this.threadSessions.has(storySlug)) {
+      return;
+    }
     // fake thread_ts を生成してセッションに登録
     const fakeTs = `fake-thread-ts-${storySlug}-${Date.now()}`;
     this.threadSessions.set(storySlug, fakeTs);

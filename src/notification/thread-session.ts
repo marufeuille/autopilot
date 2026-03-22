@@ -21,7 +21,18 @@ export class ThreadSessionManager {
    * @param threadTs Slack スレッドの起点メッセージの timestamp
    */
   startSession(storySlug: string, threadTs: string): void {
+    // 既にセッションが存在する場合は上書きせず既存セッションを維持する
+    if (this.sessions.has(storySlug)) {
+      return;
+    }
     this.sessions.set(storySlug, threadTs);
+  }
+
+  /**
+   * アクティブなセッション数を返す
+   */
+  get size(): number {
+    return this.sessions.size;
   }
 
   /**
