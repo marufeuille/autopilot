@@ -69,14 +69,13 @@ describe('createNotificationBackend (factory)', () => {
     );
   });
 
-  it('NOTIFY_BACKEND=slack で SlackNotificationBackend が生成される', async () => {
+  it('NOTIFY_BACKEND=slack で ResilientNotificationBackend が生成される（Slackをラップ）', async () => {
     process.env.NOTIFY_BACKEND = 'slack';
-    const { createNotificationBackend } = await import('../index');
-    const { SlackNotificationBackend } = await import('../slack');
+    const { createNotificationBackend, ResilientNotificationBackend } = await import('../index');
 
     const backend = await createNotificationBackend();
 
-    expect(backend).toBeInstanceOf(SlackNotificationBackend);
+    expect(backend).toBeInstanceOf(ResilientNotificationBackend);
   });
 
   it('生成されたバックエンドが NotificationBackend インターフェースを満たす', async () => {

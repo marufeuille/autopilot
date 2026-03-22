@@ -20,6 +20,9 @@ vi.mock('../notification', () => ({
   generateApprovalId: vi.fn(
     (story: string, task: string) => `${story}--${task}--1`,
   ),
+  buildMergeApprovalMessage: vi.fn((ctx: any) => `マージ承認依頼: ${ctx.taskSlug}`),
+  buildReviewEscalationMessage: vi.fn((ctx: any) => `レビューエスカレーション: ${ctx.taskSlug}`),
+  buildCIEscalationMessage: vi.fn((ctx: any) => `CIエスカレーション: ${ctx.taskSlug}`),
 }));
 
 vi.mock('../git', () => ({
@@ -503,7 +506,7 @@ describe('runTask', () => {
     );
   });
 
-  it('セルフレビューでエスカレーション時、PRが作成されず完了確認メッセージにセルフレビュー未通過が含まれる', async () => {
+  it('セルフレビューでエスカレーション時、PRが作成されずエスカレーション通知が送信される', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
     const notifier = createMockNotifier('approve');
@@ -530,6 +533,11 @@ describe('runTask', () => {
       expect.stringContaining('self-review NG, skipping PR creation'),
     );
 
+    // レビューエスカレーション通知が送信されること
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('レビューエスカレーション'),
+    );
+
     // 完了承認のメッセージにセルフレビュー未通過が含まれること
     const approvalCalls = (notifier.requestApproval as ReturnType<typeof vi.fn>).mock.calls;
     const doneApprovalCall = approvalCalls.find(
@@ -541,7 +549,7 @@ describe('runTask', () => {
     consoleSpy.mockRestore();
   });
 
-  it('セルフレビュー通過時、PRが作成され完了確認メッセージにセルフレビュー通過が含まれる', async () => {
+  it('セルフレビュー通過時、PRが作成されCIパス後にマージ承認依頼が送信される', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
     const notifier = createMockNotifier('approve');
@@ -565,13 +573,12 @@ describe('runTask', () => {
       expect.any(Object),
     );
 
+    // CI成功 → マージ承認依頼が送信されること
     const approvalCalls = (notifier.requestApproval as ReturnType<typeof vi.fn>).mock.calls;
-    const doneApprovalCall = approvalCalls.find(
-      (call: unknown[]) => (call[1] as string).includes('タスク完了確認'),
+    const mergeApprovalCall = approvalCalls.find(
+      (call: unknown[]) => (call[1] as string).includes('マージ承認依頼'),
     );
-    expect(doneApprovalCall).toBeDefined();
-    expect(doneApprovalCall![1]).toContain('セルフレビュー通過');
-    expect(doneApprovalCall![1]).toContain('https://github.com/test/repo/pull/1');
+    expect(mergeApprovalCall).toBeDefined();
   });
 
   it('PR作成後にCIポーリングループが実行される', async () => {
@@ -592,13 +599,9 @@ describe('runTask', () => {
       'feature/task-01',
       task.content,
     );
-    // CI結果通知が送信されたことを確認
-    expect(notifier.notify).toHaveBeenCalledWith(
-      expect.stringContaining('CI結果'),
-    );
   });
 
-  it('CI成功時、完了確認メッセージにCI通過が含まれる', async () => {
+  it('CI成功時、マージ承認依頼が送信される', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
     const notifier = createMockNotifier('approve');
@@ -611,14 +614,15 @@ describe('runTask', () => {
     await runTask(task, story, notifier, repoPath);
 
     const approvalCalls = (notifier.requestApproval as ReturnType<typeof vi.fn>).mock.calls;
-    const doneApprovalCall = approvalCalls.find(
-      (call: unknown[]) => (call[1] as string).includes('タスク完了確認'),
+    const mergeApprovalCall = approvalCalls.find(
+      (call: unknown[]) => (call[1] as string).includes('マージ承認依頼'),
     );
-    expect(doneApprovalCall).toBeDefined();
-    expect(doneApprovalCall![1]).toContain('CI通過');
+    expect(mergeApprovalCall).toBeDefined();
+    // マージ承認のボタンラベルが正しいこと
+    expect(mergeApprovalCall![2]).toEqual({ approve: 'マージ承認', reject: '差し戻し' });
   });
 
-  it('CI失敗時、完了確認メッセージにCI未通過が含まれる', async () => {
+  it('CI失敗時、CIエスカレーション通知が送信され完了確認メッセージにCI未通過が含まれる', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
     const notifier = createMockNotifier('approve');
@@ -638,6 +642,11 @@ describe('runTask', () => {
     });
 
     await runTask(task, story, notifier, repoPath);
+
+    // CIエスカレーション通知が送信されること
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('CIエスカレーション'),
+    );
 
     const approvalCalls = (notifier.requestApproval as ReturnType<typeof vi.fn>).mock.calls;
     const doneApprovalCall = approvalCalls.find(

@@ -6,13 +6,21 @@
  * - "slack": Slack バックエンド
  * - 未設定: デフォルトは "local"
  */
-export { NotificationBackend, ApprovalResult } from './types';
+export { NotificationBackend, ApprovalResult, NotificationEventType, NotificationContext } from './types';
 export { LocalNotificationBackend } from './local';
 export { SlackNotificationBackend } from './slack';
 export { generateApprovalId } from './approval-id';
+export { ResilientNotificationBackend, ResilientOptions } from './resilient';
+export {
+  buildNotificationMessage,
+  buildMergeApprovalMessage,
+  buildReviewEscalationMessage,
+  buildCIEscalationMessage,
+} from './message-builder';
 
 import { NotificationBackend } from './types';
 import { LocalNotificationBackend } from './local';
+import { ResilientNotificationBackend } from './resilient';
 
 /**
  * 環境変数 NOTIFY_BACKEND に基づいて適切な通知バックエンドを生成する。
@@ -39,7 +47,9 @@ export async function createNotificationBackend(): Promise<NotificationBackend> 
       await slackApp.start();
       console.log('[slack] bot started (Socket Mode)');
 
-      return new SlackNotificationBackend(slackApp);
+      const slackBackend = new SlackNotificationBackend(slackApp);
+      // Slack バックエンドをリジリエントラッパーで包む（失敗時はローカルにフォールバック）
+      return new ResilientNotificationBackend(slackBackend);
     }
 
     default:
