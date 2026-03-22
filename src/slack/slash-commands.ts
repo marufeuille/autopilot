@@ -1,4 +1,5 @@
 import type { App } from '@slack/bolt';
+import { logInfo, logWarn, logError } from '../logger';
 
 /**
  * パースされたスラッシュコマンドの構造
@@ -116,6 +117,13 @@ export function clearSubcommands(): void {
 export function registerSlashCommands(app: App): void {
   app.command('/ap', async ({ command, ack, respond }) => {
     const parsed = parseCommand(command.text);
+    const userId = command.user_id;
+
+    logInfo('スラッシュコマンド受信', {
+      command: parsed.subcommand || '(none)',
+      userId,
+      phase: 'slash_command_received',
+    });
 
     // サブコマンドなし → ヘルプメッセージを即時返答
     if (!parsed.subcommand) {
@@ -128,6 +136,11 @@ export function registerSlashCommands(app: App): void {
     if (!handler) {
       const sanitized = sanitizeForMrkdwn(parsed.subcommand);
       const available = getRegisteredSubcommands().join(', ');
+      logWarn('不明なサブコマンド', {
+        command: parsed.subcommand,
+        userId,
+        phase: 'unknown_subcommand',
+      });
       await ack(
         `⚠️ 不明なサブコマンド: \`${sanitized}\`\n\n` +
         `利用可能なサブコマンド: ${available}\n` +
@@ -139,8 +152,22 @@ export function registerSlashCommands(app: App): void {
     // 登録済みサブコマンド → ack() 後にハンドラーへディスパッチ
     await ack();
 
-    await handler(parsed.args, async (msg: string) => {
-      await respond(msg);
+    logInfo('サブコマンドにディスパッチ', {
+      command: parsed.subcommand,
+      userId,
+      phase: 'dispatch',
     });
+
+    try {
+      await handler(parsed.args, async (msg: string) => {
+        await respond(msg);
+      });
+    } catch (error) {
+      logError('サブコマンドハンドラーでエラーが発生', {
+        command: parsed.subcommand,
+        userId,
+        phase: 'handler_error',
+      }, error);
+    }
   });
 }
