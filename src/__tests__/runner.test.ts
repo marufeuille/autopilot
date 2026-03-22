@@ -22,6 +22,10 @@ vi.mock('../notification', () => ({
   ),
 }));
 
+vi.mock('../git', () => ({
+  syncMainBranch: vi.fn().mockResolvedValue(undefined),
+}));
+
 // Claude agent SDK をモック（runTask 内で使われる）
 const mockQuery = vi.fn(() => ({
   [Symbol.asyncIterator]: () => ({
@@ -40,11 +44,13 @@ vi.mock('child_process', () => ({
 import { getStoryTasks } from '../vault/reader';
 import { updateFileStatus } from '../vault/writer';
 import { decomposeTasks } from '../decomposer';
+import { syncMainBranch } from '../git';
 import { runStory, runTask } from '../runner';
 
 const mockedGetStoryTasks = vi.mocked(getStoryTasks);
 const mockedUpdateFileStatus = vi.mocked(updateFileStatus);
 const mockedDecomposeTasks = vi.mocked(decomposeTasks);
+const mockedSyncMainBranch = vi.mocked(syncMainBranch);
 
 function createStory(overrides: Partial<StoryFile> = {}): StoryFile {
   return {
@@ -334,6 +340,51 @@ describe('runTask', () => {
     expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Doing');
     expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Failed');
     // Done には更新されない
+    expect(mockedUpdateFileStatus).not.toHaveBeenCalledWith(task.filePath, 'Done');
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('正常実行時に syncMainBranch が呼ばれてから Doing に遷移する', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    const callOrder: string[] = [];
+    mockedSyncMainBranch.mockImplementation(async () => {
+      callOrder.push('syncMainBranch');
+    });
+    mockedUpdateFileStatus.mockImplementation((_path, status) => {
+      callOrder.push(`updateFileStatus:${status}`);
+    });
+
+    await runTask(task, story, notifier, repoPath);
+
+    // syncMainBranch が repoPath で呼ばれること
+    expect(mockedSyncMainBranch).toHaveBeenCalledWith(repoPath);
+    // syncMainBranch → Doing → Done の順で呼ばれること
+    expect(callOrder).toEqual([
+      'syncMainBranch',
+      'updateFileStatus:Doing',
+      'updateFileStatus:Done',
+    ]);
+  });
+
+  it('syncMainBranch が失敗した場合、タスクが Failed に更新される', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    mockedSyncMainBranch.mockRejectedValueOnce(new Error('Failed to checkout main'));
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(runTask(task, story, notifier, repoPath)).rejects.toThrow('Failed to checkout main');
+
+    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Failed');
+    expect(mockedUpdateFileStatus).not.toHaveBeenCalledWith(task.filePath, 'Doing');
     expect(mockedUpdateFileStatus).not.toHaveBeenCalledWith(task.filePath, 'Done');
 
     consoleErrorSpy.mockRestore();
