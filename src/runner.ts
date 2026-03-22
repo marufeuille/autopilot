@@ -267,15 +267,22 @@ export async function runTask(
             if (mergeResult.action === 'approve') {
               // マージ承認後に実際にPRをマージする
               console.log(`[runner] merge approved, executing merge: ${prUrl}`);
+              // マージ処理中通知（ローディング表示）
+              await notifier.notify(
+                `⏳ *マージ処理中*: \`${task.slug}\`\n*PR*: ${prUrl}\nマージを実行しています...`,
+                story.slug,
+              );
+              let mergeSucceeded = false;
               try {
                 const result = executeMerge(prUrl, repoPath, d, { skipValidation: false });
+                mergeSucceeded = true;
                 console.log(`[runner] PR merged successfully: ${prUrl}`);
                 if (result.output) {
                   console.log(`[runner] merge output: ${result.output}`);
                 }
                 // マージ成功通知をユーザーに送信
                 await notifier.notify(
-                  `✅ *マージ完了*: \`${task.slug}\`\n*PR*: ${prUrl}`,
+                  `✅ *マージ完了*: \`${task.slug}\`\n*PR*: ${prUrl}\nステータスが \`merged\` に更新されました`,
                   story.slug,
                 );
               } catch (mergeError) {
@@ -295,14 +302,21 @@ export async function runTask(
                     story.slug,
                   );
                 }
-                throw mergeError;
+                // マージ失敗時は throw せずにループを継続し、
+                // タスク完了確認で再試行の機会を提供する
+                console.log(`[runner] merge failed, continuing to completion approval for retry opportunity: ${task.slug}`);
               }
-              break;
+              if (mergeSucceeded) {
+                break;
+              }
+              // マージ失敗時はタスク完了確認フローへ fall through し、
+              // ユーザーにやり直しの機会を提供する
+            } else {
+              // 差し戻しの場合はやり直しループへ
+              prompt = `前回の実装を修正してください。タスク: ${task.slug}\n\n${task.content}\n\n作業ディレクトリ: ${repoPath}\n\n## 修正依頼\n${mergeResult.reason}\n\n上記の修正依頼を踏まえて、完了条件を再確認しながら修正してください。`;
+              console.log(`[runner] merge rejected, retrying task: ${task.slug}`);
+              continue;
             }
-            // 差し戻しの場合はやり直しループへ
-            prompt = `前回の実装を修正してください。タスク: ${task.slug}\n\n${task.content}\n\n作業ディレクトリ: ${repoPath}\n\n## 修正依頼\n${mergeResult.reason}\n\n上記の修正依頼を踏まえて、完了条件を再確認しながら修正してください。`;
-            console.log(`[runner] merge rejected, retrying task: ${task.slug}`);
-            continue;
           } else if (
             ciPollingResult.finalStatus === 'max_retries_exceeded' ||
             ciPollingResult.finalStatus === 'failure' ||
