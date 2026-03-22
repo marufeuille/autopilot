@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildMergeApprovalMessage,
+  buildMergeCompletedMessage,
+  buildMergeBlockedMessage,
   buildReviewEscalationMessage,
   buildCIEscalationMessage,
   buildNotificationMessage,
@@ -20,15 +22,58 @@ describe('buildMergeApprovalMessage', () => {
     expect(msg).toContain('my-story');
   });
 
-  it('マージ承認依頼のヘッダーが含まれる', () => {
+  it('マージ実行依頼のヘッダーが含まれる', () => {
     const msg = buildMergeApprovalMessage(baseCtx);
-    expect(msg).toContain('マージ承認依頼');
+    expect(msg).toContain('マージ実行依頼');
   });
 
-  it('セルフレビュー通過・CI通過が含まれる', () => {
+  it('mergeConditions未設定時はセルフレビュー通過・CI通過が含まれる（後方互換）', () => {
     const msg = buildMergeApprovalMessage(baseCtx);
     expect(msg).toContain('✅ セルフレビュー通過');
     expect(msg).toContain('✅ CI通過');
+  });
+
+  it('mergeConditions設定時は各条件の充足状況が表示される', () => {
+    const msg = buildMergeApprovalMessage({
+      ...baseCtx,
+      mergeConditions: [
+        { passed: true, label: 'セルフレビュー通過' },
+        { passed: true, label: 'CI通過' },
+        { passed: true, label: 'PRがオープン状態' },
+        { passed: false, label: '承認数が不足しています' },
+      ],
+      mergeReady: false,
+    });
+    expect(msg).toContain('✅ セルフレビュー通過');
+    expect(msg).toContain('✅ CI通過');
+    expect(msg).toContain('✅ PRがオープン状態');
+    expect(msg).toContain('❌ 承認数が不足しています');
+  });
+
+  it('mergeReady=false の場合にマージ不可メッセージが表示される', () => {
+    const msg = buildMergeApprovalMessage({
+      ...baseCtx,
+      mergeConditions: [
+        { passed: false, label: 'CI未完了' },
+      ],
+      mergeReady: false,
+    });
+    expect(msg).toContain('マージ条件が未充足');
+    expect(msg).not.toContain('マージを実行してよろしいですか');
+  });
+
+  it('mergeReady=true の場合にマージ実行の説明と確認メッセージが表示される', () => {
+    const msg = buildMergeApprovalMessage({
+      ...baseCtx,
+      mergeConditions: [
+        { passed: true, label: 'セルフレビュー通過' },
+        { passed: true, label: 'CI通過' },
+      ],
+      mergeReady: true,
+    });
+    expect(msg).toContain('マージ実行');
+    expect(msg).toContain('レビュー承認とは別の操作');
+    expect(msg).toContain('マージを実行してよろしいですか');
   });
 
   it('PR URLが含まれる', () => {
@@ -55,10 +100,31 @@ describe('buildMergeApprovalMessage', () => {
     });
     expect(msg).toContain('https://github.com/org/repo/actions/runs/123');
   });
+});
 
-  it('マージ確認の問いかけが含まれる', () => {
-    const msg = buildMergeApprovalMessage(baseCtx);
-    expect(msg).toContain('マージしてよろしいですか');
+describe('buildMergeCompletedMessage', () => {
+  it('マージ完了メッセージにタスクslugとPR URLが含まれる', () => {
+    const msg = buildMergeCompletedMessage('my-task-01', 'https://github.com/org/repo/pull/42');
+    expect(msg).toContain('マージ完了');
+    expect(msg).toContain('my-task-01');
+    expect(msg).toContain('https://github.com/org/repo/pull/42');
+    expect(msg).toContain('merged');
+  });
+});
+
+describe('buildMergeBlockedMessage', () => {
+  it('マージ不可メッセージに条件一覧が表示される', () => {
+    const msg = buildMergeBlockedMessage('my-task-01', 'https://github.com/org/repo/pull/42', [
+      { passed: true, label: 'セルフレビュー通過' },
+      { passed: false, label: 'CIが未完了です' },
+      { passed: false, label: '承認数が不足しています' },
+    ]);
+    expect(msg).toContain('マージ不可');
+    expect(msg).toContain('my-task-01');
+    expect(msg).toContain('✅ セルフレビュー通過');
+    expect(msg).toContain('❌ CIが未完了です');
+    expect(msg).toContain('❌ 承認数が不足しています');
+    expect(msg).toContain('再度マージを実行してください');
   });
 });
 
@@ -146,13 +212,13 @@ describe('buildCIEscalationMessage', () => {
 });
 
 describe('buildNotificationMessage', () => {
-  it('merge_approval イベントでマージ承認メッセージが生成される', () => {
+  it('merge_approval イベントでマージ実行依頼メッセージが生成される', () => {
     const msg = buildNotificationMessage({
       eventType: 'merge_approval',
       taskSlug: 'task-01',
       storySlug: 'story-01',
     });
-    expect(msg).toContain('マージ承認依頼');
+    expect(msg).toContain('マージ実行依頼');
   });
 
   it('review_escalation イベントでレビューエスカレーションメッセージが生成される', () => {

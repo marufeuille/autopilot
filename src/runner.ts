@@ -7,16 +7,25 @@ import {
   NotificationBackend,
   generateApprovalId,
   buildMergeApprovalMessage,
+  buildMergeCompletedMessage,
+  buildMergeBlockedMessage,
   buildReviewEscalationMessage,
   buildCIEscalationMessage,
   buildThreadOriginMessage,
   NotificationContext,
+  MergeConditionItem,
 } from './notification';
 import { GitSyncError } from './git';
 import { formatReviewLoopResult, ReviewLoopResult } from './review';
 import { formatCIPollingResult, CIPollingResult } from './ci';
 import { RunnerDeps, createDefaultRunnerDeps } from './runner-deps';
-import { executeMerge, MergeError, formatMergeErrorMessage } from './merge';
+import {
+  executeMerge,
+  MergeError,
+  formatMergeErrorMessage,
+  fetchPullRequestStatus,
+  validateMergeConditions,
+} from './merge';
 
 export { RunnerDeps, createDefaultRunnerDeps } from './runner-deps';
 
@@ -246,77 +255,139 @@ export async function runTask(
           console.log(`[runner] CI polling complete: status=${ciPollingResult.finalStatus}, attempts=${ciPollingResult.attempts}`);
 
           if (ciPollingResult.finalStatus === 'success') {
-            // CI通過 → マージ承認依頼を送信
-            console.log(`[runner] CI passed, sending merge approval request: ${task.slug}, prUrl=${prUrl}`);
+            // CI通過 → マージ条件を事前検証してからマージ実行依頼を送信
+            console.log(`[runner] CI passed, pre-validating merge conditions: ${task.slug}, prUrl=${prUrl}`);
+
+            // マージ条件の事前検証
+            const mergeConditions: MergeConditionItem[] = [
+              { passed: true, label: 'セルフレビュー通過' },
+              { passed: true, label: 'CI通過' },
+            ];
+            let mergeReady = true;
+            try {
+              const prStatus = fetchPullRequestStatus(prUrl, repoPath, d);
+              const validation = validateMergeConditions(prStatus);
+
+              // PR状態
+              mergeConditions.push({
+                passed: prStatus.state === 'OPEN',
+                label: prStatus.state === 'OPEN' ? 'PRがオープン状態' : `PRがオープン状態ではありません（現在: ${prStatus.state}）`,
+              });
+
+              // マージコンフリクト
+              mergeConditions.push({
+                passed: prStatus.mergeable !== 'CONFLICTING',
+                label: prStatus.mergeable === 'CONFLICTING' ? 'マージコンフリクトが発生しています' : 'コンフリクトなし',
+              });
+
+              // レビュー承認
+              const reviewOk = prStatus.reviewDecision !== 'CHANGES_REQUESTED' && prStatus.reviewDecision !== 'REVIEW_REQUIRED';
+              mergeConditions.push({
+                passed: reviewOk,
+                label: reviewOk ? 'レビュー承認済み' : (prStatus.reviewDecision === 'CHANGES_REQUESTED' ? '変更がリクエストされています' : '承認数が不足しています'),
+              });
+
+              mergeReady = validation.mergeable;
+            } catch (preValidationError) {
+              console.warn(`[runner] pre-validation failed, proceeding with merge attempt: ${task.slug}`, preValidationError);
+              // 事前検証に失敗しても、マージ自体は試みる（executeMerge 内で再度バリデーションされる）
+            }
+
             const mergeCtx: NotificationContext = {
               ...baseCtx,
               eventType: 'merge_approval',
               prUrl,
               ciSummary: ciMessage,
               ciRunUrl,
+              mergeConditions,
+              mergeReady,
             };
             const mergeMessage = buildMergeApprovalMessage(mergeCtx);
             const mergeApprovalId = generateApprovalId(story.slug, `${task.slug}-merge`);
-            const mergeResult = await notifier.requestApproval(
-              mergeApprovalId,
-              mergeMessage,
-              { approve: 'マージ承認', reject: '差し戻し' },
-              story.slug,
-            );
-            console.log(`[runner] merge approval result: action=${mergeResult.action}, task=${task.slug}`);
-            if (mergeResult.action === 'approve') {
-              // マージ承認後に実際にPRをマージする
-              console.log(`[runner] merge approved, executing merge: ${prUrl}`);
-              // マージ処理中通知（ローディング表示）
-              await notifier.notify(
-                `⏳ *マージ処理中*: \`${task.slug}\`\n*PR*: ${prUrl}\nマージを実行しています...`,
+
+            if (!mergeReady) {
+              // マージ条件未充足: ブロックメッセージを表示し、差し戻しのみ受け付ける
+              console.log(`[runner] merge conditions not met, showing blocked message: ${task.slug}`);
+              const blockedMessage = buildMergeBlockedMessage(task.slug, prUrl, mergeConditions);
+              await notifier.notify(blockedMessage, story.slug);
+              // マージ不可時は条件確認か差し戻しを選択させる
+              const blockedResult = await notifier.requestApproval(
+                mergeApprovalId,
+                mergeMessage,
+                { approve: '条件を再確認してマージ', reject: '差し戻し' },
                 story.slug,
               );
-              let mergeSucceeded = false;
-              try {
-                const result = executeMerge(prUrl, repoPath, d, { skipValidation: false });
-                mergeSucceeded = true;
-                console.log(`[runner] PR merged successfully: ${prUrl}`);
-                if (result.output) {
-                  console.log(`[runner] merge output: ${result.output}`);
-                }
-                // マージ成功通知をユーザーに送信
+              if (blockedResult.action === 'reject') {
+                prompt = `前回の実装を修正してください。タスク: ${task.slug}\n\n${task.content}\n\n作業ディレクトリ: ${repoPath}\n\n## 修正依頼\n${blockedResult.reason}\n\n上記の修正依頼を踏まえて、完了条件を再確認しながら修正してください。`;
+                console.log(`[runner] merge blocked and rejected, retrying task: ${task.slug}`);
+                continue;
+              }
+              // 「条件を再確認してマージ」→ executeMerge で再度バリデーションされる
+              console.log(`[runner] user requested merge despite blocked conditions, attempting merge: ${task.slug}`);
+            } else {
+              // マージ条件充足: マージ実行ボタンを表示
+              console.log(`[runner] merge conditions met, sending merge execution request: ${task.slug}, prUrl=${prUrl}`);
+              const mergeResult = await notifier.requestApproval(
+                mergeApprovalId,
+                mergeMessage,
+                { approve: 'マージ実行', reject: '差し戻し' },
+                story.slug,
+              );
+              console.log(`[runner] merge execution result: action=${mergeResult.action}, task=${task.slug}`);
+              if (mergeResult.action === 'reject') {
+                // 差し戻しの場合はやり直しループへ
+                prompt = `前回の実装を修正してください。タスク: ${task.slug}\n\n${task.content}\n\n作業ディレクトリ: ${repoPath}\n\n## 修正依頼\n${mergeResult.reason}\n\n上記の修正依頼を踏まえて、完了条件を再確認しながら修正してください。`;
+                console.log(`[runner] merge rejected, retrying task: ${task.slug}`);
+                continue;
+              }
+            }
+
+            // マージ実行
+            console.log(`[runner] executing merge: ${prUrl}`);
+            // マージ処理中通知（ローディング表示）
+            await notifier.notify(
+              `⏳ *マージ処理中*: \`${task.slug}\`\n*PR*: ${prUrl}\nマージを実行しています...`,
+              story.slug,
+            );
+            let mergeSucceeded = false;
+            try {
+              const result = executeMerge(prUrl, repoPath, d, { skipValidation: false });
+              mergeSucceeded = true;
+              console.log(`[runner] PR merged successfully: ${prUrl}`);
+              if (result.output) {
+                console.log(`[runner] merge output: ${result.output}`);
+              }
+              // マージ完了通知をユーザーに送信（ステータス: merged）
+              await notifier.notify(
+                buildMergeCompletedMessage(task.slug, prUrl),
+                story.slug,
+              );
+            } catch (mergeError) {
+              if (mergeError instanceof MergeError) {
+                const formattedMessage = formatMergeErrorMessage(mergeError);
+                console.error(`[runner] PR merge failed [${mergeError.code}] (${mergeError.statusCode}): ${prUrl}`, mergeError.reason);
+                // 構造化されたエラー情報をユーザーに送信
                 await notifier.notify(
-                  `✅ *マージ完了*: \`${task.slug}\`\n*PR*: ${prUrl}\nステータスが \`merged\` に更新されました`,
+                  `❌ *マージ失敗*: \`${task.slug}\`\n*PR*: ${prUrl}\n*エラーコード*: \`${mergeError.code}\`\n*原因*: ${formattedMessage}`,
                   story.slug,
                 );
-              } catch (mergeError) {
-                if (mergeError instanceof MergeError) {
-                  const formattedMessage = formatMergeErrorMessage(mergeError);
-                  console.error(`[runner] PR merge failed [${mergeError.code}] (${mergeError.statusCode}): ${prUrl}`, mergeError.reason);
-                  // 構造化されたエラー情報をユーザーに送信
-                  await notifier.notify(
-                    `❌ *マージ失敗*: \`${task.slug}\`\n*PR*: ${prUrl}\n*エラーコード*: \`${mergeError.code}\`\n*原因*: ${formattedMessage}`,
-                    story.slug,
-                  );
-                } else {
-                  const errorMessage = mergeError instanceof Error ? mergeError.message : String(mergeError);
-                  console.error(`[runner] PR merge failed: ${prUrl}`, mergeError);
-                  await notifier.notify(
-                    `❌ *マージ失敗*: \`${task.slug}\`\n*PR*: ${prUrl}\n*原因*: ${errorMessage}`,
-                    story.slug,
-                  );
-                }
-                // マージ失敗時は throw せずにループを継続し、
-                // タスク完了確認で再試行の機会を提供する
-                console.log(`[runner] merge failed, continuing to completion approval for retry opportunity: ${task.slug}`);
+              } else {
+                const errorMessage = mergeError instanceof Error ? mergeError.message : String(mergeError);
+                console.error(`[runner] PR merge failed: ${prUrl}`, mergeError);
+                await notifier.notify(
+                  `❌ *マージ失敗*: \`${task.slug}\`\n*PR*: ${prUrl}\n*原因*: ${errorMessage}`,
+                  story.slug,
+                );
               }
-              if (mergeSucceeded) {
-                break;
-              }
-              // マージ失敗時はタスク完了確認フローへ fall through し、
-              // ユーザーにやり直しの機会を提供する
-            } else {
-              // 差し戻しの場合はやり直しループへ
-              prompt = `前回の実装を修正してください。タスク: ${task.slug}\n\n${task.content}\n\n作業ディレクトリ: ${repoPath}\n\n## 修正依頼\n${mergeResult.reason}\n\n上記の修正依頼を踏まえて、完了条件を再確認しながら修正してください。`;
-              console.log(`[runner] merge rejected, retrying task: ${task.slug}`);
-              continue;
+              // マージ失敗時は throw せずにループを継続し、
+              // タスク完了確認で再試行の機会を提供する
+              console.log(`[runner] merge failed, continuing to completion approval for retry opportunity: ${task.slug}`);
             }
+            if (mergeSucceeded) {
+              break;
+            }
+            // マージ失敗時はタスク完了確認フローへ fall through し、
+            // ユーザーにやり直しの機会を提供する
           } else if (
             ciPollingResult.finalStatus === 'max_retries_exceeded' ||
             ciPollingResult.finalStatus === 'failure' ||

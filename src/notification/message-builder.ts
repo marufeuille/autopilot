@@ -37,14 +37,15 @@ export function buildThreadOriginMessage(storySlug: string, tasks: TaskFile[]): 
 }
 
 /**
- * マージ承認依頼メッセージを生成する
+ * マージ実行依頼メッセージを生成する
  *
- * CI通過後に人間へマージ承認を依頼する際のメッセージ。
- * PR URL・レビューサマリー・CI結果を含む。
+ * CI通過後に人間へマージ実行を依頼する際のメッセージ。
+ * 「承認（レビューApprove）」と「マージ実行」が別操作であることを明示する。
+ * PR URL・レビューサマリー・CI結果・マージ条件の充足状況を含む。
  */
 export function buildMergeApprovalMessage(ctx: NotificationContext): string {
   const lines: string[] = [
-    '🚀 *マージ承認依頼*',
+    '🚀 *マージ実行依頼*',
     '',
     `*タスク*: \`${ctx.taskSlug}\``,
     `*ストーリー*: \`${ctx.storySlug}\``,
@@ -54,9 +55,19 @@ export function buildMergeApprovalMessage(ctx: NotificationContext): string {
     lines.push(`*PR*: ${ctx.prUrl}`);
   }
 
+  // マージ条件の詳細表示
   lines.push('');
-  lines.push('✅ セルフレビュー通過');
-  lines.push('✅ CI通過');
+  lines.push('*マージ条件:*');
+  if (ctx.mergeConditions && ctx.mergeConditions.length > 0) {
+    for (const condition of ctx.mergeConditions) {
+      const icon = condition.passed ? '✅' : '❌';
+      lines.push(`${icon} ${condition.label}`);
+    }
+  } else {
+    // mergeConditions が未設定の場合は従来互換（セルフレビュー・CI通過を表示）
+    lines.push('✅ セルフレビュー通過');
+    lines.push('✅ CI通過');
+  }
 
   if (ctx.reviewSummary) {
     lines.push('');
@@ -70,7 +81,59 @@ export function buildMergeApprovalMessage(ctx: NotificationContext): string {
   }
 
   lines.push('');
-  lines.push('マージしてよろしいですか？');
+  if (ctx.mergeReady === false) {
+    lines.push('⚠️ マージ条件が未充足のため、マージを実行できません。条件を確認してください。');
+  } else {
+    lines.push('ℹ️ このボタンを押すとPRが *マージ実行* されます（レビュー承認とは別の操作です）');
+    lines.push('マージを実行してよろしいですか？');
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * マージ完了メッセージを生成する
+ *
+ * マージ成功後にステータスが「merged」に更新されたことをユーザーに通知する。
+ */
+export function buildMergeCompletedMessage(taskSlug: string, prUrl: string): string {
+  return [
+    '✅ *マージ完了*',
+    '',
+    `*タスク*: \`${taskSlug}\``,
+    `*PR*: ${prUrl}`,
+    `*ステータス*: \`merged\``,
+    '',
+    'PRのマージが完了し、ステータスが `merged` に更新されました。',
+  ].join('\n');
+}
+
+/**
+ * マージブロックメッセージを生成する
+ *
+ * マージ条件未充足時にユーザーに具体的な理由を表示する。
+ */
+export function buildMergeBlockedMessage(
+  taskSlug: string,
+  prUrl: string,
+  conditions: { passed: boolean; label: string }[],
+): string {
+  const lines: string[] = [
+    '🚫 *マージ不可*',
+    '',
+    `*タスク*: \`${taskSlug}\``,
+    `*PR*: ${prUrl}`,
+    '',
+    '*マージ条件:*',
+  ];
+
+  for (const condition of conditions) {
+    const icon = condition.passed ? '✅' : '❌';
+    lines.push(`${icon} ${condition.label}`);
+  }
+
+  lines.push('');
+  lines.push('上記の条件を解消した後、再度マージを実行してください。');
 
   return lines.join('\n');
 }
