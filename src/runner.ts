@@ -1,4 +1,7 @@
 import { execSync } from 'child_process';
+import { writeFileSync, unlinkSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { StoryFile, TaskFile, TaskStatus, getStoryTasks } from './vault/reader';
 import { updateFileStatus, createTaskFile, TaskDraft } from './vault/writer';
@@ -108,7 +111,11 @@ export function createPullRequest(
   const reviewSummary = formatReviewSummaryForPR(reviewLoopResult);
   const body = `## 概要\n\nタスク: ${task.slug}\nストーリー: ${story.slug}\n\n${task.content}\n\n${reviewSummary}`;
 
+  const tmpFile = join(tmpdir(), `autopilot-pr-body-${Date.now()}.md`);
   try {
+    // 一時ファイルにbodyを書き出し
+    writeFileSync(tmpFile, body, 'utf-8');
+
     // リモートにブランチをプッシュ
     execSync(`git push -u origin ${branch}`, {
       cwd: repoPath,
@@ -116,9 +123,9 @@ export function createPullRequest(
       stdio: 'pipe',
     });
 
-    // PR作成
+    // PR作成（--body-file で一時ファイル経由で渡す）
     const prUrl = execSync(
-      `gh pr create --base main --head ${branch} --title "${task.slug}" --body ${JSON.stringify(body)}`,
+      `gh pr create --base main --head ${branch} --title "${task.slug}" --body-file ${tmpFile}`,
       {
         cwd: repoPath,
         encoding: 'utf-8',
@@ -139,6 +146,13 @@ export function createPullRequest(
       }).trim();
     } catch {
       return '';
+    }
+  } finally {
+    // 一時ファイルを確実に削除
+    try {
+      unlinkSync(tmpFile);
+    } catch {
+      // 削除失敗は無視（既に存在しない場合など）
     }
   }
 }
