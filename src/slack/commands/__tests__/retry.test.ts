@@ -17,6 +17,7 @@ vi.mock('../../../vault/writer', () => ({
 vi.mock('../../../config', () => ({
   config: { watchProject: 'test-project', vaultPath: '/vault' },
   vaultProjectPath: vi.fn(() => '/vault/Projects/test-project'),
+  vaultStoriesPath: vi.fn(() => '/vault/Projects/test-project/stories'),
 }));
 
 import { glob } from 'glob';
@@ -187,11 +188,43 @@ describe('handleRetry', () => {
       '/vault/Projects/test-project/tasks/my-story/my-story-01-task.md',
       'Todo',
     );
+    expect(mockUpdateFileStatus).toHaveBeenCalledWith(
+      '/vault/Projects/test-project/stories/my-story.md',
+      'Doing',
+    );
+    expect(mockUpdateFileStatus).toHaveBeenCalledTimes(2);
     expect(respond).toHaveBeenCalledTimes(1);
     const msg = respond.mock.calls[0][0] as string;
     expect(msg).toContain('Todo');
     expect(msg).toContain('my-story-01-task');
-    expect(msg).toContain('ファイルウォッチャー');
+    expect(msg).toContain('再実行をトリガーしました');
+    expect(msg).toContain('my-story');
+  });
+
+  it('ストーリーファイル更新失敗時にタスクステータスをロールバックする', async () => {
+    mockGlob.mockResolvedValue([
+      '/vault/Projects/test-project/tasks/my-story',
+    ] as never);
+    mockGetStoryTasks.mockResolvedValue([
+      makeTask('my-story', 'my-story-01-task', 'Failed'),
+    ]);
+    // 1回目(タスク→Todo)は成功、2回目(ストーリー→Doing)は失敗、3回目(タスク→Failedロールバック)は成功
+    mockUpdateFileStatus
+      .mockResolvedValueOnce(undefined as never)
+      .mockRejectedValueOnce(new Error('story file not found'))
+      .mockResolvedValueOnce(undefined as never);
+
+    await handleRetry(['my-story-01-task'], respond);
+
+    // ロールバックが呼ばれていること
+    expect(mockUpdateFileStatus).toHaveBeenCalledWith(
+      '/vault/Projects/test-project/tasks/my-story/my-story-01-task.md',
+      'Failed',
+    );
+    expect(respond).toHaveBeenCalledTimes(1);
+    const msg = respond.mock.calls[0][0] as string;
+    expect(msg).toContain('エラー');
+    expect(msg).toContain('story file not found');
   });
 
   it('updateFileStatusが失敗した場合、エラーメッセージを返す', async () => {

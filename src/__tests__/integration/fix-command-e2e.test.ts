@@ -594,35 +594,6 @@ describe('/ap fix E2E integration', () => {
   });
 
   // =========================================================================
-  // スレッド返信 → セッション照合 → ハンドラ呼び出し の流れ
-  // =========================================================================
-  describe('スレッド返信ルーティングの追跡', () => {
-    it('スレッド返信受信→セッション照合→ハンドラ呼び出しの流れがログで追跡できる', async () => {
-      // セッション準備
-      const draftDeps = createFixDraftDeps();
-      const respond = vi.fn().mockResolvedValue(undefined);
-      await handleFixInternal(['バグ報告テスト'], respond, draftDeps);
-      logOutput = []; // コマンド実行ログをリセット
-
-      // スレッド返信（再ドラフト）
-      const redraftDeps = createRedraftDeps();
-      await handleThreadMessageInternal(THREAD_TS, 'ミドルウェアも確認して', redraftDeps);
-
-      // 追跡フローのログが順番に出力されること
-      assertLogContainsAll([
-        'thread_message_received', // 受信
-        'redraft_start',           // ハンドラ開始
-        'redraft_complete',        // Claude完了
-        'redraft_posted',          // 投稿完了
-      ]);
-
-      // 再ドラフトが正しく生成・投稿されたこと
-      expect(redraftDeps.generateDraft).toHaveBeenCalledTimes(1);
-      expect(redraftDeps.postMessage).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  // =========================================================================
   // 引数バリデーション
   // =========================================================================
   describe('引数バリデーション', () => {

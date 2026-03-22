@@ -324,6 +324,19 @@ describe('handleFixApproveInternal', () => {
     expect(content).toContain('fix: Final Analysis');
     expect(content).toContain('最終版分析');
   });
+
+  it('userIdが未指定でも正常に動作する', async () => {
+    const session = makeSession();
+    interactiveSessionManager.startSession(session);
+    const deps = createMockDeps();
+
+    // userId を省略して呼び出し
+    await handleFixApproveInternal(threadTs, messageTs, deps);
+
+    expect(deps.writeFixStoryToVault).toHaveBeenCalledTimes(1);
+    expect(deps.updateMessage).toHaveBeenCalledTimes(1);
+    expect(deps.postMessage).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('handleFixCancelInternal', () => {
@@ -377,5 +390,114 @@ describe('handleFixCancelInternal', () => {
     expect(postCall.text).toContain('キャンセルしました');
     expect(postCall.text).toContain('/ap fix');
     expect(postCall.thread_ts).toBe(threadTs);
+  });
+
+  it('userIdが未指定でも正常に動作する', async () => {
+    const session = makeSession();
+    interactiveSessionManager.startSession(session);
+    const deps = createMockDeps();
+
+    // userId を省略して呼び出し
+    await handleFixCancelInternal(threadTs, messageTs, deps);
+
+    expect(interactiveSessionManager.getSession(threadTs)!.phase).toBe('cancelled');
+    expect(deps.updateMessage).toHaveBeenCalledTimes(1);
+    expect(deps.postMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('registerFixApprovalHandlers', () => {
+  it('ハンドラー登録時にログが出力される', async () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { registerFixApprovalHandlers } = await import('../fix-approval');
+
+    const mockApp = {
+      action: vi.fn(),
+    } as any;
+
+    registerFixApprovalHandlers(mockApp);
+
+    // ap_fix_approve と ap_fix_cancel の2つが登録される
+    expect(mockApp.action).toHaveBeenCalledTimes(2);
+    expect(mockApp.action).toHaveBeenCalledWith('ap_fix_approve', expect.any(Function));
+    expect(mockApp.action).toHaveBeenCalledWith('ap_fix_cancel', expect.any(Function));
+
+    // ログ出力確認（handler_registered フェーズ）
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('handler_registered'),
+    );
+
+    consoleSpy.mockRestore();
+  });
+
+  it('承認ボタンハンドラーがペイロードからuserId・threadTs・messageTsを抽出する', async () => {
+    const { registerFixApprovalHandlers } = await import('../fix-approval');
+
+    const mockApp = {
+      action: vi.fn(),
+    } as any;
+
+    registerFixApprovalHandlers(mockApp);
+
+    // ap_fix_approve ハンドラーを取得
+    const approveHandler = mockApp.action.mock.calls.find(
+      (call: any[]) => call[0] === 'ap_fix_approve',
+    )?.[1];
+    expect(approveHandler).toBeDefined();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    // セッションがなくてもペイロード解析のログは出力される
+    await approveHandler({
+      body: {
+        user: { id: 'U_APPROVER' },
+        actions: [{ value: '1234567890.123456', text: { text: '承認' } }],
+        message: { ts: '1234567890.654321' },
+      },
+      ack,
+    });
+
+    expect(ack).toHaveBeenCalledTimes(1);
+
+    // ペイロード解析ログにuserIdが含まれることを確認
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('U_APPROVER'),
+    );
+
+    consoleSpy.mockRestore();
+  });
+
+  it('承認アクションの値が取得できない場合はエラーログを出力する', async () => {
+    const { registerFixApprovalHandlers } = await import('../fix-approval');
+
+    const mockApp = {
+      action: vi.fn(),
+    } as any;
+
+    registerFixApprovalHandlers(mockApp);
+
+    const approveHandler = mockApp.action.mock.calls.find(
+      (call: any[]) => call[0] === 'ap_fix_approve',
+    )?.[1];
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await approveHandler({
+      body: {
+        user: { id: 'U_APPROVER' },
+        actions: [{}],  // value なし
+        message: { ts: '1234567890.654321' },
+      },
+      ack,
+    });
+
+    expect(ack).toHaveBeenCalledTimes(1);
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('action_parse_error'),
+    );
+
+    consoleSpy.mockRestore();
   });
 });

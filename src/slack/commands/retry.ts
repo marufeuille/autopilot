@@ -60,12 +60,24 @@ export const handleRetry: SubcommandHandler = async (args, respond) => {
 
     await updateFileStatus(task.filePath, 'Todo');
 
-    const storyFilePath = path.join(vaultStoriesPath(project), `${task.storySlug}.md`);
-    await updateFileStatus(storyFilePath, 'Doing');
+    if (task.storySlug) {
+      const storyFilePath = path.join(vaultStoriesPath(project), `${task.storySlug}.md`);
+      try {
+        await updateFileStatus(storyFilePath, 'Doing');
+      } catch (storyError) {
+        // ストーリー更新失敗時はタスクのステータスを元に戻す
+        try {
+          await updateFileStatus(task.filePath, 'Failed');
+        } catch {
+          // ロールバックも失敗した場合はログのみ（外側のcatchでユーザーに通知される）
+        }
+        throw storyError;
+      }
+    }
 
     await respond(
       `✅ タスク \`${taskSlug}\` のステータスを \`Todo\` に更新し、` +
-      `ストーリー \`${task.storySlug}\` を \`Doing\` に変更して再実行をトリガーしました。`,
+      `${task.storySlug ? `ストーリー \`${task.storySlug}\` を \`Doing\` に変更して` : ''}再実行をトリガーしました。`,
     );
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
