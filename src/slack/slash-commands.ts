@@ -25,14 +25,39 @@ export function parseCommand(text: string): ParsedCommand {
   return { subcommand, args };
 }
 
-/** 利用可能なサブコマンド一覧 */
-const KNOWN_SUBCOMMANDS = ['retry', 'status', 'help', 'story', 'fix'] as const;
+/** サブコマンド入力の最大長 */
+const MAX_SUBCOMMAND_LENGTH = 50;
 
 /**
- * サブコマンドが既知かどうかを判定する
+ * Slack mrkdwn 向けにユーザー入力をサニタイズする。
+ *
+ * - 長さを制限し、超過分は省略記号で切り詰める
+ * - HTML特殊文字（<, >, &）をエスケープする
+ * - @channel, @here, @everyone 等のメンション記法を無効化する
+ */
+export function sanitizeForMrkdwn(text: string): string {
+  const truncated = text.length > MAX_SUBCOMMAND_LENGTH
+    ? text.slice(0, MAX_SUBCOMMAND_LENGTH) + '…'
+    : text;
+  return truncated
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/@(channel|here|everyone)/gi, '@ $1');
+}
+
+/**
+ * サブコマンドが既知（ハンドラー登録済み）かどうかを判定する
  */
 export function isKnownSubcommand(sub: string): boolean {
-  return (KNOWN_SUBCOMMANDS as readonly string[]).includes(sub);
+  return handlers.has(sub);
+}
+
+/**
+ * 登録済みサブコマンド名の一覧を返す
+ */
+export function getRegisteredSubcommands(): string[] {
+  return Array.from(handlers.keys());
 }
 
 /**
@@ -92,38 +117,30 @@ export function registerSlashCommands(app: App): void {
   app.command('/ap', async ({ command, ack, respond }) => {
     const parsed = parseCommand(command.text);
 
-    // サブコマンドなし or 不明なサブコマンド → エラーメッセージを即時返答
+    // サブコマンドなし → ヘルプメッセージを即時返答
     if (!parsed.subcommand) {
       await ack(buildHelpMessage());
       return;
     }
 
-    if (!isKnownSubcommand(parsed.subcommand)) {
+    // ハンドラー未登録のサブコマンド → サニタイズ済みエラーメッセージを即時返答
+    const handler = handlers.get(parsed.subcommand);
+    if (!handler) {
+      const sanitized = sanitizeForMrkdwn(parsed.subcommand);
+      const available = getRegisteredSubcommands().join(', ');
       await ack(
-        `⚠️ 不明なサブコマンド: \`${parsed.subcommand}\`\n\n` +
-        `利用可能なサブコマンド: ${KNOWN_SUBCOMMANDS.join(', ')}\n` +
+        `⚠️ 不明なサブコマンド: \`${sanitized}\`\n\n` +
+        `利用可能なサブコマンド: ${available}\n` +
         `詳しくは \`/ap help\` を実行してください。`,
       );
       return;
     }
 
-    // help → ephemeral メッセージで即時返答
-    if (parsed.subcommand === 'help') {
-      await ack(buildHelpMessage());
-      return;
-    }
-
-    // 既知のサブコマンド → ack() 後に非同期処理
+    // 登録済みサブコマンド → ack() 後にハンドラーへディスパッチ
     await ack();
 
-    const handler = handlers.get(parsed.subcommand);
-    if (handler) {
-      await handler(parsed.args, async (msg: string) => {
-        await respond(msg);
-      });
-    } else {
-      // 既知だがハンドラー未登録（将来の拡張用）
-      await respond(`⚠️ \`${parsed.subcommand}\` は現在準備中です。`);
-    }
+    await handler(parsed.args, async (msg: string) => {
+      await respond(msg);
+    });
   });
 }
