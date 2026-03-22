@@ -13,6 +13,8 @@ export class GitSyncError extends Error {
  * いずれかのコマンドが失敗した場合は GitSyncError をスローする。
  */
 export async function syncMainBranch(repoPath: string): Promise<void> {
+  console.log(`[git-sync] mainブランチの同期を開始します (${repoPath})`);
+
   try {
     execSync("git checkout main", {
       cwd: repoPath,
@@ -36,4 +38,6 @@ export async function syncMainBranch(repoPath: string): Promise<void> {
       : String(error);
     throw new GitSyncError(`Failed to pull origin main: ${stderr}`);
   }
+
+  console.log(`[git-sync] mainブランチの同期が完了しました`);
 }

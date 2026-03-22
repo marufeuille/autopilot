@@ -434,6 +434,28 @@ describe('runTask', () => {
     consoleErrorSpy.mockRestore();
   });
 
+  it('buildTaskPrompt の出力にmain同期済みの旨と git pull 不要の指示が含まれる', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    await runTask(task, story, notifier, repoPath);
+
+    // mockQuery に渡されたプロンプトを検証
+    expect(mockQuery).toHaveBeenCalled();
+    const callArgs = mockQuery.mock.calls[0] as unknown[];
+    const options = callArgs[0] as { prompt: string };
+    const prompt = options.prompt;
+
+    // mainブランチは同期済みの旨が含まれている
+    expect(prompt).toContain('mainブランチは最新の状態に同期済みです');
+    // git pull 不要の指示が含まれている
+    expect(prompt).toContain('git pull は不要です');
+    // feature ブランチを直接作成する指示が含まれている
+    expect(prompt).toContain('直接 feature ブランチを作成してください');
+  });
+
   it('正常実行時は Doing → Done の順で更新される', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');

@@ -19,6 +19,9 @@ ${task.content}
 - リポジトリパス: ${repoPath}
 - ブランチ名規則: feature/${task.slug}
 
+## 前提条件
+- mainブランチは最新の状態に同期済みです。git checkout main や git pull は不要です。直接 feature ブランチを作成してください。
+
 ## 重要なルール
 1. 作業は必ず ${repoPath} ディレクトリ内で行うこと
 2. 実装が完了したらタスクの完了条件をすべて確認すること

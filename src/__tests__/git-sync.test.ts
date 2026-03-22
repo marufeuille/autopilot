@@ -29,6 +29,53 @@ describe("syncMainBranch", () => {
     });
   });
 
+  it("正常系: [git-sync] プレフィックス付きの開始・完了ログが出力される", async () => {
+    mockedExecSync.mockReturnValue(Buffer.from(""));
+    const consoleSpy = vi.spyOn(console, "log");
+
+    await syncMainBranch("/tmp/repo");
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[git-sync]")
+    );
+    // 開始ログ
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/\[git-sync\].*同期を開始/)
+    );
+    // 完了ログ
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/\[git-sync\].*同期が完了/)
+    );
+
+    consoleSpy.mockRestore();
+  });
+
+  it("失敗時は完了ログが出力されない", async () => {
+    const error = new Error("command failed") as Error & { stderr: Buffer };
+    error.stderr = Buffer.from("error: pathspec 'main' did not match");
+    mockedExecSync.mockImplementationOnce(() => {
+      throw error;
+    });
+    const consoleSpy = vi.spyOn(console, "log");
+
+    try {
+      await syncMainBranch("/tmp/repo");
+    } catch {
+      // expected
+    }
+
+    // 開始ログは出力される
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/\[git-sync\].*同期を開始/)
+    );
+    // 完了ログは出力されない
+    expect(consoleSpy).not.toHaveBeenCalledWith(
+      expect.stringMatching(/\[git-sync\].*同期が完了/)
+    );
+
+    consoleSpy.mockRestore();
+  });
+
   it("checkout 失敗時に GitSyncError がスローされ、stderr の内容が含まれる", async () => {
     const error = new Error("command failed") as Error & { stderr: Buffer };
     error.stderr = Buffer.from("error: pathspec 'main' did not match");
