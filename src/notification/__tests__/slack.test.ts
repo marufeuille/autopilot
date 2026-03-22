@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Block, KnownBlock } from '@slack/types';
 import { SlackNotificationBackend, registerApprovalHandlers } from '../slack';
 import type { NotificationBackend, ApprovalResult } from '../types';
 
@@ -412,7 +413,7 @@ describe('registerApprovalHandlers - 承認フロー', () => {
 
       // 復元されたブロックにアクションボタンが含まれている
       const actionsBlock = lastUpdateCall.blocks.find(
-        (b: any) => b.type === 'actions',
+        (b: Block | KnownBlock) => b.type === 'actions',
       );
       expect(actionsBlock).toBeDefined();
       expect(actionsBlock.elements).toHaveLength(2);
@@ -802,7 +803,7 @@ describe('スレッド内承認フロー', () => {
 
       // 復元されたブロックにアクションボタンが含まれている
       const actionsBlock = restoreCall.blocks.find(
-        (b: any) => b.type === 'actions',
+        (b: Block | KnownBlock) => b.type === 'actions',
       );
       expect(actionsBlock).toBeDefined();
       expect(actionsBlock.elements).toHaveLength(2);
@@ -895,8 +896,8 @@ describe('スレッド内承認フロー', () => {
     });
   });
 
-  describe('PendingApproval に threadTs が保持される', () => {
-    it('スレッド内承認リクエストの PendingApproval に threadTs が設定される', async () => {
+  describe('スレッド内承認リクエストのメッセージ特定', () => {
+    it('スレッド内承認リクエストで chat.update が正しい ts を使用する', async () => {
       // スレッドを開始
       mockApp.client.chat.postMessage.mockResolvedValueOnce({ ts: 'thread-root-ts-5' });
       await backend.startThread('pending-thread-story', 'ストーリー開始');
@@ -935,7 +936,7 @@ describe('スレッド内承認フロー', () => {
       );
     });
 
-    it('スレッド外の承認リクエストでは threadTs が undefined になる', async () => {
+    it('スレッド外の承認リクエストでは thread_ts が postMessage に含まれない', async () => {
       mockApp.client.chat.postMessage.mockResolvedValueOnce({ ts: 'no-thread-msg-ts' });
       const approvalPromise = backend.requestApproval(
         'no-thread-pending-id',

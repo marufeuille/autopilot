@@ -8,7 +8,6 @@ interface PendingApproval {
   resolve: (result: ApprovalResult) => void;
   channel: string;
   ts: string;
-  threadTs?: string;
   message: string;
   originalBlocks: (Block | KnownBlock)[];
 }
@@ -218,7 +217,6 @@ export class SlackNotificationBackend implements NotificationBackend {
         resolve,
         channel: config.slack.channelId,
         ts: res.ts as string,
-        threadTs,
         message,
         originalBlocks: blocks,
       }),
