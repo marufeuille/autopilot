@@ -246,6 +246,7 @@ export async function runTask(
 
           if (ciPollingResult.finalStatus === 'success') {
             // CI通過 → マージ承認依頼を送信
+            console.log(`[runner] CI passed, sending merge approval request: ${task.slug}, prUrl=${prUrl}`);
             const mergeCtx: NotificationContext = {
               ...baseCtx,
               eventType: 'merge_approval',
@@ -261,19 +262,33 @@ export async function runTask(
               { approve: 'マージ承認', reject: '差し戻し' },
               story.slug,
             );
+            console.log(`[runner] merge approval result: action=${mergeResult.action}, task=${task.slug}`);
             if (mergeResult.action === 'approve') {
               // マージ承認後に実際にPRをマージする
+              console.log(`[runner] merge approved, executing gh pr merge: ${prUrl}`);
               try {
                 const mergeOutput = d.execGh(
-                  ['pr', 'merge', prUrl],
+                  ['pr', 'merge', prUrl, '--squash', '--delete-branch'],
                   repoPath,
                 );
                 console.log(`[runner] PR merged successfully: ${prUrl}`);
                 if (mergeOutput.trim()) {
                   console.log(`[runner] merge output: ${mergeOutput.trim()}`);
                 }
+                // マージ成功通知をユーザーに送信
+                await notifier.notify(
+                  `✅ *マージ完了*: \`${task.slug}\`\n*PR*: ${prUrl}`,
+                  story.slug,
+                );
               } catch (mergeError) {
+                const errorMessage = mergeError instanceof Error ? mergeError.message : String(mergeError);
                 console.error(`[runner] PR merge failed: ${prUrl}`, mergeError);
+                console.error(`[runner] merge error details: ${errorMessage}`);
+                // マージ失敗通知をユーザーに送信
+                await notifier.notify(
+                  `❌ *マージ失敗*: \`${task.slug}\`\n*PR*: ${prUrl}\n*原因*: ${errorMessage}`,
+                  story.slug,
+                );
                 throw mergeError;
               }
               break;
