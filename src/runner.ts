@@ -5,7 +5,7 @@ import { updateFileStatus, createTaskFile, TaskDraft } from './vault/writer';
 import { decomposeTasks } from './decomposer';
 import { NotificationBackend, generateApprovalId } from './notification';
 import { syncMainBranch, GitSyncError } from './git';
-import { runReviewLoop, formatReviewLoopResult } from './review';
+import { runReviewLoop, formatReviewLoopResult, ReviewLoopResult } from './review';
 
 function buildTaskPrompt(task: TaskFile, story: StoryFile, repoPath: string): string {
   return `あなたは優秀なソフトウェアエンジニアです。以下のタスクを実装してください。
@@ -26,10 +26,113 @@ ${task.content}
 ## 重要なルール
 1. 作業は必ず ${repoPath} ディレクトリ内で行うこと
 2. 実装が完了したらタスクの完了条件をすべて確認すること
-3. PRを作成する場合は \`gh pr create\` を実行すること
+3. PRの作成は自動で行われるため、\`gh pr create\` は実行しないこと
 4. 実装完了後、最後に「実装完了」と出力すること
 
 それでは実装を開始してください。`;
+}
+
+/**
+ * レビューループ結果をPR本文用のMarkdownサマリーに変換する
+ */
+export function formatReviewSummaryForPR(result: ReviewLoopResult): string {
+  const lines: string[] = ['## セルフレビュー結果', ''];
+
+  if (result.finalVerdict === 'OK') {
+    lines.push('✅ **セルフレビュー通過**');
+  } else {
+    lines.push('⚠️ **セルフレビュー未通過**');
+  }
+  lines.push('');
+
+  lines.push(`- イテレーション数: ${result.iterations.length}`);
+  lines.push(`- 最終判定: ${result.lastReviewResult.verdict}`);
+  lines.push(`- 要約: ${result.lastReviewResult.summary}`);
+
+  // 各イテレーションの修正履歴
+  if (result.iterations.length > 1) {
+    lines.push('');
+    lines.push('### 修正履歴');
+    lines.push('');
+    for (const iter of result.iterations) {
+      const verdict = iter.reviewResult.verdict === 'OK' ? '✅' : '❌';
+      lines.push(`**イテレーション ${iter.iteration}**: ${verdict} ${iter.reviewResult.verdict}`);
+      if (iter.reviewResult.findings.length > 0) {
+        for (const f of iter.reviewResult.findings) {
+          const location = [f.file, f.line].filter(Boolean).join(':');
+          const prefix = location ? `\`${location}\` ` : '';
+          lines.push(`  - [${f.severity.toUpperCase()}] ${prefix}${f.message}`);
+        }
+      }
+      if (iter.fixDescription) {
+        lines.push(`  - 修正実施済み`);
+      }
+      lines.push('');
+    }
+  }
+
+  // 最終レビューの指摘事項
+  if (result.lastReviewResult.findings.length > 0) {
+    lines.push('### 最終レビュー指摘事項');
+    lines.push('');
+    for (const f of result.lastReviewResult.findings) {
+      const location = [f.file, f.line].filter(Boolean).join(':');
+      const prefix = location ? `\`${location}\` ` : '';
+      lines.push(`- [${f.severity.toUpperCase()}] ${prefix}${f.message}`);
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * セルフレビューOK後にPRを自動作成する
+ * @returns PR URL（作成成功時）または空文字（失敗時）
+ */
+export function createPullRequest(
+  repoPath: string,
+  branch: string,
+  task: TaskFile,
+  story: StoryFile,
+  reviewLoopResult: ReviewLoopResult,
+): string {
+  const reviewSummary = formatReviewSummaryForPR(reviewLoopResult);
+  const body = `## 概要\n\nタスク: ${task.slug}\nストーリー: ${story.slug}\n\n${task.content}\n\n${reviewSummary}`;
+
+  try {
+    // リモートにブランチをプッシュ
+    execSync(`git push -u origin ${branch}`, {
+      cwd: repoPath,
+      encoding: 'utf-8',
+      stdio: 'pipe',
+    });
+
+    // PR作成
+    const prUrl = execSync(
+      `gh pr create --base main --head ${branch} --title "${task.slug}" --body ${JSON.stringify(body)}`,
+      {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        stdio: 'pipe',
+      },
+    ).trim();
+
+    console.log(`[runner] PR created: ${prUrl}`);
+    return prUrl;
+  } catch (error) {
+    console.error(`[runner] PR creation failed:`, error);
+    // 既にPRが存在する場合はURL取得を試みる
+    try {
+      return execSync(`gh pr view ${branch} --json url -q .url`, {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        stdio: 'pipe',
+      }).trim();
+    } catch {
+      return '';
+    }
+  }
 }
 
 async function runClaudeAgent(prompt: string, cwd: string): Promise<void> {
@@ -114,21 +217,18 @@ export async function runTask(
       await notifier.notify(`*セルフレビュー結果* (${task.slug})\n\n${reviewMessage}`);
       console.log(`[runner] self-review complete: verdict=${reviewLoopResult.finalVerdict}, iterations=${reviewLoopResult.iterations.length}, escalation=${reviewLoopResult.escalationRequired}`);
 
-      // エスカレーション（最大リトライ到達でNG）の場合は人間に通知
-      if (reviewLoopResult.escalationRequired) {
-        console.log(`[runner] review escalation required for: ${task.slug}`);
+      // PR作成ゲート: セルフレビューOKの場合のみPRを作成
+      let prUrl = '';
+      if (reviewLoopResult.finalVerdict === 'OK') {
+        console.log(`[runner] self-review passed, creating PR for: ${task.slug}`);
+        prUrl = createPullRequest(repoPath, branch, task, story, reviewLoopResult);
+      } else {
+        console.log(`[runner] self-review NG, skipping PR creation for: ${task.slug}`);
+        if (reviewLoopResult.escalationRequired) {
+          console.log(`[runner] review escalation required for: ${task.slug}`);
+        }
       }
 
-      // PR URL 取得
-      let prUrl = '';
-      try {
-        prUrl = execSync(`gh pr view feature/${task.slug} --json url -q .url`, {
-          cwd: repoPath,
-          encoding: 'utf-8',
-        }).trim();
-      } catch {
-        // PR未作成の場合は無視
-      }
       const prLine = prUrl ? `\n*PR*: ${prUrl}` : '';
       const reviewLine = reviewLoopResult.escalationRequired
         ? '\n⚠️ セルフレビュー未通過（要確認）'
