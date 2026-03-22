@@ -58,10 +58,12 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: (...args: unknown[]) => mockQuery(...args),
 }));
 
-// child_process の execSync をモック（PR作成・URL取得で使われる）
+// child_process の execSync / execFileSync をモック（PR作成・URL取得・マージで使われる）
 const mockExecSync = vi.fn(() => '');
+const mockExecFileSync = vi.fn(() => '');
 vi.mock('child_process', () => ({
   execSync: (...args: unknown[]) => mockExecSync(...args),
+  execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
 }));
 
 // fs の writeFileSync / unlinkSync をモック（PR body一時ファイルで使われる）
@@ -628,6 +630,69 @@ describe('runTask', () => {
     expect(mergeApprovalCall).toBeDefined();
     // マージ承認のボタンラベルが正しいこと
     expect(mergeApprovalCall![2]).toEqual({ approve: 'マージ承認', reject: '差し戻し' });
+  });
+
+  it('マージ承認後に gh pr merge が実行されPRがマージされる', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    mockExecSync
+      .mockReturnValueOnce('') // git push
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1'); // gh pr create
+    mockExecFileSync.mockReturnValueOnce(''); // gh pr merge
+
+    const consoleSpy = vi.spyOn(console, 'log');
+
+    await runTask(task, story, notifier, repoPath);
+
+    // gh pr merge が呼ばれること（execFileSync で引数配列として渡される）
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      'gh',
+      ['pr', 'merge', 'https://github.com/test/repo/pull/1'],
+      expect.objectContaining({ cwd: repoPath }),
+    );
+
+    // マージ完了のログが記録されること
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('PR merged successfully'),
+    );
+
+    // タスクが Done に更新されること
+    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Done');
+
+    consoleSpy.mockRestore();
+  });
+
+  it('マージ失敗時にエラーが適切にハンドリングされる', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    const mergeError = new Error('merge conflict');
+    mockExecSync
+      .mockReturnValueOnce('') // git push
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1'); // gh pr create
+    mockExecFileSync.mockImplementationOnce(() => { throw mergeError; }); // gh pr merge fails
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(runTask(task, story, notifier, repoPath)).rejects.toThrow('merge conflict');
+
+    // エラーログが記録されること
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('PR merge failed'),
+      expect.any(Error),
+    );
+
+    // タスクが Failed に更新されること
+    // （mergeError が throw され、runTask 外側の catch 節 (runner.ts L369-370) で
+    //   updateFileStatus(task.filePath, 'Failed') が呼ばれる）
+    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Failed');
+
+    consoleErrorSpy.mockRestore();
   });
 
   it('CI失敗時、CIエスカレーション通知が送信され完了確認メッセージにCI未通過が含まれる', async () => {
