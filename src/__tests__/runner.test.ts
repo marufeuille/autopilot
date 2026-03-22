@@ -64,6 +64,14 @@ vi.mock('child_process', () => ({
   execSync: (...args: unknown[]) => mockExecSync(...args),
 }));
 
+// fs の writeFileSync / unlinkSync をモック（PR body一時ファイルで使われる）
+const mockWriteFileSync = vi.fn();
+const mockUnlinkSync = vi.fn();
+vi.mock('fs', () => ({
+  writeFileSync: (...args: unknown[]) => mockWriteFileSync(...args),
+  unlinkSync: (...args: unknown[]) => mockUnlinkSync(...args),
+}));
+
 // CIポーリングループをモック
 const mockRunCIPollingLoop = vi.fn().mockResolvedValue({
   finalStatus: 'success',
@@ -860,13 +868,22 @@ describe('createPullRequest', () => {
       expect.objectContaining({ cwd: '/repo' }),
     );
 
-    // gh pr create の呼び出し確認（PR本文にレビューサマリーが含まれる）
+    // gh pr create の呼び出し確認（--body-file で一時ファイル経由）
     const prCreateCall = mockExecSync.mock.calls[1];
     const prCreateCmd = prCreateCall[0] as string;
     expect(prCreateCmd).toContain('gh pr create');
     expect(prCreateCmd).toContain('--base main');
     expect(prCreateCmd).toContain('--head feature/task-01');
-    expect(prCreateCmd).toContain('セルフレビュー結果');
+    expect(prCreateCmd).toContain('--body-file');
+    expect(prCreateCmd).not.toContain('--body ');
+
+    // 一時ファイルにbodyが書き出されていることを確認
+    expect(mockWriteFileSync).toHaveBeenCalledTimes(1);
+    const writtenBody = mockWriteFileSync.mock.calls[0][1] as string;
+    expect(writtenBody).toContain('セルフレビュー結果');
+
+    // 一時ファイルが削除されていることを確認
+    expect(mockUnlinkSync).toHaveBeenCalledTimes(1);
   });
 
   it('PR作成が失敗した場合に既存PRのURL取得を試みる', () => {
