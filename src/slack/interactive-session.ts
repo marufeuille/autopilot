@@ -72,6 +72,26 @@ export class InteractiveSessionManager {
   }
 
   /**
+   * セッションのフェーズを Compare-and-Swap で更新する
+   *
+   * 現在の phase が expectedPhase と一致する場合のみ newPhase に遷移し true を返す。
+   * 一致しない場合やセッションが存在しない場合は false を返す。
+   * これにより、承認ボタンの二重押下などの競合状態を防止できる。
+   */
+  compareAndSwapPhase(
+    threadTs: string,
+    expectedPhase: SessionPhase,
+    newPhase: SessionPhase,
+  ): boolean {
+    const session = this.sessions.get(threadTs);
+    if (!session || session.phase !== expectedPhase) {
+      return false;
+    }
+    session.phase = newPhase;
+    return true;
+  }
+
+  /**
    * 会話履歴にメッセージを追加する
    */
   addMessage(threadTs: string, message: ConversationMessage): void {

@@ -113,6 +113,20 @@ describe('handleApproveInternal', () => {
     expect(deps.postMessage).not.toHaveBeenCalled();
   });
 
+  it('二重承認を防止する（CAS による排他制御）', async () => {
+    const session = makeSession();
+    interactiveSessionManager.startSession(session);
+    const deps = createMockDeps();
+
+    // 1回目の承認は成功する
+    await handleApproveInternal(threadTs, messageTs, deps);
+    expect(deps.writeStoryToVault).toHaveBeenCalledTimes(1);
+
+    // 2回目の承認はphaseがcompletedなので何もしない
+    await handleApproveInternal(threadTs, messageTs, deps);
+    expect(deps.writeStoryToVault).toHaveBeenCalledTimes(1);
+  });
+
   it('正常系: Vaultにストーリーファイルを作成し、完了メッセージを投稿する', async () => {
     const session = makeSession();
     interactiveSessionManager.startSession(session);
@@ -204,9 +218,10 @@ describe('handleApproveInternal', () => {
     expect(postCall.text).toContain('タイトルを抽出できませんでした');
   });
 
-  it('Vault書き込み失敗時にエラーメッセージがスレッドに返される', async () => {
+  it('Vault書き込み失敗時に汎用エラーメッセージがスレッドに返される（内部情報は含まない）', async () => {
     const session = makeSession();
     interactiveSessionManager.startSession(session);
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const deps = createMockDeps({
       writeStoryToVault: vi.fn().mockImplementation(() => {
         throw new Error('Permission denied: /vault/stories');
@@ -218,8 +233,17 @@ describe('handleApproveInternal', () => {
     expect(deps.postMessage).toHaveBeenCalledTimes(1);
     const postCall = (deps.postMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(postCall.text).toContain('Vaultへのストーリー作成に失敗しました');
-    expect(postCall.text).toContain('Permission denied');
+    // 内部パス情報がユーザー向けメッセージに含まれないことを確認
+    expect(postCall.text).not.toContain('Permission denied');
+    expect(postCall.text).not.toContain('/vault/stories');
     expect(postCall.thread_ts).toBe(threadTs);
+
+    // 詳細なエラー情報はconsole.errorに記録される
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[story-approval]'),
+      expect.stringContaining('Permission denied'),
+    );
+    consoleSpy.mockRestore();
   });
 
   it('マルチターン後の最終ドラフトが使用される', async () => {

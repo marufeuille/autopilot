@@ -52,12 +52,22 @@ export function parseStoryDraft(draft: string): ParsedStoryDraft {
 /**
  * タイトル文字列からスラッグを生成する
  *
- * 日本語を含む場合はタイムスタンプベースのスラッグを生成する。
- * ASCII のみの場合はケバブケースに変換する。
+ * ASCII文字のみ（ラテン文字含む）の場合はケバブケースに変換する。
+ * アクセント付きラテン文字（例: Café）は NFD 正規化で基本文字に分解してから処理する。
+ * 日本語など非ラテン文字を含む場合はタイムスタンプベースのスラッグを生成する。
+ *
+ * 括弧やその他の記号は意図的に除去し、英数字・スペース・ハイフンのみを残す。
+ *
+ * @param title - ストーリータイトル
+ * @param now - 現在日時（テスト時にDI可能、デフォルトは new Date()）
  */
-export function generateSlug(title: string): string {
-  // ASCII文字のみならケバブケースに変換
-  const ascii = title
+export function generateSlug(title: string, now?: Date): string {
+  // NFD正規化でアクセント付き文字を基本文字+結合文字に分解し、
+  // 結合文字（ダイアクリティカルマーク）を除去する
+  const normalized = title.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+  // ASCII英数字・スペース・ハイフンのみ残す（括弧等の記号は意図的に除去）
+  const ascii = normalized
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, '')
     .trim();
@@ -70,10 +80,10 @@ export function generateSlug(title: string): string {
       .slice(0, 60);
   }
 
-  // 日本語の場合はタイムスタンプベースのスラッグ
-  const now = new Date();
-  const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
-  const timeStr = now.toISOString().slice(11, 19).replace(/:/g, '');
+  // 日本語など非ラテン文字のみの場合はタイムスタンプベースのスラッグ
+  const timestamp = now ?? new Date();
+  const dateStr = timestamp.toISOString().slice(0, 10).replace(/-/g, '');
+  const timeStr = timestamp.toISOString().slice(11, 19).replace(/:/g, '');
   return `story-${dateStr}-${timeStr}`;
 }
 

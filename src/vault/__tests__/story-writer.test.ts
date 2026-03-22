@@ -90,8 +90,15 @@ describe('generateSlug', () => {
   });
 
   it('日本語タイトルの場合はタイムスタンプベースのスラッグを生成する', () => {
-    const slug = generateSlug('ユーザー管理画面の実装');
-    expect(slug).toMatch(/^story-\d{8}-\d{6}$/);
+    const fixedDate = new Date('2026-03-22T10:30:45Z');
+    const slug = generateSlug('ユーザー管理画面の実装', fixedDate);
+    expect(slug).toBe('story-20260322-103045');
+  });
+
+  it('アクセント付きラテン文字を含むタイトルを正しく処理する（NFD正規化）', () => {
+    expect(generateSlug('Café Menu')).toBe('cafe-menu');
+    expect(generateSlug('Résumé Builder')).toBe('resume-builder');
+    expect(generateSlug('naïve approach')).toBe('naive-approach');
   });
 });
 

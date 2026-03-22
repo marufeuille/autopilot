@@ -9,7 +9,7 @@
  *
  * キャンセル時: セッションphaseをcancelledに遷移し、スレッドに通知。
  */
-import type { App } from '@slack/bolt';
+import type { App, BlockAction } from '@slack/bolt';
 import type { Block, KnownBlock } from '@slack/types';
 import { config } from '../../config';
 import { interactiveSessionManager } from '../interactive-session';
@@ -70,7 +70,17 @@ export async function handleApproveInternal(
 ): Promise<void> {
   const session = interactiveSessionManager.getSession(threadTs);
 
-  if (!session || session.phase !== 'drafting') {
+  if (!session) {
+    return;
+  }
+
+  // CAS で drafting → approved に遷移（二重承認を防止）
+  const transitioned = interactiveSessionManager.compareAndSwapPhase(
+    threadTs,
+    'drafting',
+    'approved',
+  );
+  if (!transitioned) {
     return;
   }
 
@@ -129,10 +139,12 @@ export async function handleApproveInternal(
       thread_ts: threadTs,
     });
   } catch (error) {
+    // 詳細なエラー情報はログに記録し、ユーザーには汎用メッセージを表示
     const errMsg = error instanceof Error ? error.message : String(error);
+    console.error(`[story-approval] Vault書き込みエラー (thread: ${threadTs}):`, errMsg);
     await deps.postMessage({
       channel: session.channelId,
-      text: `:x: Vaultへのストーリー作成に失敗しました: ${errMsg}`,
+      text: ':x: Vaultへのストーリー作成に失敗しました。管理者に問い合わせてください。',
       thread_ts: threadTs,
     });
   }
@@ -210,18 +222,36 @@ export function registerStoryApprovalHandlers(app: App): void {
   // 承認ボタン
   app.action('ap_story_approve', async ({ body, ack }) => {
     await ack();
-    const action = (body as any).actions[0];
-    const threadTs = action.value as string;
-    const messageTs = (body as any).message?.ts ?? '';
+    const blockBody = body as BlockAction;
+    const action = blockBody.actions?.[0];
+    if (!action || !('value' in action) || !action.value) {
+      console.error('[story-approval] 承認アクションの値が取得できません');
+      return;
+    }
+    const threadTs = action.value;
+    const messageTs = blockBody.message?.ts;
+    if (!messageTs) {
+      console.error('[story-approval] メッセージtsが取得できません');
+      return;
+    }
     await handleApproveInternal(threadTs, messageTs, deps);
   });
 
   // キャンセルボタン
   app.action('ap_story_cancel', async ({ body, ack }) => {
     await ack();
-    const action = (body as any).actions[0];
-    const threadTs = action.value as string;
-    const messageTs = (body as any).message?.ts ?? '';
+    const blockBody = body as BlockAction;
+    const action = blockBody.actions?.[0];
+    if (!action || !('value' in action) || !action.value) {
+      console.error('[story-approval] キャンセルアクションの値が取得できません');
+      return;
+    }
+    const threadTs = action.value;
+    const messageTs = blockBody.message?.ts;
+    if (!messageTs) {
+      console.error('[story-approval] メッセージtsが取得できません');
+      return;
+    }
     await handleCancelInternal(threadTs, messageTs, deps);
   });
 }
