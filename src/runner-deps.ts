@@ -72,11 +72,20 @@ export function createDefaultRunnerDeps(): RunnerDeps {
     },
 
     execGh: (args: string[], cwd: string): string => {
-      return execFileSync('gh', args, {
-        cwd,
-        encoding: 'utf-8',
-        stdio: 'pipe',
-      });
+      console.log(`[runner-deps] execGh: gh ${args.join(' ')} (cwd=${cwd})`);
+      try {
+        const result = execFileSync('gh', args, {
+          cwd,
+          encoding: 'utf-8',
+          stdio: 'pipe',
+        });
+        console.log(`[runner-deps] execGh success: gh ${args[0]} ${args[1] ?? ''}`);
+        return result;
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.error(`[runner-deps] execGh failed: gh ${args.join(' ')} — ${errorMessage}`);
+        throw error;
+      }
     },
 
     execCommand: (command: string, cwd: string): string => {

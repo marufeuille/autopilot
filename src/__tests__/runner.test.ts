@@ -662,7 +662,7 @@ describe('runTask', () => {
     // gh pr merge が呼ばれること（execFileSync で引数配列として渡される）
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'gh',
-      ['pr', 'merge', 'https://github.com/test/repo/pull/1'],
+      ['pr', 'merge', 'https://github.com/test/repo/pull/1', '--squash', '--delete-branch'],
       expect.objectContaining({ cwd: repoPath }),
     );
 
@@ -674,7 +674,37 @@ describe('runTask', () => {
     // タスクが Done に更新されること
     expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Done');
 
+    // マージ成功通知がユーザーに送信されること
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('マージ完了'),
+      'my-story',
+    );
+
     consoleSpy.mockRestore();
+  });
+
+  it('マージ成功時にマージ完了通知がPR URLとタスクslugを含む', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    mockExecSync
+      .mockReturnValueOnce('') // git push
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1'); // gh pr create
+    mockExecFileSync.mockReturnValueOnce(''); // gh pr merge
+
+    await runTask(task, story, notifier, repoPath);
+
+    // マージ完了通知にPR URLとタスクslugが含まれること
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringMatching(/マージ完了.*task-01/s),
+      'my-story',
+    );
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('https://github.com/test/repo/pull/1'),
+      'my-story',
+    );
   });
 
   it('マージ失敗時にエラーが適切にハンドリングされる', async () => {
@@ -703,6 +733,17 @@ describe('runTask', () => {
     // （mergeError が throw され、runTask 外側の catch 節 (runner.ts L369-370) で
     //   updateFileStatus(task.filePath, 'Failed') が呼ばれる）
     expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Failed');
+
+    // マージ失敗通知がユーザーに送信されること
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('マージ失敗'),
+      'my-story',
+    );
+    // エラーメッセージが通知に含まれること
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('merge conflict'),
+      'my-story',
+    );
 
     consoleErrorSpy.mockRestore();
   });
@@ -1065,7 +1106,7 @@ describe('runTask - マージ後ステータス更新フロー', () => {
     expect(mockExecFileSync).toHaveBeenCalledTimes(1);
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'gh',
-      ['pr', 'merge', 'https://github.com/test/repo/pull/42'],
+      ['pr', 'merge', 'https://github.com/test/repo/pull/42', '--squash', '--delete-branch'],
       expect.any(Object),
     );
 
