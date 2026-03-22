@@ -11,6 +11,7 @@ export { LocalNotificationBackend } from './local';
 export { SlackNotificationBackend } from './slack';
 export { NtfyNotificationBackend } from './ntfy';
 export { generateApprovalId } from './approval-id';
+export { ThreadSessionManager } from './thread-session';
 export { ResilientNotificationBackend, ResilientOptions } from './resilient';
 export {
   buildNotificationMessage,

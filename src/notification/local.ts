@@ -52,6 +52,20 @@ export class LocalNotificationBackend implements NotificationBackend {
   }
 
   /**
+   * スレッドセッションを開始する（ローカルでは no-op）
+   */
+  async startThread(_storySlug: string, _message: string): Promise<void> {
+    // ローカルバックエンドではスレッドの概念がないため何もしない
+  }
+
+  /**
+   * スレッドの thread_ts を取得する（ローカルでは常に undefined）
+   */
+  getThreadTs(_storySlug: string): string | undefined {
+    return undefined;
+  }
+
+  /**
    * ターミナルの標準入力で y/n 承認を受け付ける（無制限待機）
    *
    * ターミナル操作は人間が行うため、タイムアウトは設けない。

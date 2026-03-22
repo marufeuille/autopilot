@@ -40,6 +40,20 @@ export class NtfyNotificationBackend implements NotificationBackend {
   }
 
   /**
+   * スレッドセッションを開始する（ntfy では no-op）
+   */
+  async startThread(_storySlug: string, _message: string): Promise<void> {
+    // ntfy バックエンドではスレッドの概念がないため何もしない
+  }
+
+  /**
+   * スレッドの thread_ts を取得する（ntfy では常に undefined）
+   */
+  getThreadTs(_storySlug: string): string | undefined {
+    return undefined;
+  }
+
+  /**
    * 承認リクエスト（未実装）
    *
    * 今後の PR で ntfy.sh の HTTP callback を利用した承認フローを実装予定。

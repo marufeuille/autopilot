@@ -29,6 +29,25 @@ export interface NotificationBackend {
     message: string,
     buttons: { approve: string; reject: string },
   ): Promise<ApprovalResult>;
+
+  /**
+   * スレッドセッションを開始する
+   *
+   * story 実行開始時にスレッドの起点メッセージを投稿し、
+   * 以降の通知・承認依頼をそのスレッド内に展開するための基盤を作る。
+   *
+   * @param storySlug ストーリーの識別子
+   * @param message スレッド起点メッセージ
+   */
+  startThread(storySlug: string, message: string): Promise<void>;
+
+  /**
+   * storySlug に対応するスレッドの thread_ts を取得する
+   *
+   * @param storySlug ストーリーの識別子
+   * @returns thread_ts（セッション未開始の場合は undefined）
+   */
+  getThreadTs(storySlug: string): string | undefined;
 }
 
 /**
