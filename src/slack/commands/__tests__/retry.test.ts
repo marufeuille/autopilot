@@ -179,6 +179,7 @@ describe('handleRetry', () => {
     mockGetStoryTasks.mockResolvedValue([
       makeTask('my-story', 'my-story-01-task', 'Failed'),
     ]);
+    mockUpdateFileStatus.mockResolvedValue(undefined as never);
 
     await handleRetry(['my-story-01-task'], respond);
 
@@ -191,6 +192,23 @@ describe('handleRetry', () => {
     expect(msg).toContain('Todo');
     expect(msg).toContain('my-story-01-task');
     expect(msg).toContain('ファイルウォッチャー');
+  });
+
+  it('updateFileStatusが失敗した場合、エラーメッセージを返す', async () => {
+    mockGlob.mockResolvedValue([
+      '/vault/Projects/test-project/tasks/my-story',
+    ] as never);
+    mockGetStoryTasks.mockResolvedValue([
+      makeTask('my-story', 'my-story-01-task', 'Failed'),
+    ]);
+    mockUpdateFileStatus.mockRejectedValue(new Error('write permission denied'));
+
+    await handleRetry(['my-story-01-task'], respond);
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const msg = respond.mock.calls[0][0] as string;
+    expect(msg).toContain('エラー');
+    expect(msg).toContain('write permission denied');
   });
 
   it('処理中にエラーが発生した場合、エラーメッセージを返す', async () => {

@@ -15,7 +15,7 @@ export async function findTaskBySlug(
   taskSlug: string,
 ): Promise<TaskFile | undefined> {
   const tasksRoot = path.join(vaultProjectPath(project), 'tasks');
-  const storyDirs = await glob(path.join(tasksRoot, '*'), { onlyDirectories: true } as never);
+  const storyDirs = await glob(path.join(tasksRoot, '*/'));
 
   for (const storyDir of storyDirs) {
     const storySlug = path.basename(storyDir);
@@ -58,7 +58,7 @@ export const handleRetry: SubcommandHandler = async (args, respond) => {
       return;
     }
 
-    updateFileStatus(task.filePath, 'Todo');
+    await updateFileStatus(task.filePath, 'Todo');
 
     await respond(
       `✅ タスク \`${taskSlug}\` のステータスを \`Todo\` に更新しました。` +
