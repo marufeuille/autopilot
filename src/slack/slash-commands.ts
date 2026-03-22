@@ -25,14 +25,39 @@ export function parseCommand(text: string): ParsedCommand {
   return { subcommand, args };
 }
 
-/** 利用可能なサブコマンド一覧 */
-const KNOWN_SUBCOMMANDS = ['retry', 'status'] as const;
+/** サブコマンド入力の最大長 */
+const MAX_SUBCOMMAND_LENGTH = 50;
 
 /**
- * サブコマンドが既知かどうかを判定する
+ * Slack mrkdwn 向けにユーザー入力をサニタイズする。
+ *
+ * - 長さを制限し、超過分は省略記号で切り詰める
+ * - HTML特殊文字（<, >, &）をエスケープする
+ * - @channel, @here, @everyone 等のメンション記法を無効化する
+ */
+export function sanitizeForMrkdwn(text: string): string {
+  const truncated = text.length > MAX_SUBCOMMAND_LENGTH
+    ? text.slice(0, MAX_SUBCOMMAND_LENGTH) + '…'
+    : text;
+  return truncated
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/@(channel|here|everyone)/gi, '@ $1');
+}
+
+/**
+ * サブコマンドが既知（ハンドラー登録済み）かどうかを判定する
  */
 export function isKnownSubcommand(sub: string): boolean {
-  return (KNOWN_SUBCOMMANDS as readonly string[]).includes(sub);
+  return handlers.has(sub);
+}
+
+/**
+ * 登録済みサブコマンド名の一覧を返す
+ */
+export function getRegisteredSubcommands(): string[] {
+  return Array.from(handlers.keys());
 }
 
 /**
@@ -42,10 +67,16 @@ export function buildHelpMessage(): string {
   return [
     '📖 `/ap` コマンドの使い方:',
     '',
+    '• `/ap story <概要>` — Claudeと壁打ちしながらストーリーを作成（スレッド内でマルチターン対話）',
+    '• `/ap fix <バグ説明>` — バグの原因・修正方針をClaudeが提示し、承認後に自動修正を開始',
     '• `/ap status` — 実行中のストーリー・タスク一覧を表示',
     '• `/ap retry <task-slug>` — 失敗タスクをTodoに戻して再実行',
+    '• `/ap help` — このヘルプメッセージを表示',
     '',
-    '例: `/ap retry my-feature-task-01`',
+    '例:',
+    '  `/ap story ユーザープロフィール画面にアバター画像アップロード機能を追加`',
+    '  `/ap fix ログインページでパスワードリセットリンクが404になる`',
+    '  `/ap retry my-feature-task-01`',
   ].join('\n');
 }
 
@@ -86,23 +117,30 @@ export function registerSlashCommands(app: App): void {
   app.command('/ap', async ({ command, ack, respond }) => {
     const parsed = parseCommand(command.text);
 
-    // サブコマンドなし or 不明なサブコマンド → ヘルプを即時返答
-    if (!parsed.subcommand || !isKnownSubcommand(parsed.subcommand)) {
+    // サブコマンドなし → ヘルプメッセージを即時返答
+    if (!parsed.subcommand) {
       await ack(buildHelpMessage());
       return;
     }
 
-    // 既知のサブコマンド → ack() 後に非同期処理
+    // ハンドラー未登録のサブコマンド → サニタイズ済みエラーメッセージを即時返答
+    const handler = handlers.get(parsed.subcommand);
+    if (!handler) {
+      const sanitized = sanitizeForMrkdwn(parsed.subcommand);
+      const available = getRegisteredSubcommands().join(', ');
+      await ack(
+        `⚠️ 不明なサブコマンド: \`${sanitized}\`\n\n` +
+        `利用可能なサブコマンド: ${available}\n` +
+        `詳しくは \`/ap help\` を実行してください。`,
+      );
+      return;
+    }
+
+    // 登録済みサブコマンド → ack() 後にハンドラーへディスパッチ
     await ack();
 
-    const handler = handlers.get(parsed.subcommand);
-    if (handler) {
-      await handler(parsed.args, async (msg: string) => {
-        await respond(msg);
-      });
-    } else {
-      // 既知だがハンドラー未登録（将来の拡張用）
-      await respond(`⚠️ \`${parsed.subcommand}\` は現在準備中です。`);
-    }
+    await handler(parsed.args, async (msg: string) => {
+      await respond(msg);
+    });
   });
 }
