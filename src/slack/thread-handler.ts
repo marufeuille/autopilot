@@ -8,6 +8,7 @@
 import type { App } from '@slack/bolt';
 import type { Block, KnownBlock } from '@slack/types';
 import { config } from '../config';
+import { createCommandLogger, logInfo, logWarn } from '../logger';
 import {
   interactiveSessionManager,
   type ConversationMessage,
@@ -197,6 +198,9 @@ export async function handleThreadMessageInternal(
     return;
   }
 
+  const log = createCommandLogger({ command: session.type, threadTs });
+  log.info('スレッド内修正依頼を受信', { phase: 'thread_message_received' });
+
   // 会話履歴にユーザーの修正依頼を追加
   interactiveSessionManager.addMessage(threadTs, {
     role: 'user',
@@ -205,8 +209,10 @@ export async function handleThreadMessageInternal(
 
   try {
     // 再ドラフト用プロンプトを構築してClaudeに送信
+    log.info('Claude 再ドラフト開始', { phase: 'redraft_start' });
     const prompt = buildRedraftPrompt(session, userMessage);
     const draft = await deps.generateDraft(prompt);
+    log.info('Claude 再ドラフト完了', { phase: 'redraft_complete' });
 
     // 会話履歴にClaudeの再ドラフトを追加
     interactiveSessionManager.addMessage(threadTs, {
@@ -222,7 +228,9 @@ export async function handleThreadMessageInternal(
       thread_ts: threadTs,
       blocks,
     });
+    log.info('再ドラフトをスレッドに投稿（承認ボタン付き）', { phase: 'redraft_posted' });
   } catch (error) {
+    log.error('再ドラフトの生成中にエラーが発生', { phase: 'redraft_error' }, error);
     const errMsg = error instanceof Error ? error.message : String(error);
     await deps.postMessage({
       channel: session.channelId,
@@ -298,6 +306,12 @@ export function registerThreadHandler(app: App): void {
     if (!text || typeof text !== 'string') {
       return;
     }
+
+    logInfo('スレッドメッセージイベント検出', {
+      phase: 'event_received',
+      threadTs,
+      userId: msg.user,
+    });
 
     await handleThreadMessageInternal(threadTs, text, deps);
   });

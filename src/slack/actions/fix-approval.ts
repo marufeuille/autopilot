@@ -13,6 +13,7 @@
 import type { App, BlockAction } from '@slack/bolt';
 import type { Block, KnownBlock } from '@slack/types';
 import { config } from '../../config';
+import { createCommandLogger, logError } from '../../logger';
 import { interactiveSessionManager } from '../interactive-session';
 
 /**
@@ -186,11 +187,15 @@ export async function handleFixApproveInternal(
   messageTs: string,
   deps: FixApprovalDeps,
 ): Promise<void> {
+  const log = createCommandLogger({ command: 'fix', threadTs });
   const session = interactiveSessionManager.getSession(threadTs);
 
   if (!session) {
+    log.warn('セッションが見つからない', { phase: 'approve_received' });
     return;
   }
+
+  log.info('承認アクション受信', { phase: 'approve_received' });
 
   // CAS で drafting → approved に遷移（二重承認を防止）
   const transitioned = interactiveSessionManager.compareAndSwapPhase(
@@ -199,12 +204,15 @@ export async function handleFixApproveInternal(
     'approved',
   );
   if (!transitioned) {
+    log.warn('phase 遷移失敗（二重承認の可能性）', { phase: 'approve_cas_failed', currentPhase: session.phase });
     return;
   }
+  log.info('phase 遷移: drafting → approved', { phase: 'approve_phase_transition' });
 
   // 最終ドラフトを取得
   const draft = getLatestDraft(threadTs);
   if (!draft) {
+    log.warn('最終ドラフトが見つからない', { phase: 'approve_draft_missing' });
     await deps.postMessage({
       channel: session.channelId,
       text: ':warning: 分析ドラフトが見つかりません。',
@@ -218,6 +226,7 @@ export async function handleFixApproveInternal(
     const parsed = parseFixDraft(draft);
 
     if (!parsed.title) {
+      log.warn('タイトル抽出失敗、drafting に戻す', { phase: 'approve_parse_failed' });
       await deps.postMessage({
         channel: session.channelId,
         text: ':warning: ドラフトからタイトルを抽出できませんでした。スレッドで修正依頼を送ってください。',
@@ -230,16 +239,19 @@ export async function handleFixApproveInternal(
 
     // fix用スラッグ生成
     const slug = generateFixSlug(parsed.title);
+    log.info('ドラフトパース完了', { phase: 'approve_parsed', slug });
 
     // fix用ストーリーファイル内容を構築（status: Doing）
     const fileContent = buildFixStoryFileContent(parsed, slug, config.watchProject);
 
     // Vaultにファイルを作成
+    log.info('Vault ファイル作成開始', { phase: 'vault_write_start', slug });
     const filePath = deps.writeFixStoryToVault(
       config.watchProject,
       fileContent,
       slug,
     );
+    log.info('Vault ファイル作成完了', { phase: 'vault_write_complete', slug, filePath });
 
     // ボタンを削除してメッセージを更新
     await deps.updateMessage({
@@ -256,6 +268,7 @@ export async function handleFixApproveInternal(
 
     // phase を executing に遷移
     interactiveSessionManager.updatePhase(threadTs, 'executing');
+    log.info('phase 遷移: approved → executing', { phase: 'execution_start', slug });
 
     // 実行開始通知をスレッドに投稿
     await deps.postMessage({
@@ -263,7 +276,9 @@ export async function handleFixApproveInternal(
       text: `🚀 修正を開始しました！\n\n📁 *ストーリーファイル*: \`${filePath}\`\n📝 *スラッグ*: \`${slug}\`\n\nファイルウォッチャーが検出次第、自動実行が開始されます。`,
       thread_ts: threadTs,
     });
+    log.info('実行開始通知を投稿', { phase: 'execution_notified' });
   } catch (error) {
+    log.error('承認処理中にエラーが発生', { phase: 'approve_error' }, error);
     const errMsg = error instanceof Error ? error.message : String(error);
     console.error(`[fix-approval] Vault書き込みエラー (thread: ${threadTs}):`, errMsg);
     await deps.postMessage({
@@ -282,14 +297,19 @@ export async function handleFixCancelInternal(
   messageTs: string,
   deps: FixApprovalDeps,
 ): Promise<void> {
+  const log = createCommandLogger({ command: 'fix', threadTs });
   const session = interactiveSessionManager.getSession(threadTs);
 
   if (!session || session.phase !== 'drafting') {
+    log.warn('キャンセル不可（セッションなし or phase不一致）', { phase: 'cancel_received' });
     return;
   }
 
+  log.info('キャンセルアクション受信', { phase: 'cancel_received' });
+
   // セッションphaseをcancelledに遷移
   interactiveSessionManager.updatePhase(threadTs, 'cancelled');
+  log.info('phase 遷移: drafting → cancelled', { phase: 'cancel_phase_transition' });
 
   // ボタンを削除してメッセージを更新
   await deps.updateMessage({
@@ -374,13 +394,13 @@ export function registerFixApprovalHandlers(app: App): void {
     const blockBody = body as BlockAction;
     const action = blockBody.actions?.[0];
     if (!action || !('value' in action) || !action.value) {
-      console.error('[fix-approval] 承認アクションの値が取得できません');
+      logError('承認アクションの値が取得できません', { command: 'fix', phase: 'action_parse_error' });
       return;
     }
     const threadTs = action.value;
     const messageTs = blockBody.message?.ts;
     if (!messageTs) {
-      console.error('[fix-approval] メッセージtsが取得できません');
+      logError('メッセージtsが取得できません', { command: 'fix', phase: 'action_parse_error', threadTs });
       return;
     }
     await handleFixApproveInternal(threadTs, messageTs, deps);
@@ -392,13 +412,13 @@ export function registerFixApprovalHandlers(app: App): void {
     const blockBody = body as BlockAction;
     const action = blockBody.actions?.[0];
     if (!action || !('value' in action) || !action.value) {
-      console.error('[fix-approval] キャンセルアクションの値が取得できません');
+      logError('キャンセルアクションの値が取得できません', { command: 'fix', phase: 'action_parse_error' });
       return;
     }
     const threadTs = action.value;
     const messageTs = blockBody.message?.ts;
     if (!messageTs) {
-      console.error('[fix-approval] メッセージtsが取得できません');
+      logError('メッセージtsが取得できません', { command: 'fix', phase: 'action_parse_error', threadTs });
       return;
     }
     await handleFixCancelInternal(threadTs, messageTs, deps);

@@ -6,6 +6,7 @@
  */
 import type { App } from '@slack/bolt';
 import { config } from '../../config';
+import { createCommandLogger } from '../../logger';
 import type { SubcommandHandler } from '../slash-commands';
 import {
   interactiveSessionManager,
@@ -112,8 +113,11 @@ export async function handleFixInternal(
   respond: (msg: string) => Promise<void>,
   deps: FixDraftDeps,
 ): Promise<void> {
+  const log = createCommandLogger({ command: 'fix' });
+
   // 引数バリデーション
   if (args.length === 0) {
+    log.warn('引数なしでコマンド実行', { phase: 'command_received' });
     await respond(
       '⚠️ バグの説明を指定してください。\n使い方: `/ap fix <バグ説明>`',
     );
@@ -121,6 +125,7 @@ export async function handleFixInternal(
   }
 
   const bugDescription = args.join(' ');
+  log.info('コマンド受信', { phase: 'command_received', description: bugDescription });
 
   try {
     // スレッド起点メッセージを投稿
@@ -131,13 +136,17 @@ export async function handleFixInternal(
 
     const threadTs = rootRes.ts;
     if (!threadTs) {
+      log.warn('スレッド作成失敗: ts が undefined', { phase: 'thread_creation' });
       await respond(':warning: スレッドの作成に失敗しました。');
       return;
     }
+    log.info('スレッド作成完了', { phase: 'thread_creation', threadTs });
 
     // Claudeでバグ分析生成
+    log.info('Claude 分析開始', { phase: 'analysis_start', threadTs });
     const prompt = buildFixAnalysisPrompt(bugDescription);
     const analysis = await deps.generateDraft(prompt);
+    log.info('Claude 分析完了', { phase: 'analysis_complete', threadTs });
 
     // 分析結果をスレッドに投稿
     await deps.postMessage({
@@ -145,6 +154,7 @@ export async function handleFixInternal(
       text: analysis,
       thread_ts: threadTs,
     });
+    log.info('分析結果をスレッドに投稿', { phase: 'result_posted', threadTs });
 
     // セッションを登録（phase: drafting, type: fix）
     const session: InteractiveSession = {
@@ -159,12 +169,14 @@ export async function handleFixInternal(
       ],
     };
     interactiveSessionManager.startSession(session);
+    log.info('セッション登録完了 (phase: drafting)', { phase: 'session_registered', threadTs });
 
     // ephemeral メッセージで案内
     await respond(
       '✅ バグ分析をスレッドに投稿しました。スレッド内で修正依頼を返すと再分析します。',
     );
   } catch (error) {
+    log.error('バグ分析の生成中にエラーが発生', { phase: 'error' }, error);
     const errMsg = error instanceof Error ? error.message : String(error);
     await respond(`:warning: バグ分析の生成中にエラーが発生しました: ${errMsg}`);
   }
