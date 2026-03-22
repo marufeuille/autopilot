@@ -114,6 +114,40 @@ describe('InteractiveSessionManager', () => {
     expect(manager.size).toBe(1);
   });
 
+  describe('listActiveSessions', () => {
+    it('アクティブなセッション一覧を返す', () => {
+      manager.startSession(makeSession({ threadTs: 'ts-1', type: 'story', phase: 'drafting' }));
+      manager.startSession(makeSession({ threadTs: 'ts-2', type: 'fix', phase: 'executing' }));
+
+      const sessions = manager.listActiveSessions();
+
+      expect(sessions).toHaveLength(2);
+      expect(sessions).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ threadTs: 'ts-1', type: 'story', phase: 'drafting' }),
+          expect.objectContaining({ threadTs: 'ts-2', type: 'fix', phase: 'executing' }),
+        ]),
+      );
+    });
+
+    it('セッションがない場合は空配列を返す', () => {
+      expect(manager.listActiveSessions()).toEqual([]);
+    });
+
+    it('会話履歴の件数が含まれる', () => {
+      manager.startSession(makeSession({
+        threadTs: 'ts-1',
+        conversationHistory: [
+          { role: 'user', content: 'a' },
+          { role: 'assistant', content: 'b' },
+        ],
+      }));
+
+      const sessions = manager.listActiveSessions();
+      expect(sessions[0].historyLength).toBe(2);
+    });
+  });
+
   describe('compareAndSwapPhase', () => {
     it('期待するフェーズと一致する場合、遷移してtrueを返す', () => {
       manager.startSession(makeSession({ phase: 'drafting' }));

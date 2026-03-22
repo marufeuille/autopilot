@@ -157,6 +157,25 @@ export class InteractiveSessionManager {
   get size(): number {
     return this.sessions.size;
   }
+
+  /**
+   * アクティブなセッション一覧を返す（デバッグ・運用時の状態確認用）
+   */
+  listActiveSessions(): Array<{
+    threadTs: string;
+    type: SessionType;
+    phase: SessionPhase;
+    channelId: string;
+    historyLength: number;
+  }> {
+    return Array.from(this.sessions.values()).map((s) => ({
+      threadTs: s.threadTs,
+      type: s.type,
+      phase: s.phase,
+      channelId: s.channelId,
+      historyLength: s.conversationHistory.length,
+    }));
+  }
 }
 
 /** シングルトンインスタンス */
