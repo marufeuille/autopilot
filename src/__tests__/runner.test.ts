@@ -32,6 +32,19 @@ vi.mock('../git', () => ({
   },
 }));
 
+// レビューループをモック
+const mockRunReviewLoop = vi.fn().mockResolvedValue({
+  finalVerdict: 'OK',
+  escalationRequired: false,
+  iterations: [{ iteration: 1, reviewResult: { verdict: 'OK', summary: 'All good', findings: [] }, timestamp: new Date() }],
+  lastReviewResult: { verdict: 'OK', summary: 'All good', findings: [] },
+});
+const mockFormatReviewLoopResult = vi.fn().mockReturnValue('✅ セルフレビュー通過');
+vi.mock('../review', () => ({
+  runReviewLoop: (...args: unknown[]) => mockRunReviewLoop(...args),
+  formatReviewLoopResult: (...args: unknown[]) => mockFormatReviewLoopResult(...args),
+}));
+
 // Claude agent SDK をモック（runTask 内で使われる）
 const mockQuery = vi.fn(() => ({
   [Symbol.asyncIterator]: () => ({
@@ -454,6 +467,68 @@ describe('runTask', () => {
     expect(prompt).toContain('git pull は不要です');
     // feature ブランチを直接作成する指示が含まれている
     expect(prompt).toContain('直接 feature ブランチを作成してください');
+  });
+
+  it('タスク実行後にセルフレビューループが呼ばれる', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    await runTask(task, story, notifier, repoPath);
+
+    // runReviewLoop が呼ばれたことを確認
+    expect(mockRunReviewLoop).toHaveBeenCalledWith(
+      repoPath,
+      'feature/task-01',
+      task.content,
+    );
+    // レビュー結果の通知が送信されたことを確認
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('セルフレビュー結果'),
+    );
+  });
+
+  it('セルフレビューでエスカレーション時、完了確認メッセージにセルフレビュー未通過が含まれる', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    mockRunReviewLoop.mockResolvedValueOnce({
+      finalVerdict: 'NG',
+      escalationRequired: true,
+      iterations: [
+        { iteration: 1, reviewResult: { verdict: 'NG', summary: 'Issues', findings: [] }, timestamp: new Date() },
+      ],
+      lastReviewResult: { verdict: 'NG', summary: 'Issues', findings: [] },
+    });
+
+    await runTask(task, story, notifier, repoPath);
+
+    // 完了承認のメッセージにセルフレビュー未通過が含まれること
+    const approvalCalls = (notifier.requestApproval as ReturnType<typeof vi.fn>).mock.calls;
+    const doneApprovalCall = approvalCalls.find(
+      (call: unknown[]) => (call[1] as string).includes('タスク完了確認'),
+    );
+    expect(doneApprovalCall).toBeDefined();
+    expect(doneApprovalCall![1]).toContain('セルフレビュー未通過');
+  });
+
+  it('セルフレビュー通過時、完了確認メッセージにセルフレビュー通過が含まれる', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    await runTask(task, story, notifier, repoPath);
+
+    const approvalCalls = (notifier.requestApproval as ReturnType<typeof vi.fn>).mock.calls;
+    const doneApprovalCall = approvalCalls.find(
+      (call: unknown[]) => (call[1] as string).includes('タスク完了確認'),
+    );
+    expect(doneApprovalCall).toBeDefined();
+    expect(doneApprovalCall![1]).toContain('セルフレビュー通過');
   });
 
   it('正常実行時は Doing → Done の順で更新される', async () => {
