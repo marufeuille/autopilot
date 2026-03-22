@@ -10,8 +10,8 @@ function required(key: string): string {
   return value;
 }
 
-/** 通知バックエンド種別。"local" | "slack"（デフォルト: "local"） */
-export const notifyBackend = (process.env.NOTIFY_BACKEND ?? 'local') as 'local' | 'slack';
+/** 通知バックエンド種別。"local" | "slack" | "ntfy"（デフォルト: "local"） */
+export const notifyBackend = (process.env.NOTIFY_BACKEND ?? 'local') as 'local' | 'slack' | 'ntfy';
 
 export const config = {
   vaultPath: required('VAULT_PATH'),
@@ -26,6 +26,18 @@ export const config = {
         botToken: process.env.SLACK_BOT_TOKEN ?? '',
         appToken: process.env.SLACK_APP_TOKEN ?? '',
         channelId: process.env.SLACK_CHANNEL_ID ?? '',
+      },
+  /** ntfy 設定は notifyBackend === 'ntfy' のときだけ必須 */
+  ntfy: notifyBackend === 'ntfy'
+    ? {
+        topic: required('NTFY_TOPIC'),
+        serverUrl: process.env.NTFY_SERVER_URL ?? 'https://ntfy.sh',
+        callbackBaseUrl: process.env.NTFY_CALLBACK_BASE_URL ?? '',
+      }
+    : {
+        topic: process.env.NTFY_TOPIC ?? '',
+        serverUrl: process.env.NTFY_SERVER_URL ?? 'https://ntfy.sh',
+        callbackBaseUrl: process.env.NTFY_CALLBACK_BASE_URL ?? '',
       },
   watchProject: process.env.WATCH_PROJECT ?? 'claude-workflow-kit',
 } as const;
