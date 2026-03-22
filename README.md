@@ -58,6 +58,13 @@ SLACK_CHANNEL_ID=C0XXXXXXXXX
 
 **Interactivityを有効化**（"Interactivity & Shortcuts"）
 
+**スラッシュコマンドを登録**（"Slash Commands"）
+- "Create New Command" をクリック
+- Command: `/ap`
+- Short Description: `autopilot操作`
+- Usage Hint: `status | retry <task-slug>`
+- 保存後、Appを再インストール
+
 **Appをワークスペースにインストール** → `SLACK_BOT_TOKEN`
 
 **Botをチャンネルに招待**
@@ -74,6 +81,24 @@ npm run dev
 # ビルドして実行
 npm run build
 node dist/index.js
+```
+
+## `/ap` コマンド
+
+Slackから autopilot を操作できます。
+
+> **前提**: `/ap` コマンドはSlackバックエンドが起動している場合のみ動作します。
+> `.env` に `NOTIFY_BACKEND=slack` が設定されていること、かつ `npm run dev` または `node dist/index.js` が起動中であることを確認してください。
+
+| コマンド | 説明 |
+|---|---|
+| `/ap status` | 実行中のストーリー・タスク一覧を表示 |
+| `/ap retry <task-slug>` | 失敗タスクをTodoに戻して再実行 |
+
+例:
+```
+/ap status
+/ap retry my-feature-task-01
 ```
 
 ## Vaultのファイル構造
