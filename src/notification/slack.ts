@@ -175,10 +175,12 @@ export class SlackNotificationBackend implements NotificationBackend {
     return this.threadSession.getThreadTs(storySlug);
   }
 
-  async notify(message: string): Promise<void> {
+  async notify(message: string, storySlug?: string): Promise<void> {
+    const threadTs = storySlug ? this.threadSession.getThreadTs(storySlug) : undefined;
     await this.app.client.chat.postMessage({
       channel: config.slack.channelId,
       text: message,
+      ...(threadTs ? { thread_ts: threadTs } : {}),
     });
   }
 
@@ -186,8 +188,9 @@ export class SlackNotificationBackend implements NotificationBackend {
     id: string,
     message: string,
     buttons: { approve: string; reject: string },
+    storySlug?: string,
   ): Promise<ApprovalResult> {
-    return this._postApprovalRequest(id, message, buttons);
+    return this._postApprovalRequest(id, message, buttons, storySlug);
   }
 
   /** 承認リクエストを Slack に投稿し、結果を待つ */
@@ -195,11 +198,14 @@ export class SlackNotificationBackend implements NotificationBackend {
     id: string,
     message: string,
     buttons: { approve: string; reject: string },
+    storySlug?: string,
   ): Promise<ApprovalResult> {
+    const threadTs = storySlug ? this.threadSession.getThreadTs(storySlug) : undefined;
     const blocks = buildApprovalBlocks(id, message, buttons);
     const res = await this.app.client.chat.postMessage({
       channel: config.slack.channelId,
       blocks,
+      ...(threadTs ? { thread_ts: threadTs } : {}),
     });
 
     return new Promise((resolve) =>

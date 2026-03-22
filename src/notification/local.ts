@@ -20,7 +20,7 @@ export class LocalNotificationBackend implements NotificationBackend {
   /**
    * macOS システム通知を送信する
    */
-  async notify(message: string): Promise<void> {
+  async notify(message: string, _storySlug?: string): Promise<void> {
     return new Promise<void>((resolve) => {
       execFile(
         'osascript',
@@ -44,6 +44,7 @@ export class LocalNotificationBackend implements NotificationBackend {
     _id: string,
     message: string,
     buttons: { approve: string; reject: string },
+    _storySlug?: string,
   ): Promise<ApprovalResult> {
     // macOS 通知で承認リクエストがある旨を通知
     await this.notify(`承認リクエスト: ${stripMarkdown(message).slice(0, 100)}`);

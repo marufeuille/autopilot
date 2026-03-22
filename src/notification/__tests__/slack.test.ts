@@ -496,3 +496,131 @@ describe('registerApprovalHandlers - 承認フロー', () => {
     });
   });
 });
+
+describe('スレッド内投稿（thread_ts 対応）', () => {
+  let mockApp: ReturnType<typeof createMockApp>;
+  let backend: SlackNotificationBackend;
+
+  beforeEach(() => {
+    mockApp = createMockApp();
+    backend = new SlackNotificationBackend(mockApp);
+  });
+
+  describe('startThread', () => {
+    it('起点メッセージを投稿し thread_ts が保存される', async () => {
+      mockApp.client.chat.postMessage.mockResolvedValueOnce({ ts: '1111111111.111111' });
+
+      await backend.startThread('my-story', 'ストーリー開始');
+
+      expect(mockApp.client.chat.postMessage).toHaveBeenCalledWith({
+        channel: expect.any(String),
+        text: 'ストーリー開始',
+      });
+      expect(backend.getThreadTs('my-story')).toBe('1111111111.111111');
+    });
+
+    it('ts が返されない場合は thread_ts が保存されない', async () => {
+      mockApp.client.chat.postMessage.mockResolvedValueOnce({});
+
+      await backend.startThread('no-ts-story', 'メッセージ');
+
+      expect(backend.getThreadTs('no-ts-story')).toBeUndefined();
+    });
+  });
+
+  describe('notify with storySlug', () => {
+    it('storySlug を渡すとスレッド返信になる', async () => {
+      // スレッドを開始
+      mockApp.client.chat.postMessage.mockResolvedValueOnce({ ts: '2222222222.222222' });
+      await backend.startThread('threaded-story', '起点メッセージ');
+
+      // スレッド内に通知
+      await backend.notify('スレッド内通知', 'threaded-story');
+
+      const lastCall = mockApp.client.chat.postMessage.mock.calls[1][0];
+      expect(lastCall).toEqual({
+        channel: expect.any(String),
+        text: 'スレッド内通知',
+        thread_ts: '2222222222.222222',
+      });
+    });
+
+    it('storySlug 省略時は従来のチャンネル直投稿が維持される', async () => {
+      await backend.notify('チャンネル直投稿');
+
+      expect(mockApp.client.chat.postMessage).toHaveBeenCalledWith({
+        channel: expect.any(String),
+        text: 'チャンネル直投稿',
+      });
+      // thread_ts が含まれていないことを確認
+      const callArgs = mockApp.client.chat.postMessage.mock.calls[0][0];
+      expect(callArgs.thread_ts).toBeUndefined();
+    });
+
+    it('未登録の storySlug を渡した場合はチャンネル直投稿にフォールバックする', async () => {
+      await backend.notify('フォールバック通知', 'unknown-story');
+
+      const callArgs = mockApp.client.chat.postMessage.mock.calls[0][0];
+      expect(callArgs.thread_ts).toBeUndefined();
+      expect(callArgs.text).toBe('フォールバック通知');
+    });
+  });
+
+  describe('requestApproval with storySlug', () => {
+    it('storySlug を渡すとスレッド内に承認ボタンが投稿される', async () => {
+      // スレッドを開始
+      mockApp.client.chat.postMessage.mockResolvedValueOnce({ ts: '3333333333.333333' });
+      await backend.startThread('approval-story', '起点メッセージ');
+
+      // スレッド内に承認リクエスト
+      const promise = backend.requestApproval(
+        'thread-approval-id',
+        '承認してください',
+        { approve: '承認', reject: '却下' },
+        'approval-story',
+      );
+
+      const lastCall = mockApp.client.chat.postMessage.mock.calls[1][0];
+      expect(lastCall.thread_ts).toBe('3333333333.333333');
+      expect(lastCall.blocks).toBeDefined();
+
+      void promise;
+    });
+
+    it('storySlug 省略時は従来のチャンネル直投稿が維持される', async () => {
+      const promise = backend.requestApproval(
+        'no-thread-id',
+        '承認してください',
+        { approve: '承認', reject: '却下' },
+      );
+
+      const callArgs = mockApp.client.chat.postMessage.mock.calls[0][0];
+      expect(callArgs.thread_ts).toBeUndefined();
+      expect(callArgs.blocks).toBeDefined();
+
+      void promise;
+    });
+  });
+
+  describe('複数ストーリーの分離', () => {
+    it('異なるストーリーはそれぞれ別スレッドに分離される', async () => {
+      // ストーリーA のスレッド開始
+      mockApp.client.chat.postMessage.mockResolvedValueOnce({ ts: 'ts-story-a' });
+      await backend.startThread('story-a', 'ストーリーA開始');
+
+      // ストーリーB のスレッド開始
+      mockApp.client.chat.postMessage.mockResolvedValueOnce({ ts: 'ts-story-b' });
+      await backend.startThread('story-b', 'ストーリーB開始');
+
+      // ストーリーA に通知
+      await backend.notify('A向け通知', 'story-a');
+      const callA = mockApp.client.chat.postMessage.mock.calls[2][0];
+      expect(callA.thread_ts).toBe('ts-story-a');
+
+      // ストーリーB に通知
+      await backend.notify('B向け通知', 'story-b');
+      const callB = mockApp.client.chat.postMessage.mock.calls[3][0];
+      expect(callB.thread_ts).toBe('ts-story-b');
+    });
+  });
+});

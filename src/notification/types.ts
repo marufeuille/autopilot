@@ -14,20 +14,23 @@ export interface NotificationBackend {
   /**
    * 通知を送信する（情報通知、完了通知など）
    * @param message 通知メッセージ
+   * @param storySlug ストーリー識別子（指定時はスレッド内に投稿）
    */
-  notify(message: string): Promise<void>;
+  notify(message: string, storySlug?: string): Promise<void>;
 
   /**
    * 承認リクエストを送信し、結果を待つ
    * @param id 承認リクエストの一意識別子
    * @param message 承認プロンプトに表示するメッセージ
    * @param buttons ボタンラベル（approve / reject）
+   * @param storySlug ストーリー識別子（指定時はスレッド内に投稿）
    * @returns 承認結果
    */
   requestApproval(
     id: string,
     message: string,
     buttons: { approve: string; reject: string },
+    storySlug?: string,
   ): Promise<ApprovalResult>;
 
   /**
