@@ -15,6 +15,7 @@ import type { Block, KnownBlock } from '@slack/types';
 import { config } from '../../config';
 import { createCommandLogger, logInfo, logError } from '../../logger';
 import { interactiveSessionManager } from '../interactive-session';
+import { executeFixInternal, type FixExecutionDeps } from './fix-executor';
 
 /**
  * fix分析ドラフトのパース結果
@@ -127,6 +128,8 @@ export interface FixApprovalDeps {
     content: string,
     slug: string,
   ) => string;
+  /** Claudeエージェントを使って修正を実行する（省略時はVault書き込みのみ、signal でキャンセル可能） */
+  runFixAgent?: (prompt: string, signal?: AbortSignal) => Promise<string>;
 }
 
 /**
@@ -274,10 +277,39 @@ export async function handleFixApproveInternal(
     // 実行開始通知をスレッドに投稿
     await deps.postMessage({
       channel: session.channelId,
-      text: `🚀 修正を開始しました！\n\n📁 *ストーリーファイル*: \`${filePath}\`\n📝 *スラッグ*: \`${slug}\`\n\nファイルウォッチャーが検出次第、自動実行が開始されます。`,
+      text: `🚀 修正を開始しました！\n\n📁 *ストーリーファイル*: \`${filePath}\`\n📝 *スラッグ*: \`${slug}\``,
       thread_ts: threadTs,
     });
     log.info('実行開始通知を投稿', { phase: 'execution_notified' });
+
+    // runFixAgent が提供されている場合は修正実行を開始する
+    if (deps.runFixAgent) {
+      log.info('修正実行フローを開始', { phase: 'fix_execution_trigger', slug });
+
+      const executionDeps: FixExecutionDeps = {
+        postMessage: deps.postMessage,
+        updateMessage: async (params) => {
+          await deps.updateMessage({
+            channel: params.channel,
+            ts: params.ts,
+            text: params.text,
+          });
+        },
+        runFixAgent: deps.runFixAgent,
+      };
+
+      // 非同期で実行（awaitして完了まで待つ）
+      await executeFixInternal(
+        threadTs,
+        session.channelId,
+        parsed,
+        slug,
+        executionDeps,
+        userId,
+      );
+    } else {
+      log.info('runFixAgent 未設定のためファイルウォッチャーによる実行に委譲', { phase: 'execution_delegated', slug });
+    }
   } catch (error) {
     log.error('承認処理中にエラーが発生', { phase: 'approve_error' }, error);
     const errMsg = error instanceof Error ? error.message : String(error);
@@ -381,6 +413,40 @@ export function createFixApprovalDepsFromApp(app: App): FixApprovalDeps {
       });
     },
     writeFixStoryToVault,
+    runFixAgent: async (prompt: string, signal?: AbortSignal) => {
+      let queryFn: typeof import('@anthropic-ai/claude-agent-sdk')['query'];
+      try {
+        const mod = await import('@anthropic-ai/claude-agent-sdk');
+        queryFn = mod.query;
+      } catch (importError) {
+        throw new Error(
+          `claude-agent-sdk のインポートに失敗しました: ${importError instanceof Error ? importError.message : String(importError)}`,
+        );
+      }
+      let fullText = '';
+      for await (const message of queryFn({
+        prompt,
+        options: {
+          allowedTools: ['Read', 'Write', 'Edit', 'Glob', 'Grep'],
+          permissionMode: 'plan',
+          ...(signal ? { abortSignal: signal } : {}),
+        },
+      })) {
+        // タイムアウトによるキャンセルをチェック
+        if (signal?.aborted) {
+          break;
+        }
+        if (message.type === 'assistant') {
+          const content = message.message?.content ?? [];
+          for (const block of content) {
+            if ('text' in block && typeof block.text === 'string') {
+              fullText += block.text;
+            }
+          }
+        }
+      }
+      return fullText;
+    },
   };
 }
 
