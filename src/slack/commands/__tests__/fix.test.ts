@@ -70,11 +70,19 @@ describe('handleFixInternal', () => {
     expect(rootCall.text).toContain('ログインで 404エラー');
     expect(rootCall.thread_ts).toBeUndefined();
 
-    // 2. 分析がスレッドに投稿される
+    // 2. 分析がスレッドに投稿される（承認ボタン付き）
     const analysisCall = (deps.postMessage as ReturnType<typeof vi.fn>).mock.calls[1][0];
     expect(analysisCall.channel).toBe('C_TEST_CHANNEL');
     expect(analysisCall.thread_ts).toBe('1111111111.111111');
     expect(analysisCall.text).toContain('ログインエラー修正');
+
+    // 承認ボタン（blocks）が含まれる
+    expect(analysisCall.blocks).toBeDefined();
+    expect(analysisCall.blocks).toHaveLength(2);
+    const actionsBlock = analysisCall.blocks[1] as any;
+    expect(actionsBlock.type).toBe('actions');
+    expect(actionsBlock.elements[0].action_id).toBe('ap_fix_approve');
+    expect(actionsBlock.elements[1].action_id).toBe('ap_fix_cancel');
 
     // 3. Claudeの分析生成が呼ばれる
     expect(deps.generateDraft).toHaveBeenCalledTimes(1);

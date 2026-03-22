@@ -8,6 +8,7 @@
  * 1:1マッピングを管理するのに対し、このモジュールはスレッド起点の対話セッションを
  * phase やコンテキスト情報とともに追跡する。
  */
+import { logInfo, logWarn } from '../logger';
 
 /** セッションのフェーズ */
 export type SessionPhase = 'drafting' | 'approved' | 'executing' | 'completed' | 'cancelled';
@@ -52,6 +53,11 @@ export class InteractiveSessionManager {
    */
   startSession(session: InteractiveSession): void {
     this.sessions.set(session.threadTs, session);
+    logInfo('セッション開始', {
+      command: session.type,
+      threadTs: session.threadTs,
+      phase: session.phase,
+    });
   }
 
   /**
@@ -67,7 +73,19 @@ export class InteractiveSessionManager {
   updatePhase(threadTs: string, phase: SessionPhase): void {
     const session = this.sessions.get(threadTs);
     if (session) {
+      const previousPhase = session.phase;
       session.phase = phase;
+      logInfo('セッションフェーズ更新', {
+        command: session.type,
+        threadTs,
+        phase,
+        previousPhase,
+      });
+    } else {
+      logWarn('セッションが見つからないためフェーズ更新をスキップ', {
+        threadTs,
+        phase,
+      });
     }
   }
 
@@ -85,9 +103,20 @@ export class InteractiveSessionManager {
   ): boolean {
     const session = this.sessions.get(threadTs);
     if (!session || session.phase !== expectedPhase) {
+      logWarn('CAS フェーズ遷移失敗', {
+        threadTs,
+        expectedPhase,
+        newPhase,
+        actualPhase: session?.phase ?? '(session not found)',
+      });
       return false;
     }
     session.phase = newPhase;
+    logInfo('CAS フェーズ遷移成功', {
+      command: session.type,
+      threadTs,
+      phase: `${expectedPhase} → ${newPhase}`,
+    });
     return true;
   }
 
@@ -98,6 +127,12 @@ export class InteractiveSessionManager {
     const session = this.sessions.get(threadTs);
     if (session) {
       session.conversationHistory.push(message);
+      logInfo('会話履歴にメッセージ追加', {
+        command: session.type,
+        threadTs,
+        role: message.role,
+        historyLength: session.conversationHistory.length,
+      });
     }
   }
 
@@ -105,6 +140,14 @@ export class InteractiveSessionManager {
    * セッションを終了する
    */
   endSession(threadTs: string): void {
+    const session = this.sessions.get(threadTs);
+    if (session) {
+      logInfo('セッション終了', {
+        command: session.type,
+        threadTs,
+        phase: session.phase,
+      });
+    }
     this.sessions.delete(threadTs);
   }
 

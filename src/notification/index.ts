@@ -69,7 +69,7 @@ export async function createNotificationBackend(): Promise<NotificationBackend> 
       registerSlashCommands(slackApp);
       registerThreadHandler(slackApp);
       await slackApp.start();
-      console.log('[slack] bot started (Socket Mode)');
+      console.log('[slack] bot started (Socket Mode) — slash commands, thread handler, approval handlers registered');
 
       const slackBackend = new SlackNotificationBackend(slackApp);
       // Slack バックエンドをリジリエントラッパーで包む（失敗時はローカルにフォールバック）

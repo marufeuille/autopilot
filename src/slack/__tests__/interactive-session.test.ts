@@ -1,4 +1,11 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+vi.mock('../../logger', () => ({
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+  logError: vi.fn(),
+}));
+
 import {
   InteractiveSessionManager,
   type InteractiveSession,
@@ -105,5 +112,42 @@ describe('InteractiveSessionManager', () => {
     expect(manager.size).toBe(2);
     manager.endSession('ts-1');
     expect(manager.size).toBe(1);
+  });
+
+  describe('compareAndSwapPhase', () => {
+    it('期待するフェーズと一致する場合、遷移してtrueを返す', () => {
+      manager.startSession(makeSession({ phase: 'drafting' }));
+
+      const result = manager.compareAndSwapPhase('1234567890.123456', 'drafting', 'approved');
+
+      expect(result).toBe(true);
+      expect(manager.getSession('1234567890.123456')!.phase).toBe('approved');
+    });
+
+    it('期待するフェーズと一致しない場合、falseを返す', () => {
+      manager.startSession(makeSession({ phase: 'approved' }));
+
+      const result = manager.compareAndSwapPhase('1234567890.123456', 'drafting', 'approved');
+
+      expect(result).toBe(false);
+      expect(manager.getSession('1234567890.123456')!.phase).toBe('approved');
+    });
+
+    it('セッションが存在しない場合、falseを返す', () => {
+      const result = manager.compareAndSwapPhase('nonexistent', 'drafting', 'approved');
+
+      expect(result).toBe(false);
+    });
+
+    it('二重承認を防止できる', () => {
+      manager.startSession(makeSession({ phase: 'drafting' }));
+
+      const first = manager.compareAndSwapPhase('1234567890.123456', 'drafting', 'approved');
+      const second = manager.compareAndSwapPhase('1234567890.123456', 'drafting', 'approved');
+
+      expect(first).toBe(true);
+      expect(second).toBe(false);
+      expect(manager.getSession('1234567890.123456')!.phase).toBe('approved');
+    });
   });
 });
