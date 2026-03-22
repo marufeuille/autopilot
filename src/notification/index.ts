@@ -9,6 +9,7 @@
 export { NotificationBackend, ApprovalResult, NotificationEventType, NotificationContext } from './types';
 export { LocalNotificationBackend } from './local';
 export { SlackNotificationBackend } from './slack';
+export { NtfyNotificationBackend } from './ntfy';
 export { generateApprovalId } from './approval-id';
 export { ResilientNotificationBackend, ResilientOptions } from './resilient';
 export {
@@ -27,6 +28,7 @@ import { ResilientNotificationBackend } from './resilient';
  *
  * - "local"（デフォルト）: macOS システム通知 + ターミナル入力
  * - "slack": Slack ボット経由の通知・承認フロー（動的インポート）
+ * - "ntfy": ntfy.sh 経由のプッシュ通知
  *
  * @throws 未知のバックエンド指定時にエラー
  */
@@ -52,11 +54,23 @@ export async function createNotificationBackend(): Promise<NotificationBackend> 
       return new ResilientNotificationBackend(slackBackend);
     }
 
+    case 'ntfy': {
+      const { config } = await import('../config');
+      const { NtfyNotificationBackend } = await import('./ntfy');
+
+      const ntfyBackend = new NtfyNotificationBackend(
+        config.ntfy.serverUrl,
+        config.ntfy.topic,
+      );
+      // ntfy バックエンドをリジリエントラッパーで包む（失敗時はローカルにフォールバック）
+      return new ResilientNotificationBackend(ntfyBackend);
+    }
+
     default:
       throw new Error(
         `Unknown NOTIFY_BACKEND: "${backend}". ` +
-        `Supported values: "local" (macOS notification + terminal), "slack" (Slack bot). ` +
-        `Set NOTIFY_BACKEND=local or NOTIFY_BACKEND=slack in your .env file.`,
+        `Supported values: "local" (macOS notification + terminal), "slack" (Slack bot), "ntfy" (ntfy.sh push). ` +
+        `Set NOTIFY_BACKEND=local or NOTIFY_BACKEND=slack or NOTIFY_BACKEND=ntfy in your .env file.`,
       );
   }
 }
