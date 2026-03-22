@@ -1,11 +1,8 @@
-import { execSync, execFileSync } from 'child_process';
 import { writeFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { query } from '@anthropic-ai/claude-agent-sdk';
-import { StoryFile, TaskFile, TaskStatus, getStoryTasks } from './vault/reader';
-import { updateFileStatus, createTaskFile, TaskDraft } from './vault/writer';
-import { decomposeTasks } from './decomposer';
+import { StoryFile, TaskFile, TaskStatus } from './vault/reader';
+import { TaskDraft } from './vault/writer';
 import {
   NotificationBackend,
   generateApprovalId,
@@ -14,9 +11,12 @@ import {
   buildCIEscalationMessage,
   NotificationContext,
 } from './notification';
-import { syncMainBranch, GitSyncError } from './git';
-import { runReviewLoop, formatReviewLoopResult, ReviewLoopResult } from './review';
-import { runCIPollingLoop, formatCIPollingResult, CIPollingResult, CIPollingOptions } from './ci';
+import { GitSyncError } from './git';
+import { formatReviewLoopResult, ReviewLoopResult } from './review';
+import { formatCIPollingResult, CIPollingResult } from './ci';
+import { RunnerDeps, createDefaultRunnerDeps } from './runner-deps';
+
+export { RunnerDeps, createDefaultRunnerDeps } from './runner-deps';
 
 function buildTaskPrompt(task: TaskFile, story: StoryFile, repoPath: string): string {
   return `あなたは優秀なソフトウェアエンジニアです。以下のタスクを実装してください。
@@ -107,7 +107,9 @@ export function createPullRequest(
   task: TaskFile,
   story: StoryFile,
   reviewLoopResult: ReviewLoopResult,
+  deps?: Pick<RunnerDeps, 'execCommand'>,
 ): string {
+  const d = deps ?? createDefaultRunnerDeps();
   const reviewSummary = formatReviewSummaryForPR(reviewLoopResult);
   const body = `## 概要\n\nタスク: ${task.slug}\nストーリー: ${story.slug}\n\n${task.content}\n\n${reviewSummary}`;
 
@@ -117,20 +119,12 @@ export function createPullRequest(
     writeFileSync(tmpFile, body, 'utf-8');
 
     // リモートにブランチをプッシュ
-    execSync(`git push -u origin ${branch}`, {
-      cwd: repoPath,
-      encoding: 'utf-8',
-      stdio: 'pipe',
-    });
+    d.execCommand(`git push -u origin ${branch}`, repoPath);
 
     // PR作成（--body-file で一時ファイル経由で渡す）
-    const prUrl = execSync(
+    const prUrl = d.execCommand(
       `gh pr create --base main --head ${branch} --title "${task.slug}" --body-file ${tmpFile}`,
-      {
-        cwd: repoPath,
-        encoding: 'utf-8',
-        stdio: 'pipe',
-      },
+      repoPath,
     ).trim();
 
     console.log(`[runner] PR created: ${prUrl}`);
@@ -139,11 +133,10 @@ export function createPullRequest(
     console.error(`[runner] PR creation failed:`, error);
     // 既にPRが存在する場合はURL取得を試みる
     try {
-      return execSync(`gh pr view ${branch} --json url -q .url`, {
-        cwd: repoPath,
-        encoding: 'utf-8',
-        stdio: 'pipe',
-      }).trim();
+      return d.execCommand(
+        `gh pr view ${branch} --json url -q .url`,
+        repoPath,
+      ).trim();
     } catch {
       return '';
     }
@@ -157,34 +150,15 @@ export function createPullRequest(
   }
 }
 
-async function runClaudeAgent(prompt: string, cwd: string): Promise<void> {
-  for await (const message of query({
-    prompt,
-    options: {
-      cwd,
-      allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-      permissionMode: 'bypassPermissions',
-    },
-  })) {
-    if (message.type === 'assistant') {
-      const content = message.message?.content ?? [];
-      for (const block of content) {
-        if ('text' in block && block.text) {
-          process.stdout.write(`[claude] ${block.text}\n`);
-        }
-      }
-    } else if (message.type === 'result') {
-      console.log(`[runner] agent result: ${message.subtype}`);
-    }
-  }
-}
-
 export async function runTask(
   task: TaskFile,
   story: StoryFile,
   notifier: NotificationBackend,
   repoPath: string,
+  deps?: RunnerDeps,
 ): Promise<void> {
+  const d = deps ?? createDefaultRunnerDeps();
+
   // タスク開始承認
   console.log(`[runner] requesting start approval: ${task.slug}`);
   const startId = generateApprovalId(story.slug, task.slug);
@@ -195,7 +169,7 @@ export async function runTask(
   );
 
   if (startResult.action === 'reject') {
-    updateFileStatus(task.filePath, 'Skipped');
+    d.updateFileStatus(task.filePath, 'Skipped');
     console.log(`[runner] task skipped: ${task.slug}`);
     return;
   }
@@ -203,13 +177,13 @@ export async function runTask(
   // mainブランチを最新化してからタスクを開始する
   try {
     console.log(`[runner] syncing main branch before task: ${task.slug}`);
-    await syncMainBranch(repoPath);
+    await d.syncMainBranch(repoPath);
     console.log(`[runner] main branch synced successfully`);
   } catch (error) {
     if (error instanceof GitSyncError) {
       const errorMessage = `❌ main同期失敗: ${task.slug}\n原因: ${error.message}`;
       await notifier.notify(errorMessage);
-      updateFileStatus(task.filePath, 'Failed');
+      d.updateFileStatus(task.filePath, 'Failed');
       console.error(`[runner] main sync failed, task aborted: ${task.slug}`, error);
       return;
     }
@@ -217,18 +191,18 @@ export async function runTask(
   }
 
   try {
-    updateFileStatus(task.filePath, 'Doing');
+    d.updateFileStatus(task.filePath, 'Doing');
     console.log(`[runner] task started: ${task.slug}`);
 
     // Claudeエージェント実行（やり直しループ）
     let prompt = buildTaskPrompt(task, story, repoPath);
     while (true) {
-      await runClaudeAgent(prompt, repoPath);
+      await d.runAgent(prompt, repoPath);
 
       // セルフレビューループ実行
       const branch = `feature/${task.slug}`;
       console.log(`[runner] starting self-review loop for: ${task.slug}`);
-      const reviewLoopResult = await runReviewLoop(
+      const reviewLoopResult = await d.runReviewLoop(
         repoPath,
         branch,
         task.content,
@@ -254,12 +228,12 @@ export async function runTask(
         await notifier.notify(`*セルフレビュー結果* (${task.slug})\n\n${reviewMessage}`);
 
         console.log(`[runner] self-review passed, creating PR for: ${task.slug}`);
-        prUrl = createPullRequest(repoPath, branch, task, story, reviewLoopResult);
+        prUrl = createPullRequest(repoPath, branch, task, story, reviewLoopResult, d);
 
         // PR作成成功時、CIポーリングループを実行
         if (prUrl) {
           console.log(`[runner] starting CI polling for: ${task.slug}`);
-          ciPollingResult = await runCIPollingLoop(
+          ciPollingResult = await d.runCIPollingLoop(
             repoPath,
             branch,
             task.content,
@@ -287,14 +261,9 @@ export async function runTask(
             if (mergeResult.action === 'approve') {
               // マージ承認後に実際にPRをマージする
               try {
-                const mergeOutput = execFileSync(
-                  'gh',
+                const mergeOutput = d.execGh(
                   ['pr', 'merge', prUrl],
-                  {
-                    cwd: repoPath,
-                    encoding: 'utf-8',
-                    stdio: 'pipe',
-                  },
+                  repoPath,
                 );
                 console.log(`[runner] PR merged successfully: ${prUrl}`);
                 if (mergeOutput.trim()) {
@@ -368,12 +337,12 @@ export async function runTask(
       console.log(`[runner] retrying task: ${task.slug}`);
     }
   } catch (error) {
-    updateFileStatus(task.filePath, 'Failed');
+    d.updateFileStatus(task.filePath, 'Failed');
     console.error(`[runner] task failed: ${task.slug}`, error);
     throw error;
   }
 
-  updateFileStatus(task.filePath, 'Done');
+  d.updateFileStatus(task.filePath, 'Done');
   console.log(`[runner] task done: ${task.slug}`);
 }
 
@@ -384,12 +353,16 @@ function formatDecompositionMessage(story: StoryFile, drafts: TaskDraft[]): stri
   return `*タスク分解案*\n\n*ストーリー*: ${story.slug}\n\n${list}\n\n承認するとタスクファイルを作成して実行を開始します。`;
 }
 
-async function runDecomposition(story: StoryFile, notifier: NotificationBackend): Promise<void> {
+async function runDecomposition(
+  story: StoryFile,
+  notifier: NotificationBackend,
+  deps: RunnerDeps,
+): Promise<void> {
   let retryReason: string | undefined;
 
   while (true) {
     console.log(`[runner] decomposing story: ${story.slug}`);
-    const drafts = await decomposeTasks(story, retryReason);
+    const drafts = await deps.decomposeTasks(story, retryReason);
 
     const id = generateApprovalId(story.slug, 'decompose');
     const result = await notifier.requestApproval(
@@ -400,7 +373,7 @@ async function runDecomposition(story: StoryFile, notifier: NotificationBackend)
 
     if (result.action === 'approve') {
       for (const draft of drafts) {
-        createTaskFile(story.project, story.slug, draft);
+        deps.createTaskFile(story.project, story.slug, draft);
         console.log(`[runner] task file created: ${draft.slug}`);
       }
       return;
@@ -411,23 +384,28 @@ async function runDecomposition(story: StoryFile, notifier: NotificationBackend)
   }
 }
 
-export async function runStory(story: StoryFile, notifier: NotificationBackend): Promise<void> {
+export async function runStory(
+  story: StoryFile,
+  notifier: NotificationBackend,
+  deps?: RunnerDeps,
+): Promise<void> {
+  const d = deps ?? createDefaultRunnerDeps();
   const repoPath = `${process.env.HOME}/dev/${story.project}`;
   console.log(`[runner] starting story: ${story.slug}`);
 
-  const tasks = await getStoryTasks(story.project, story.slug);
+  const tasks = await d.getStoryTasks(story.project, story.slug);
 
   if (tasks.length === 0) {
-    await runDecomposition(story, notifier);
+    await runDecomposition(story, notifier, d);
   }
 
-  const allCurrentTasks = await getStoryTasks(story.project, story.slug);
+  const allCurrentTasks = await d.getStoryTasks(story.project, story.slug);
   const todoTasks = allCurrentTasks.filter((t) => t.status === 'Todo');
 
   if (todoTasks.length > 0) {
     for (const task of todoTasks) {
       try {
-        await runTask(task, story, notifier, repoPath);
+        await runTask(task, story, notifier, repoPath, d);
       } catch (error) {
         console.error(`[runner] task execution error, continuing: ${task.slug}`, error);
       }
@@ -437,16 +415,16 @@ export async function runStory(story: StoryFile, notifier: NotificationBackend):
   // 全タスクの最新状態を取得してストーリー完了判定
   const terminalStatuses: TaskStatus[] = ['Done', 'Skipped', 'Failed'];
   const allTasks = todoTasks.length > 0
-    ? await getStoryTasks(story.project, story.slug)
+    ? await d.getStoryTasks(story.project, story.slug)
     : allCurrentTasks;
   const allTerminal = allTasks.length > 0 && allTasks.every((t) => terminalStatuses.includes(t.status));
   const allDone = allTasks.length > 0 && allTasks.every((t) => t.status === 'Done');
   if (allDone) {
-    updateFileStatus(story.filePath, 'Done');
+    d.updateFileStatus(story.filePath, 'Done');
     await notifier.notify(`✅ ストーリー完了: ${story.slug}`);
     console.log(`[runner] story done: ${story.slug}`);
   } else if (allTerminal) {
-    updateFileStatus(story.filePath, 'Done');
+    d.updateFileStatus(story.filePath, 'Done');
     const summary = allTasks.map((t) => `${t.slug}(${t.status})`).join(', ');
     await notifier.notify(`✅ ストーリー完了 (一部スキップ/失敗あり): ${story.slug}\n${summary}`);
     console.log(`[runner] story done with skipped/failed tasks: ${story.slug}, ${summary}`);
