@@ -46,8 +46,11 @@ export async function createNotificationBackend(): Promise<NotificationBackend> 
       const { createSlackApp } = await import('../slack/bot');
       const { registerApprovalHandlers, SlackNotificationBackend } = await import('./slack');
 
+      const { registerSlashCommands } = await import('../slack/slash-commands');
+
       const slackApp = createSlackApp();
       registerApprovalHandlers(slackApp);
+      registerSlashCommands(slackApp);
       await slackApp.start();
       console.log('[slack] bot started (Socket Mode)');
 
