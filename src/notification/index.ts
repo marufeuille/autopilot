@@ -52,6 +52,7 @@ export async function createNotificationBackend(): Promise<NotificationBackend> 
       const { handleHelp } = await import('../slack/commands/help');
       const { createStoryHandler } = await import('../slack/commands/story');
       const { registerThreadHandler } = await import('../slack/thread-handler');
+      const { registerStoryApprovalHandlers } = await import('../slack/actions/story-approval');
 
       registerSubcommand('status', handleStatus);
       registerSubcommand('retry', handleRetry);
@@ -60,6 +61,7 @@ export async function createNotificationBackend(): Promise<NotificationBackend> 
       const slackApp = createSlackApp();
       registerSubcommand('story', createStoryHandler(slackApp));
       registerApprovalHandlers(slackApp);
+      registerStoryApprovalHandlers(slackApp);
       registerSlashCommands(slackApp);
       registerThreadHandler(slackApp);
       await slackApp.start();
