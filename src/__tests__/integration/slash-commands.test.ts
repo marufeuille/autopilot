@@ -242,12 +242,12 @@ describe('slash-commands integration', () => {
         respond: respondFn,
       });
 
-      // ack() にヘルプメッセージが渡される
+      // ack() にエラーメッセージが渡される
       expect(ack).toHaveBeenCalledTimes(1);
-      const helpMsg = ack.mock.calls[0][0] as string;
-      expect(helpMsg).toContain('/ap status');
-      expect(helpMsg).toContain('/ap retry');
-      expect(helpMsg).toBe(buildHelpMessage());
+      const errorMsg = ack.mock.calls[0][0] as string;
+      expect(errorMsg).toContain('不明なサブコマンド');
+      expect(errorMsg).toContain('unknown-command');
+      expect(errorMsg).toContain('/ap help');
     });
 
     it('空コマンドでもヘルプメッセージが返る', async () => {

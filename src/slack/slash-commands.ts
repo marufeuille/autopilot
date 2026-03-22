@@ -26,7 +26,7 @@ export function parseCommand(text: string): ParsedCommand {
 }
 
 /** 利用可能なサブコマンド一覧 */
-const KNOWN_SUBCOMMANDS = ['retry', 'status'] as const;
+const KNOWN_SUBCOMMANDS = ['retry', 'status', 'help', 'story', 'fix'] as const;
 
 /**
  * サブコマンドが既知かどうかを判定する
@@ -42,10 +42,16 @@ export function buildHelpMessage(): string {
   return [
     '📖 `/ap` コマンドの使い方:',
     '',
+    '• `/ap story <概要>` — Claudeと壁打ちしながらストーリーを作成（スレッド内でマルチターン対話）',
+    '• `/ap fix <バグ説明>` — バグの原因・修正方針をClaudeが提示し、承認後に自動修正を開始',
     '• `/ap status` — 実行中のストーリー・タスク一覧を表示',
     '• `/ap retry <task-slug>` — 失敗タスクをTodoに戻して再実行',
+    '• `/ap help` — このヘルプメッセージを表示',
     '',
-    '例: `/ap retry my-feature-task-01`',
+    '例:',
+    '  `/ap story ユーザープロフィール画面にアバター画像アップロード機能を追加`',
+    '  `/ap fix ログインページでパスワードリセットリンクが404になる`',
+    '  `/ap retry my-feature-task-01`',
   ].join('\n');
 }
 
@@ -86,8 +92,23 @@ export function registerSlashCommands(app: App): void {
   app.command('/ap', async ({ command, ack, respond }) => {
     const parsed = parseCommand(command.text);
 
-    // サブコマンドなし or 不明なサブコマンド → ヘルプを即時返答
-    if (!parsed.subcommand || !isKnownSubcommand(parsed.subcommand)) {
+    // サブコマンドなし or 不明なサブコマンド → エラーメッセージを即時返答
+    if (!parsed.subcommand) {
+      await ack(buildHelpMessage());
+      return;
+    }
+
+    if (!isKnownSubcommand(parsed.subcommand)) {
+      await ack(
+        `⚠️ 不明なサブコマンド: \`${parsed.subcommand}\`\n\n` +
+        `利用可能なサブコマンド: ${KNOWN_SUBCOMMANDS.join(', ')}\n` +
+        `詳しくは \`/ap help\` を実行してください。`,
+      );
+      return;
+    }
+
+    // help → ephemeral メッセージで即時返答
+    if (parsed.subcommand === 'help') {
       await ack(buildHelpMessage());
       return;
     }
