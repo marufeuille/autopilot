@@ -4,6 +4,7 @@ import { StoryFile, TaskFile, TaskStatus, getStoryTasks } from './vault/reader';
 import { updateFileStatus, createTaskFile, TaskDraft } from './vault/writer';
 import { decomposeTasks } from './decomposer';
 import { NotificationBackend, generateApprovalId } from './notification';
+import { syncMainBranch } from './git';
 
 function buildTaskPrompt(task: TaskFile, story: StoryFile, repoPath: string): string {
   return `あなたは優秀なソフトウェアエンジニアです。以下のタスクを実装してください。
@@ -70,10 +71,15 @@ export async function runTask(
     return;
   }
 
-  updateFileStatus(task.filePath, 'Doing');
-  console.log(`[runner] task started: ${task.slug}`);
-
   try {
+    // mainブランチを最新化してからタスクを開始する
+    console.log(`[runner] syncing main branch before task: ${task.slug}`);
+    await syncMainBranch(repoPath);
+    console.log(`[runner] main branch synced successfully`);
+
+    updateFileStatus(task.filePath, 'Doing');
+    console.log(`[runner] task started: ${task.slug}`);
+
     // Claudeエージェント実行（やり直しループ）
     let prompt = buildTaskPrompt(task, story, repoPath);
     while (true) {
