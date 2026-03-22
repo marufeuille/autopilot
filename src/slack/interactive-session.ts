@@ -10,7 +10,7 @@
  */
 
 /** セッションのフェーズ */
-export type SessionPhase = 'drafting' | 'approved' | 'completed' | 'cancelled';
+export type SessionPhase = 'drafting' | 'approved' | 'executing' | 'completed' | 'cancelled';
 
 /** セッションの種別 */
 export type SessionType = 'story' | 'fix';
