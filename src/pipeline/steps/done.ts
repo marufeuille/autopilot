@@ -11,9 +11,9 @@ export async function handleDone(ctx: TaskContext): Promise<FlowSignal> {
 
   deps.updateFileStatus(task.filePath, 'Done');
 
-  const localOnly = ctx.get('localOnly') as boolean | undefined;
+  const localOnly = ctx.get('localOnly');
   if (localOnly) {
-    const commitSha = ctx.get('commitSha') as string | undefined;
+    const commitSha = ctx.get('commitSha');
     await notifier.notify(
       `✅ タスク完了（ローカルオンリー）: ${task.slug}\nコミットSHA: ${commitSha ?? 'unknown'}\nPRなし・ローカルコミットのみ`,
       story.slug,

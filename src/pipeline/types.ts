@@ -18,8 +18,27 @@ export interface Step<TCtx> {
 }
 
 /**
+ * Pipeline の各 step 間で受け渡される型付きフィールド。
+ */
+export interface TaskContextStore {
+  /** PR の URL（リモートありの場合） */
+  prUrl?: string;
+  /** ローカルオンリーモードかどうか（no-remote 時） */
+  localOnly?: boolean;
+  /** ローカルコミットの SHA（no-remote 時） */
+  commitSha?: string;
+  /** セルフレビュー結果 */
+  reviewResult?: import('../review').ReviewLoopResult;
+  /** リトライ理由（pipeline 内部で使用） */
+  retryReason?: string;
+}
+
+/** TaskContextStore のキー型 */
+export type TaskContextKey = keyof TaskContextStore;
+
+/**
  * Pipeline の各 step をまたいで状態を受け渡すコンテキスト。
- * get/set は Map ベースの汎用ストア。型安全性は後続 PR で改善する。
+ * get/set は型安全なアクセスを提供する。
  */
 export interface TaskContext {
   readonly task: TaskFile;
@@ -27,8 +46,8 @@ export interface TaskContext {
   readonly repoPath: string;
   readonly notifier: NotificationBackend;
   readonly deps: RunnerDeps;
-  get(key: string): unknown;
-  set(key: string, value: unknown): void;
+  get<K extends TaskContextKey>(key: K): TaskContextStore[K];
+  set<K extends TaskContextKey>(key: K, value: TaskContextStore[K]): void;
   getRetryReason(): string | undefined;
   setRetryReason(reason: string): void;
 }

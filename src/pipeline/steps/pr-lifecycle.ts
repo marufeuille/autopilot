@@ -1,5 +1,4 @@
 import { writeFileSync, unlinkSync } from 'fs';
-import { execSync } from 'child_process';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { FlowSignal, TaskContext } from '../types';
@@ -75,7 +74,7 @@ function createPullRequest(
 export async function handlePRLifecycle(ctx: TaskContext): Promise<FlowSignal> {
   const { task, story, repoPath, notifier, deps } = ctx;
   const branch = `feature/${task.slug}`;
-  const reviewResult = ctx.get('reviewResult') as ReviewLoopResult | undefined;
+  const reviewResult = ctx.get('reviewResult');
 
   // no-remote 検出時はローカルコミットのみで完結
   if (detectNoRemote(repoPath)) {
@@ -84,7 +83,7 @@ export async function handlePRLifecycle(ctx: TaskContext): Promise<FlowSignal> {
     // ローカルブランチの最新コミットSHAを取得
     let commitSha: string;
     try {
-      commitSha = execSync('git rev-parse HEAD', { cwd: repoPath, stdio: 'pipe' }).toString().trim();
+      commitSha = deps.execCommand('git rev-parse HEAD', repoPath).trim();
     } catch {
       commitSha = 'unknown';
     }
