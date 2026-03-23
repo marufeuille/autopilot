@@ -5,10 +5,22 @@ import { FlowSignal, TaskContext } from '../types';
  *
  * ファイルステータスを Done に更新し、Vault に完了レコードを記録し、完了通知を送る。
  * ローカルオンリーモード時は mode: 'local-only'、prUrl: null、localCommitSha を記録する。
+ * worktreePath が設定されている場合は worktree をクリーンアップする。
  * 常に continue を返す（pipelineが終端に達し 'done' になる）。
  */
 export async function handleDone(ctx: TaskContext): Promise<FlowSignal> {
-  const { task, story, notifier, deps } = ctx;
+  const { task, story, notifier, deps, repoPath } = ctx;
+
+  // worktree のクリーンアップ（設定されている場合のみ）
+  const worktreePath = ctx.get('worktreePath');
+  if (worktreePath) {
+    try {
+      deps.removeWorktree(repoPath, worktreePath);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[done] worktreeの削除に失敗しましたが、タスク完了処理を続行します: ${message}`);
+    }
+  }
 
   const localOnly = ctx.get('localOnly');
 
