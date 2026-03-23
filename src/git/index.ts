@@ -1,1 +1,1 @@
-export { syncMainBranch, GitSyncError } from "./sync";
+export { syncMainBranch, GitSyncError, detectNoRemote, resetNoRemoteCache } from "./sync";

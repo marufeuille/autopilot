@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { execSync } from "child_process";
-import { syncMainBranch, GitSyncError } from "../git/sync";
+import { syncMainBranch, GitSyncError, detectNoRemote, resetNoRemoteCache } from "../git/sync";
 
 vi.mock("child_process", () => ({
   execSync: vi.fn(),
@@ -128,5 +128,105 @@ describe("syncMainBranch", () => {
         "fatal: unable to access remote"
       );
     }
+  });
+});
+
+describe("detectNoRemote", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetNoRemoteCache();
+  });
+
+  it("リモートが存在する場合は false を返す", () => {
+    mockedExecSync.mockReturnValueOnce(Buffer.from("https://github.com/user/repo.git"));
+
+    const result = detectNoRemote("/tmp/repo");
+
+    expect(result).toBe(false);
+    expect(mockedExecSync).toHaveBeenCalledWith("git remote get-url origin", {
+      cwd: "/tmp/repo",
+      stdio: "pipe",
+    });
+  });
+
+  it("リモートが存在しない場合は true を返す", () => {
+    mockedExecSync.mockImplementationOnce(() => {
+      throw new Error("fatal: No such remote 'origin'");
+    });
+    const warnSpy = vi.spyOn(console, "warn");
+
+    const result = detectNoRemote("/tmp/repo");
+
+    expect(result).toBe(true);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("ローカルオンリーモード")
+    );
+    warnSpy.mockRestore();
+  });
+
+  it("結果がキャッシュされ、複数回呼び出しても git コマンドは1回だけ実行される", () => {
+    mockedExecSync.mockReturnValueOnce(Buffer.from("https://github.com/user/repo.git"));
+
+    const result1 = detectNoRemote("/tmp/repo");
+    const result2 = detectNoRemote("/tmp/repo");
+    const result3 = detectNoRemote("/tmp/repo");
+
+    expect(result1).toBe(false);
+    expect(result2).toBe(false);
+    expect(result3).toBe(false);
+    expect(mockedExecSync).toHaveBeenCalledTimes(1);
+  });
+
+  it("キャッシュリセット後は再度 git コマンドが実行される", () => {
+    mockedExecSync.mockReturnValueOnce(Buffer.from("https://github.com/user/repo.git"));
+    detectNoRemote("/tmp/repo");
+    expect(mockedExecSync).toHaveBeenCalledTimes(1);
+
+    resetNoRemoteCache();
+
+    mockedExecSync.mockImplementationOnce(() => {
+      throw new Error("fatal: No such remote 'origin'");
+    });
+    const result = detectNoRemote("/tmp/repo");
+    expect(result).toBe(true);
+    expect(mockedExecSync).toHaveBeenCalledTimes(2);
+  });
+
+  it("no-remote キャッシュされた true も複数回呼び出しで再実行しない", () => {
+    mockedExecSync.mockImplementationOnce(() => {
+      throw new Error("fatal: No such remote 'origin'");
+    });
+
+    detectNoRemote("/tmp/repo");
+    detectNoRemote("/tmp/repo");
+
+    expect(mockedExecSync).toHaveBeenCalledTimes(1);
+  });
+
+  it("異なる repoPath ではキャッシュが分離され、それぞれ git コマンドが実行される", () => {
+    // /tmp/repo-a はリモートあり
+    mockedExecSync.mockReturnValueOnce(Buffer.from("https://github.com/user/repo-a.git"));
+    // /tmp/repo-b はリモートなし
+    mockedExecSync.mockImplementationOnce(() => {
+      throw new Error("fatal: No such remote 'origin'");
+    });
+    const warnSpy = vi.spyOn(console, "warn");
+
+    const resultA = detectNoRemote("/tmp/repo-a");
+    const resultB = detectNoRemote("/tmp/repo-b");
+
+    expect(resultA).toBe(false);
+    expect(resultB).toBe(true);
+    expect(mockedExecSync).toHaveBeenCalledTimes(2);
+
+    // 再度呼び出してもキャッシュが使われる
+    const resultA2 = detectNoRemote("/tmp/repo-a");
+    const resultB2 = detectNoRemote("/tmp/repo-b");
+
+    expect(resultA2).toBe(false);
+    expect(resultB2).toBe(true);
+    expect(mockedExecSync).toHaveBeenCalledTimes(2); // 追加実行なし
+
+    warnSpy.mockRestore();
   });
 });
