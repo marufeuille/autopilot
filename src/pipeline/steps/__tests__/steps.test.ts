@@ -150,6 +150,62 @@ describe('handleSyncMain', () => {
     expect(signal.kind).toBe('continue');
     expect(syncMainBranch).toHaveBeenCalledOnce();
   });
+
+  it('worktree が作成され ctx.set("worktreePath") が呼ばれる', async () => {
+    const createWorktree = vi.fn();
+    const { ctx } = makeCtx({ depsOverrides: { createWorktree } });
+
+    const signal = await handleSyncMain(ctx);
+
+    expect(signal.kind).toBe('continue');
+    expect(createWorktree).toHaveBeenCalledWith(
+      '/repo',
+      '/tmp/autopilot/test-task',
+      'feature/test-task',
+    );
+    expect(ctx.get('worktreePath')).toBe('/tmp/autopilot/test-task');
+  });
+
+  it('no-remote モードでも worktree が作成される', async () => {
+    vi.mocked(detectNoRemote).mockReturnValue(true);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const createWorktree = vi.fn();
+    const { ctx } = makeCtx({ depsOverrides: { createWorktree } });
+
+    const signal = await handleSyncMain(ctx);
+
+    expect(signal.kind).toBe('continue');
+    expect(createWorktree).toHaveBeenCalledWith(
+      '/repo',
+      '/tmp/autopilot/test-task',
+      'feature/test-task',
+    );
+    expect(ctx.get('worktreePath')).toBe('/tmp/autopilot/test-task');
+  });
+
+  it('worktree 作成で GitSyncError が発生すると abort を返し通知する', async () => {
+    const createWorktree = vi.fn().mockImplementation(() => {
+      throw new GitSyncError('worktree add failed');
+    });
+    const { ctx, notifier } = makeCtx({ depsOverrides: { createWorktree } });
+
+    const signal = await handleSyncMain(ctx);
+
+    expect(signal.kind).toBe('abort');
+    if (signal.kind === 'abort') {
+      expect(signal.error).toBeInstanceOf(GitSyncError);
+    }
+    expect(notifier.notifications[0].message).toContain('worktree作成失敗');
+  });
+
+  it('worktree 作成で GitSyncError 以外の例外は再スローされる', async () => {
+    const createWorktree = vi.fn().mockImplementation(() => {
+      throw new Error('unexpected worktree error');
+    });
+    const { ctx } = makeCtx({ depsOverrides: { createWorktree } });
+
+    await expect(handleSyncMain(ctx)).rejects.toThrow('unexpected worktree error');
+  });
 });
 
 // -------- handleImplementation --------
