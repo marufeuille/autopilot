@@ -33,6 +33,8 @@ vi.mock('../git', () => ({
   syncMainBranch: vi.fn().mockResolvedValue(undefined),
   detectNoRemote: vi.fn().mockReturnValue(false),
   resetNoRemoteCache: vi.fn(),
+  createWorktree: vi.fn(),
+  removeWorktree: vi.fn(),
   GitSyncError: class GitSyncError extends Error {
     constructor(message: string) {
       super(message);

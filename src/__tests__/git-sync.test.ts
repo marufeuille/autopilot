@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { execSync } from "child_process";
-import { syncMainBranch, GitSyncError, detectNoRemote, resetNoRemoteCache } from "../git/sync";
+import { syncMainBranch, GitSyncError, detectNoRemote, resetNoRemoteCache, createWorktree, removeWorktree } from "../git/sync";
 
 vi.mock("child_process", () => ({
   execSync: vi.fn(),
@@ -228,5 +228,177 @@ describe("detectNoRemote", () => {
     expect(mockedExecSync).toHaveBeenCalledTimes(2); // 追加実行なし
 
     warnSpy.mockRestore();
+  });
+});
+
+describe("createWorktree", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("正常系: git worktree add が正しい引数で実行される", () => {
+    mockedExecSync.mockReturnValue(Buffer.from(""));
+
+    createWorktree("/tmp/repo", "/tmp/autopilot/my-task", "feature/my-task");
+
+    expect(mockedExecSync).toHaveBeenCalledTimes(1);
+    expect(mockedExecSync).toHaveBeenCalledWith(
+      "git worktree add /tmp/autopilot/my-task -b feature/my-task",
+      {
+        cwd: "/tmp/repo",
+        stdio: "pipe",
+      }
+    );
+  });
+
+  it("正常系: 開始・完了ログが出力される", () => {
+    mockedExecSync.mockReturnValue(Buffer.from(""));
+    const consoleSpy = vi.spyOn(console, "log");
+
+    createWorktree("/tmp/repo", "/tmp/autopilot/my-task", "feature/my-task");
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/\[git-worktree\].*worktreeを作成します/)
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/\[git-worktree\].*worktreeの作成が完了しました/)
+    );
+
+    consoleSpy.mockRestore();
+  });
+
+  it("失敗時に GitSyncError がスローされ、stderr の内容が含まれる", () => {
+    const error = new Error("command failed") as Error & { stderr: Buffer };
+    error.stderr = Buffer.from("fatal: '/tmp/autopilot/my-task' already exists");
+    mockedExecSync.mockImplementationOnce(() => {
+      throw error;
+    });
+
+    expect(() =>
+      createWorktree("/tmp/repo", "/tmp/autopilot/my-task", "feature/my-task")
+    ).toThrow(GitSyncError);
+
+    // エラーメッセージの検証
+    mockedExecSync.mockImplementationOnce(() => {
+      throw error;
+    });
+
+    try {
+      createWorktree("/tmp/repo", "/tmp/autopilot/my-task", "feature/my-task");
+    } catch (e) {
+      expect(e).toBeInstanceOf(GitSyncError);
+      expect((e as GitSyncError).message).toContain("Failed to create worktree");
+      expect((e as GitSyncError).message).toContain("already exists");
+    }
+  });
+
+  it("失敗時は完了ログが出力されない", () => {
+    const error = new Error("command failed") as Error & { stderr: Buffer };
+    error.stderr = Buffer.from("fatal: error");
+    mockedExecSync.mockImplementationOnce(() => {
+      throw error;
+    });
+    const consoleSpy = vi.spyOn(console, "log");
+
+    try {
+      createWorktree("/tmp/repo", "/tmp/autopilot/my-task", "feature/my-task");
+    } catch {
+      // expected
+    }
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/\[git-worktree\].*worktreeを作成します/)
+    );
+    expect(consoleSpy).not.toHaveBeenCalledWith(
+      expect.stringMatching(/\[git-worktree\].*worktreeの作成が完了しました/)
+    );
+
+    consoleSpy.mockRestore();
+  });
+});
+
+describe("removeWorktree", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("正常系: git worktree remove --force が正しい引数で実行される", () => {
+    mockedExecSync.mockReturnValue(Buffer.from(""));
+
+    removeWorktree("/tmp/repo", "/tmp/autopilot/my-task");
+
+    expect(mockedExecSync).toHaveBeenCalledTimes(1);
+    expect(mockedExecSync).toHaveBeenCalledWith(
+      "git worktree remove /tmp/autopilot/my-task --force",
+      {
+        cwd: "/tmp/repo",
+        stdio: "pipe",
+      }
+    );
+  });
+
+  it("正常系: 開始・完了ログが出力される", () => {
+    mockedExecSync.mockReturnValue(Buffer.from(""));
+    const consoleSpy = vi.spyOn(console, "log");
+
+    removeWorktree("/tmp/repo", "/tmp/autopilot/my-task");
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/\[git-worktree\].*worktreeを削除します/)
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/\[git-worktree\].*worktreeの削除が完了しました/)
+    );
+
+    consoleSpy.mockRestore();
+  });
+
+  it("失敗時に GitSyncError がスローされ、stderr の内容が含まれる", () => {
+    const error = new Error("command failed") as Error & { stderr: Buffer };
+    error.stderr = Buffer.from("fatal: '/tmp/autopilot/my-task' is not a valid worktree");
+    mockedExecSync.mockImplementationOnce(() => {
+      throw error;
+    });
+
+    expect(() =>
+      removeWorktree("/tmp/repo", "/tmp/autopilot/my-task")
+    ).toThrow(GitSyncError);
+
+    // エラーメッセージの検証
+    mockedExecSync.mockImplementationOnce(() => {
+      throw error;
+    });
+
+    try {
+      removeWorktree("/tmp/repo", "/tmp/autopilot/my-task");
+    } catch (e) {
+      expect(e).toBeInstanceOf(GitSyncError);
+      expect((e as GitSyncError).message).toContain("Failed to remove worktree");
+      expect((e as GitSyncError).message).toContain("is not a valid worktree");
+    }
+  });
+
+  it("失敗時は完了ログが出力されない", () => {
+    const error = new Error("command failed") as Error & { stderr: Buffer };
+    error.stderr = Buffer.from("fatal: error");
+    mockedExecSync.mockImplementationOnce(() => {
+      throw error;
+    });
+    const consoleSpy = vi.spyOn(console, "log");
+
+    try {
+      removeWorktree("/tmp/repo", "/tmp/autopilot/my-task");
+    } catch {
+      // expected
+    }
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/\[git-worktree\].*worktreeを削除します/)
+    );
+    expect(consoleSpy).not.toHaveBeenCalledWith(
+      expect.stringMatching(/\[git-worktree\].*worktreeの削除が完了しました/)
+    );
+
+    consoleSpy.mockRestore();
   });
 });

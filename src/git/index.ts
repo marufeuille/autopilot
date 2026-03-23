@@ -1,1 +1,1 @@
-export { syncMainBranch, GitSyncError, detectNoRemote, resetNoRemoteCache } from "./sync";
+export { syncMainBranch, GitSyncError, detectNoRemote, resetNoRemoteCache, createWorktree, removeWorktree } from "./sync";

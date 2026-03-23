@@ -108,6 +108,8 @@ export function createFakeDeps(overrides?: FakeDepsOverrides): RunnerDeps {
     getStoryTasks: vi.fn().mockResolvedValue([]),
     updateFileStatus: vi.fn(),
     recordTaskCompletion: vi.fn(),
+    createWorktree: vi.fn(),
+    removeWorktree: vi.fn(),
   };
 
   // overrides を適用（vi.fn() でラップ済みの場合はそのまま使う）

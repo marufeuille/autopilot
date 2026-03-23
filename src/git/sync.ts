@@ -75,3 +75,51 @@ export async function syncMainBranch(repoPath: string): Promise<void> {
 
   console.log(`[git-sync] mainブランチの同期が完了しました`);
 }
+
+/**
+ * git worktree を作成する。
+ * `git worktree add <worktreePath> -b <branch>` を実行し、
+ * 指定パスに独立した作業ディレクトリを作成する。
+ * 失敗時は GitSyncError をスローする。
+ */
+export function createWorktree(repoPath: string, worktreePath: string, branch: string): void {
+  console.log(`[git-worktree] worktreeを作成します: ${worktreePath} (branch: ${branch})`);
+
+  try {
+    execSync(`git worktree add ${worktreePath} -b ${branch}`, {
+      cwd: repoPath,
+      stdio: "pipe",
+    });
+  } catch (error: unknown) {
+    const stderr = error instanceof Error && "stderr" in error
+      ? String((error as { stderr: unknown }).stderr)
+      : String(error);
+    throw new GitSyncError(`Failed to create worktree at ${worktreePath}: ${stderr}`);
+  }
+
+  console.log(`[git-worktree] worktreeの作成が完了しました: ${worktreePath}`);
+}
+
+/**
+ * git worktree を削除する。
+ * `git worktree remove <worktreePath> --force` を実行し、
+ * 作業ディレクトリをクリーンアップする。
+ * 失敗時は GitSyncError をスローする。
+ */
+export function removeWorktree(repoPath: string, worktreePath: string): void {
+  console.log(`[git-worktree] worktreeを削除します: ${worktreePath}`);
+
+  try {
+    execSync(`git worktree remove ${worktreePath} --force`, {
+      cwd: repoPath,
+      stdio: "pipe",
+    });
+  } catch (error: unknown) {
+    const stderr = error instanceof Error && "stderr" in error
+      ? String((error as { stderr: unknown }).stderr)
+      : String(error);
+    throw new GitSyncError(`Failed to remove worktree at ${worktreePath}: ${stderr}`);
+  }
+
+  console.log(`[git-worktree] worktreeの削除が完了しました: ${worktreePath}`);
+}
