@@ -11,6 +11,17 @@ import { createFakeDeps, defaultReviewLoopResult } from '../../../__tests__/help
 import { GitSyncError } from '../../../git';
 import { MergeError } from '../../../merge';
 
+// detectNoRemote をモック化
+vi.mock('../../../git', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../git')>();
+  return {
+    ...actual,
+    detectNoRemote: vi.fn().mockReturnValue(false),
+  };
+});
+
+import { detectNoRemote } from '../../../git';
+
 // テスト用のベースコンテキストを生成するファクトリ
 function makeCtx(overrides: {
   notifierOptions?: ConstructorParameters<typeof FakeNotifier>[0];
@@ -109,6 +120,35 @@ describe('handleSyncMain', () => {
       },
     });
     await expect(handleSyncMain(ctx)).rejects.toThrow('unexpected');
+  });
+
+  it('no-remote 検出時は警告ログを出力して continue を返す（syncMainBranch は呼ばれない）', async () => {
+    vi.mocked(detectNoRemote).mockReturnValue(true);
+    const syncMainBranch = vi.fn();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { ctx } = makeCtx({ depsOverrides: { syncMainBranch } });
+
+    const signal = await handleSyncMain(ctx);
+
+    expect(signal.kind).toBe('continue');
+    expect(syncMainBranch).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('リモートリポジトリが見つかりません'),
+    );
+
+    warnSpy.mockRestore();
+    vi.mocked(detectNoRemote).mockReturnValue(false);
+  });
+
+  it('リモートありの場合は従来通り syncMainBranch が実行される', async () => {
+    vi.mocked(detectNoRemote).mockReturnValue(false);
+    const syncMainBranch = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({ depsOverrides: { syncMainBranch } });
+
+    const signal = await handleSyncMain(ctx);
+
+    expect(signal.kind).toBe('continue');
+    expect(syncMainBranch).toHaveBeenCalledOnce();
   });
 });
 
