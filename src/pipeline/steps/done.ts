@@ -10,7 +10,17 @@ export async function handleDone(ctx: TaskContext): Promise<FlowSignal> {
   const { task, story, notifier, deps } = ctx;
 
   deps.updateFileStatus(task.filePath, 'Done');
-  await notifier.notify(`✅ タスク完了: ${task.slug}`, story.slug);
+
+  const localOnly = ctx.get('localOnly') as boolean | undefined;
+  if (localOnly) {
+    const commitSha = ctx.get('commitSha') as string | undefined;
+    await notifier.notify(
+      `✅ タスク完了（ローカルオンリー）: ${task.slug}\nコミットSHA: ${commitSha ?? 'unknown'}\nPRなし・ローカルコミットのみ`,
+      story.slug,
+    );
+  } else {
+    await notifier.notify(`✅ タスク完了: ${task.slug}`, story.slug);
+  }
 
   return { kind: 'continue' };
 }

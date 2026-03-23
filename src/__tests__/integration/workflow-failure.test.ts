@@ -12,6 +12,15 @@ import { RunnerDeps } from '../../runner-deps';
 import { ReviewLoopResult } from '../../review/loop';
 import { CIPollingResult } from '../../ci/types';
 
+// detectNoRemote をモック化（テスト環境では remote なしと判定されるため）
+vi.mock('../../git', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../git')>();
+  return {
+    ...actual,
+    detectNoRemote: vi.fn().mockReturnValue(false),
+  };
+});
+
 // ---------------------------------------------------------------------------
 // Helper: fake vault のタスクディレクトリから TaskFile[] を読み取る
 // ---------------------------------------------------------------------------

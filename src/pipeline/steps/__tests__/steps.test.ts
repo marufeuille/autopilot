@@ -283,6 +283,49 @@ describe('handlePRLifecycle', () => {
     }
   });
 
+  it('no-remote 検出時はPR作成・push・CI・レビュー通知をスキップして continue を返す', async () => {
+    vi.mocked(detectNoRemote).mockReturnValue(true);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const execCommand = vi.fn();
+    const runCIPollingLoop = vi.fn();
+    const { ctx, notifier } = makeCtx({
+      ctxStore: baseCtxStore,
+      depsOverrides: { execCommand, runCIPollingLoop },
+    });
+
+    const signal = await handlePRLifecycle(ctx);
+
+    expect(signal.kind).toBe('continue');
+    // push・PR作成・CI は呼ばれない
+    expect(execCommand).not.toHaveBeenCalled();
+    expect(runCIPollingLoop).not.toHaveBeenCalled();
+    // コンテキストにローカルオンリー情報がセットされる
+    expect(ctx.get('localOnly')).toBe(true);
+    expect(ctx.get('commitSha')).toBeDefined();
+    expect(ctx.get('prUrl')).toBe('');
+    // 通知にローカルオンリーモードが含まれる
+    expect(notifier.notifications.some((n) => n.message.includes('ローカルオンリーモード'))).toBe(true);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('PR作成・push・CI・レビュー通知をスキップ'),
+    );
+
+    warnSpy.mockRestore();
+    vi.mocked(detectNoRemote).mockReturnValue(false);
+  });
+
+  it('リモートありの場合は従来通りPRライフサイクルが実行される', async () => {
+    vi.mocked(detectNoRemote).mockReturnValue(false);
+    const { ctx } = makeCtx({ ctxStore: baseCtxStore });
+    vi.mocked(ctx.deps.execCommand)
+      .mockReturnValueOnce('')
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1');
+
+    const signal = await handlePRLifecycle(ctx);
+    expect(signal.kind).toBe('continue');
+    expect(ctx.get('prUrl')).toBe('https://github.com/test/repo/pull/1');
+    expect(ctx.get('localOnly')).toBeUndefined();
+  });
+
   it('マージ失敗(MergeError) → retry from: pr-lifecycle', async () => {
     const mergeError = new MergeError('merge_conflict', 'conflict', 409);
     const { ctx } = makeCtx({
@@ -336,5 +379,23 @@ describe('handleDone', () => {
     const { ctx } = makeCtx();
     const signal = await handleDone(ctx);
     expect(signal.kind).toBe('continue');
+  });
+
+  it('ローカルオンリー時はローカルオンリー完了として通知する', async () => {
+    const { ctx, notifier } = makeCtx({
+      ctxStore: { localOnly: true, commitSha: 'abc123' },
+    });
+    const signal = await handleDone(ctx);
+    expect(signal.kind).toBe('continue');
+    expect(notifier.notifications[0].message).toContain('ローカルオンリー');
+    expect(notifier.notifications[0].message).toContain('abc123');
+    expect(notifier.notifications[0].message).toContain('PRなし');
+  });
+
+  it('リモートありの場合は通常の完了通知を送る', async () => {
+    const { ctx, notifier } = makeCtx();
+    await handleDone(ctx);
+    expect(notifier.notifications[0].message).toContain('タスク完了');
+    expect(notifier.notifications[0].message).not.toContain('ローカルオンリー');
   });
 });

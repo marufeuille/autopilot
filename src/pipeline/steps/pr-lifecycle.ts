@@ -1,4 +1,5 @@
 import { writeFileSync, unlinkSync } from 'fs';
+import { execSync } from 'child_process';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { FlowSignal, TaskContext } from '../types';
@@ -10,6 +11,7 @@ import { generateApprovalId } from '../../notification/approval-id';
 import { buildMergeApprovalMessage, buildMergeCompletedMessage } from '../../notification';
 import { NotificationContext } from '../../notification';
 import { RunnerDeps } from '../../runner-deps';
+import { detectNoRemote } from '../../git';
 
 /**
  * PR 本文用のセルフレビューサマリーを生成する
@@ -74,6 +76,30 @@ export async function handlePRLifecycle(ctx: TaskContext): Promise<FlowSignal> {
   const { task, story, repoPath, notifier, deps } = ctx;
   const branch = `feature/${task.slug}`;
   const reviewResult = ctx.get('reviewResult') as ReviewLoopResult | undefined;
+
+  // no-remote 検出時はローカルコミットのみで完結
+  if (detectNoRemote(repoPath)) {
+    console.warn('[pr-lifecycle] リモートリポジトリが見つかりません。PR作成・push・CI・レビュー通知をスキップします');
+
+    // ローカルブランチの最新コミットSHAを取得
+    let commitSha: string;
+    try {
+      commitSha = execSync('git rev-parse HEAD', { cwd: repoPath, stdio: 'pipe' }).toString().trim();
+    } catch {
+      commitSha = 'unknown';
+    }
+
+    ctx.set('prUrl', '');
+    ctx.set('localOnly', true);
+    ctx.set('commitSha', commitSha);
+
+    await notifier.notify(
+      `ℹ️ ローカルオンリーモード: \`${task.slug}\`\nリモートなしのためPR作成をスキップしました\nコミットSHA: ${commitSha}`,
+      story.slug,
+    );
+
+    return { kind: 'continue' };
+  }
 
   // PR 作成
   const prUrl = createPullRequest(
