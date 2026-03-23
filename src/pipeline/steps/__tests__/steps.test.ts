@@ -599,11 +599,15 @@ describe('handleDone', () => {
   });
 
   it('worktreePath が設定されている場合は removeWorktree を呼ぶ', async () => {
-    const { ctx } = makeCtx({
+    const removeWorktreeMock = vi.fn().mockResolvedValue(undefined);
+    const { ctx, notifier } = makeCtx({
       ctxStore: { worktreePath: '/tmp/autopilot/test-task' },
+      depsOverrides: { removeWorktree: removeWorktreeMock },
     });
     await handleDone(ctx);
-    expect(ctx.deps.removeWorktree).toHaveBeenCalledWith('/repo', '/tmp/autopilot/test-task');
+    expect(removeWorktreeMock).toHaveBeenCalledWith('/repo', '/tmp/autopilot/test-task');
+    // removeWorktree が完了してから後続の通知処理が実行されていることを確認
+    expect(notifier.notifications.length).toBeGreaterThan(0);
   });
 
   it('worktreePath が未設定の場合は removeWorktree を呼ばない', async () => {
@@ -616,9 +620,7 @@ describe('handleDone', () => {
     const { ctx, notifier } = makeCtx({
       ctxStore: { worktreePath: '/tmp/autopilot/test-task' },
       depsOverrides: {
-        removeWorktree: vi.fn().mockImplementation(() => {
-          throw new GitSyncError('worktree removal failed');
-        }),
+        removeWorktree: vi.fn().mockRejectedValue(new GitSyncError('worktree removal failed')),
       },
     });
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});

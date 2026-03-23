@@ -15,7 +15,7 @@ export async function handleDone(ctx: TaskContext): Promise<FlowSignal> {
   const worktreePath = ctx.get('worktreePath');
   if (worktreePath) {
     try {
-      deps.removeWorktree(repoPath, worktreePath);
+      await deps.removeWorktree(repoPath, worktreePath);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[done] worktreeの削除に失敗しましたが、タスク完了処理を続行します: ${message}`);
