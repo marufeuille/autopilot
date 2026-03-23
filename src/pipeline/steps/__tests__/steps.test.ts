@@ -306,6 +306,76 @@ describe('handleImplementation', () => {
     expect(prompt).toContain('実装してください');
     expect(prompt).not.toContain('修正依頼');
   });
+
+  it('worktreePath が設定されている場合、runAgent に worktreePath を cwd として渡す', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({
+      depsOverrides: { runAgent },
+      ctxStore: { worktreePath: '/tmp/autopilot/test-task' },
+    });
+    await handleImplementation(ctx);
+    expect(runAgent).toHaveBeenCalledWith(
+      expect.any(String),
+      '/tmp/autopilot/test-task',
+    );
+  });
+
+  it('worktreePath が設定されている場合、runReviewLoop に worktreePath を cwd として渡す', async () => {
+    const runReviewLoop = vi.fn().mockResolvedValue(defaultReviewLoopResult());
+    const { ctx } = makeCtx({
+      depsOverrides: { runReviewLoop },
+      ctxStore: { worktreePath: '/tmp/autopilot/test-task' },
+    });
+    await handleImplementation(ctx);
+    expect(runReviewLoop).toHaveBeenCalledWith(
+      '/tmp/autopilot/test-task',
+      'feature/test-task',
+      'タスク内容',
+    );
+  });
+
+  it('worktreePath 未設定時は repoPath にフォールバックする', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const runReviewLoop = vi.fn().mockResolvedValue(defaultReviewLoopResult());
+    const { ctx } = makeCtx({ depsOverrides: { runAgent, runReviewLoop } });
+    await handleImplementation(ctx);
+    expect(runAgent).toHaveBeenCalledWith(expect.any(String), '/repo');
+    expect(runReviewLoop).toHaveBeenCalledWith('/repo', 'feature/test-task', 'タスク内容');
+  });
+
+  it('worktreePath 設定時のプロンプトにワークツリー前提の前提条件が含まれる', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({
+      depsOverrides: { runAgent },
+      ctxStore: { worktreePath: '/tmp/autopilot/test-task' },
+    });
+    await handleImplementation(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).toContain('ワークツリーは既に feature/test-task ブランチで作成済みです');
+    expect(prompt).toContain('/tmp/autopilot/test-task');
+    expect(prompt).not.toContain('直接 feature ブランチを作成してください');
+  });
+
+  it('worktreePath 未設定時のプロンプトに従来の前提条件が含まれる', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({ depsOverrides: { runAgent } });
+    await handleImplementation(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).toContain('直接 feature ブランチを作成してください');
+    expect(prompt).not.toContain('ワークツリーは既に');
+  });
+
+  it('worktreePath 設定時の retryPrompt でも worktreePath が作業ディレクトリとして使われる', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({
+      depsOverrides: { runAgent },
+      ctxStore: { worktreePath: '/tmp/autopilot/test-task' },
+    });
+    ctx.setRetryReason('テスト失敗');
+    await handleImplementation(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).toContain('作業ディレクトリ: /tmp/autopilot/test-task');
+  });
 });
 
 // -------- handlePRLifecycle --------

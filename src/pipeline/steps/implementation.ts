@@ -5,7 +5,11 @@ import { formatReviewLoopResult } from '../../review';
 /**
  * タスク実装のプロンプトを生成する
  */
-function buildTaskPrompt(task: TaskFile, story: StoryFile, repoPath: string): string {
+function buildTaskPrompt(task: TaskFile, story: StoryFile, cwd: string, useWorktree: boolean): string {
+  const prerequisite = useWorktree
+    ? `- ワークツリーは既に feature/${task.slug} ブランチで作成済みです。直接作業してください。git checkout main や git pull は実行しないでください。`
+    : `- mainブランチは最新の状態に同期済みです。git checkout main や git pull は不要です。直接 feature ブランチを作成してください。`;
+
   return `あなたは優秀なソフトウェアエンジニアです。以下のタスクを実装してください。
 
 ## ストーリー: ${story.slug}
@@ -15,14 +19,14 @@ ${story.content}
 ${task.content}
 
 ## 作業環境
-- リポジトリパス: ${repoPath}
+- リポジトリパス: ${cwd}
 - ブランチ名規則: feature/${task.slug}
 
 ## 前提条件
-- mainブランチは最新の状態に同期済みです。git checkout main や git pull は不要です。直接 feature ブランチを作成してください。
+${prerequisite}
 
 ## 重要なルール
-1. 作業は必ず ${repoPath} ディレクトリ内で行うこと
+1. 作業は必ず ${cwd} ディレクトリ内で行うこと
 2. 実装が完了したらタスクの完了条件をすべて確認すること
 3. PRの作成は自動で行われるため、\`gh pr create\` は実行しないこと
 4. 実装完了後、最後に「実装完了」と出力すること
@@ -33,8 +37,8 @@ ${task.content}
 /**
  * retry時のプロンプトを生成する
  */
-function buildRetryPrompt(task: TaskFile, repoPath: string, reason: string): string {
-  return `前回の実装を修正してください。タスク: ${task.slug}\n\n${task.content}\n\n作業ディレクトリ: ${repoPath}\n\n## 修正依頼\n${reason}\n\n上記の修正依頼を踏まえて、完了条件を再確認しながら修正してください。`;
+function buildRetryPrompt(task: TaskFile, cwd: string, reason: string): string {
+  return `前回の実装を修正してください。タスク: ${task.slug}\n\n${task.content}\n\n作業ディレクトリ: ${cwd}\n\n## 修正依頼\n${reason}\n\n上記の修正依頼を踏まえて、完了条件を再確認しながら修正してください。`;
 }
 
 /**
@@ -47,17 +51,20 @@ function buildRetryPrompt(task: TaskFile, repoPath: string, reason: string): str
 export async function handleImplementation(ctx: TaskContext): Promise<FlowSignal> {
   const { task, story, repoPath, notifier, deps } = ctx;
   const branch = `feature/${task.slug}`;
+  const worktreePath = ctx.get('worktreePath');
+  const cwd = worktreePath ?? repoPath;
+  const useWorktree = worktreePath !== undefined;
 
   deps.updateFileStatus(task.filePath, 'Doing');
 
   const retryReason = ctx.getRetryReason();
   const prompt = retryReason
-    ? buildRetryPrompt(task, repoPath, retryReason)
-    : buildTaskPrompt(task, story, repoPath);
+    ? buildRetryPrompt(task, cwd, retryReason)
+    : buildTaskPrompt(task, story, cwd, useWorktree);
 
-  await deps.runAgent(prompt, repoPath);
+  await deps.runAgent(prompt, cwd);
 
-  const reviewResult = await deps.runReviewLoop(repoPath, branch, task.content);
+  const reviewResult = await deps.runReviewLoop(cwd, branch, task.content);
   const reviewMessage = formatReviewLoopResult(reviewResult);
 
   if (reviewResult.finalVerdict === 'OK') {
