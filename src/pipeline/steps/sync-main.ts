@@ -1,5 +1,25 @@
+import path from 'path';
 import { FlowSignal, TaskContext } from '../types';
 import { GitSyncError, detectNoRemote } from '../../git';
+
+/**
+ * worktree のベースディレクトリ。
+ * テスタビリティと環境ごとの柔軟性のために定数として外出し。
+ */
+export const WORKTREE_BASE_DIR = '/tmp/autopilot';
+
+/**
+ * slug に含まれるパストラバーサル文字を除去し、安全なディレクトリ名を返す。
+ * 許可する文字: 英数字、ハイフン、アンダースコア、ドット
+ */
+export function sanitizeSlug(slug: string): string {
+  // パス区切りを除去し、安全な文字のみ残す
+  const sanitized = path.basename(slug).replace(/[^a-zA-Z0-9_\-\.]/g, '_');
+  if (!sanitized || sanitized === '.' || sanitized === '..') {
+    throw new Error(`Invalid slug: "${slug}"`);
+  }
+  return sanitized;
+}
 
 /**
  * main ブランチ同期 step
@@ -32,10 +52,11 @@ export async function handleSyncMain(ctx: TaskContext): Promise<FlowSignal> {
   }
 
   // worktree を作成（no-remote でも作成する）
-  const worktreePath = `/tmp/autopilot/${task.slug}`;
-  const branch = `feature/${task.slug}`;
+  const safeSlug = sanitizeSlug(task.slug);
+  const worktreePath = path.join(WORKTREE_BASE_DIR, safeSlug);
+  const branch = `feature/${safeSlug}`;
   try {
-    deps.createWorktree(repoPath, worktreePath, branch);
+    await deps.createWorktree(repoPath, worktreePath, branch);
     ctx.set('worktreePath', worktreePath);
   } catch (error) {
     if (error instanceof GitSyncError) {

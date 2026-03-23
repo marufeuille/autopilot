@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createTaskContext } from '../../runner';
 import { TaskContext } from '../../types';
 import { handleStartApproval } from '../start-approval';
-import { handleSyncMain } from '../sync-main';
+import { handleSyncMain, sanitizeSlug, WORKTREE_BASE_DIR } from '../sync-main';
 import { handleImplementation } from '../implementation';
 import { handlePRLifecycle } from '../pr-lifecycle';
 import { handleDone } from '../done';
@@ -93,6 +93,38 @@ describe('handleStartApproval', () => {
   });
 });
 
+// -------- sanitizeSlug --------
+
+describe('sanitizeSlug', () => {
+  it('通常の slug はそのまま返す', () => {
+    expect(sanitizeSlug('my-task')).toBe('my-task');
+  });
+
+  it('パストラバーサル文字を含む slug を安全にサニタイズする', () => {
+    expect(sanitizeSlug('../etc/passwd')).toBe('passwd');
+  });
+
+  it('スラッシュを含む slug は basename 部分のみ返す', () => {
+    expect(sanitizeSlug('foo/bar/baz')).toBe('baz');
+  });
+
+  it('不正な文字はアンダースコアに置換する', () => {
+    expect(sanitizeSlug('task with spaces')).toBe('task_with_spaces');
+  });
+
+  it('空文字列はエラーをスローする', () => {
+    expect(() => sanitizeSlug('')).toThrow('Invalid slug');
+  });
+
+  it('"." のみの slug はエラーをスローする', () => {
+    expect(() => sanitizeSlug('.')).toThrow('Invalid slug');
+  });
+
+  it('".." のみの slug はエラーをスローする', () => {
+    expect(() => sanitizeSlug('..')).toThrow('Invalid slug');
+  });
+});
+
 // -------- handleSyncMain --------
 
 describe('handleSyncMain', () => {
@@ -152,7 +184,7 @@ describe('handleSyncMain', () => {
   });
 
   it('worktree が作成され ctx.set("worktreePath") が呼ばれる', async () => {
-    const createWorktree = vi.fn();
+    const createWorktree = vi.fn().mockResolvedValue(undefined);
     const { ctx } = makeCtx({ depsOverrides: { createWorktree } });
 
     const signal = await handleSyncMain(ctx);
@@ -160,16 +192,16 @@ describe('handleSyncMain', () => {
     expect(signal.kind).toBe('continue');
     expect(createWorktree).toHaveBeenCalledWith(
       '/repo',
-      '/tmp/autopilot/test-task',
+      `${WORKTREE_BASE_DIR}/test-task`,
       'feature/test-task',
     );
-    expect(ctx.get('worktreePath')).toBe('/tmp/autopilot/test-task');
+    expect(ctx.get('worktreePath')).toBe(`${WORKTREE_BASE_DIR}/test-task`);
   });
 
   it('no-remote モードでも worktree が作成される', async () => {
     vi.mocked(detectNoRemote).mockReturnValue(true);
     vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const createWorktree = vi.fn();
+    const createWorktree = vi.fn().mockResolvedValue(undefined);
     const { ctx } = makeCtx({ depsOverrides: { createWorktree } });
 
     const signal = await handleSyncMain(ctx);
@@ -177,16 +209,14 @@ describe('handleSyncMain', () => {
     expect(signal.kind).toBe('continue');
     expect(createWorktree).toHaveBeenCalledWith(
       '/repo',
-      '/tmp/autopilot/test-task',
+      `${WORKTREE_BASE_DIR}/test-task`,
       'feature/test-task',
     );
-    expect(ctx.get('worktreePath')).toBe('/tmp/autopilot/test-task');
+    expect(ctx.get('worktreePath')).toBe(`${WORKTREE_BASE_DIR}/test-task`);
   });
 
   it('worktree 作成で GitSyncError が発生すると abort を返し通知する', async () => {
-    const createWorktree = vi.fn().mockImplementation(() => {
-      throw new GitSyncError('worktree add failed');
-    });
+    const createWorktree = vi.fn().mockRejectedValue(new GitSyncError('worktree add failed'));
     const { ctx, notifier } = makeCtx({ depsOverrides: { createWorktree } });
 
     const signal = await handleSyncMain(ctx);
@@ -199,9 +229,7 @@ describe('handleSyncMain', () => {
   });
 
   it('worktree 作成で GitSyncError 以外の例外は再スローされる', async () => {
-    const createWorktree = vi.fn().mockImplementation(() => {
-      throw new Error('unexpected worktree error');
-    });
+    const createWorktree = vi.fn().mockRejectedValue(new Error('unexpected worktree error'));
     const { ctx } = makeCtx({ depsOverrides: { createWorktree } });
 
     await expect(handleSyncMain(ctx)).rejects.toThrow('unexpected worktree error');
