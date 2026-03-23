@@ -539,7 +539,7 @@ describe('runTask', () => {
     consoleErrorSpy.mockRestore();
   });
 
-  it('buildTaskPrompt の出力にmain同期済みの旨と git pull 不要の指示が含まれる', async () => {
+  it('buildTaskPrompt の出力にworktree前提の指示が含まれる（worktreePath設定時）', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
     const notifier = createMockNotifier('approve');
@@ -553,15 +553,15 @@ describe('runTask', () => {
     const options = callArgs[0] as { prompt: string };
     const prompt = options.prompt;
 
-    // mainブランチは同期済みの旨が含まれている
-    expect(prompt).toContain('mainブランチは最新の状態に同期済みです');
-    // git pull 不要の指示が含まれている
-    expect(prompt).toContain('git pull は不要です');
-    // feature ブランチを直接作成する指示が含まれている
-    expect(prompt).toContain('直接 feature ブランチを作成してください');
+    // sync-main ステップで worktreePath が設定されるため、worktree 前提のプロンプトになる
+    expect(prompt).toContain('ワークツリーは既に feature/task-01 ブランチで作成済みです');
+    // git pull は実行しないでくださいの指示が含まれている
+    expect(prompt).toContain('git pull は実行しないでください');
+    // 作業ディレクトリが worktreePath になっている
+    expect(prompt).toContain('/tmp/autopilot/task-01');
   });
 
-  it('タスク実行後にセルフレビューループが呼ばれる', async () => {
+  it('タスク実行後にセルフレビューループが worktreePath で呼ばれる', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
     const notifier = createMockNotifier('approve');
@@ -569,9 +569,9 @@ describe('runTask', () => {
 
     await runTask(task, story, notifier, repoPath);
 
-    // runReviewLoop が呼ばれたことを確認
+    // runReviewLoop が worktreePath を cwd として呼ばれたことを確認
     expect(mockRunReviewLoop).toHaveBeenCalledWith(
-      repoPath,
+      '/tmp/autopilot/task-01',
       'feature/task-01',
       task.content,
     );
