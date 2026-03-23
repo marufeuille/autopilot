@@ -23,6 +23,14 @@ import { updateFileStatus } from '../../vault/writer';
 import { RunnerDeps } from '../../runner-deps';
 import { MergeError } from '../../merge/types';
 
+// detectNoRemote をモック化（テスト環境では remote なしと判定されるため）
+// NOTE: vi.mock はホイスティングされるため、外部ヘルパーからの import は使用不可。
+// 同一パターンが複数ファイルで重複するが vitest の制約上やむを得ない。
+vi.mock('../../git', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../git')>();
+  return { ...actual, detectNoRemote: vi.fn().mockReturnValue(false) };
+});
+
 // ---------------------------------------------------------------------------
 // Helper: fake vault のタスクディレクトリから TaskFile[] を読み取る
 // ---------------------------------------------------------------------------

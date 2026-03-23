@@ -69,8 +69,8 @@ export function createTaskContext(
   const store = new Map<string, unknown>();
   return {
     ...args,
-    get: (key) => store.get(key),
-    set: (key, value) => store.set(key, value),
+    get: <K extends import('./types').TaskContextKey>(key: K) => store.get(key) as import('./types').TaskContextStore[K],
+    set: <K extends import('./types').TaskContextKey>(key: K, value: import('./types').TaskContextStore[K]) => { store.set(key, value); },
     getRetryReason: () => store.get('retryReason') as string | undefined,
     setRetryReason: (reason) => store.set('retryReason', reason),
   };
