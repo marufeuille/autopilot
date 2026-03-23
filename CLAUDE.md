@@ -7,23 +7,23 @@
 ### 格納場所
 
 ```
-Projects/claude-workflow-kit/
+Projects/autopilot/
 ```
 
 ### 主要ファイル
 
 | ファイル | 内容 |
 |---|---|
-| `Projects/claude-workflow-kit/README.md` | プロジェクト概要・コンセプト・ワークフロー |
+| `Projects/autopilot/README.md` | プロジェクト概要・コンセプト・ワークフロー |
 
 ### アクセス方法
 
 ```
 # ファイル一覧を確認
-mcp__obsidian-mcp-tools__list_vault_files(directory="Projects/claude-workflow-kit")
+mcp__obsidian-mcp-tools__list_vault_files(directory="Projects/autopilot")
 
 # ファイルを読む
-mcp__obsidian-mcp-tools__get_vault_file(filename="Projects/claude-workflow-kit/README.md")
+mcp__obsidian-mcp-tools__get_vault_file(filename="Projects/autopilot/README.md")
 ```
 
 ストーリーやタスクも同 Vault 内で管理されており、スキル（`run-workflow`, `execute-story-task` 等）はこの Vault を読み書きして状態を管理します。
