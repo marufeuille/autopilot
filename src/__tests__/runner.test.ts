@@ -10,6 +10,7 @@ vi.mock('../vault/reader', () => ({
 vi.mock('../vault/writer', () => ({
   updateFileStatus: vi.fn(),
   createTaskFile: vi.fn(),
+  recordTaskCompletion: vi.fn(),
 }));
 
 vi.mock('../decomposer', () => ({
@@ -117,7 +118,7 @@ vi.mock('../ci', () => ({
 }));
 
 import { getStoryTasks } from '../vault/reader';
-import { updateFileStatus } from '../vault/writer';
+import { updateFileStatus, recordTaskCompletion } from '../vault/writer';
 import { decomposeTasks } from '../decomposer';
 import { syncMainBranch, GitSyncError } from '../git';
 import { MergeError } from '../merge';
@@ -125,6 +126,7 @@ import { runStory, runTask, formatReviewSummaryForPR, createPullRequest } from '
 
 const mockedGetStoryTasks = vi.mocked(getStoryTasks);
 const mockedUpdateFileStatus = vi.mocked(updateFileStatus);
+const mockedRecordTaskCompletion = vi.mocked(recordTaskCompletion);
 const mockedDecomposeTasks = vi.mocked(decomposeTasks);
 const mockedSyncMainBranch = vi.mocked(syncMainBranch);
 
@@ -459,16 +461,19 @@ describe('runTask', () => {
     mockedUpdateFileStatus.mockImplementation((_path, status) => {
       callOrder.push(`updateFileStatus:${status}`);
     });
+    mockedRecordTaskCompletion.mockImplementation(() => {
+      callOrder.push('recordTaskCompletion');
+    });
 
     await runTask(task, story, notifier, repoPath);
 
     // syncMainBranch が repoPath で呼ばれること
     expect(mockedSyncMainBranch).toHaveBeenCalledWith(repoPath);
-    // syncMainBranch → Doing → Done の順で呼ばれること
+    // syncMainBranch → Doing → recordTaskCompletion の順で呼ばれること
     expect(callOrder).toEqual([
       'syncMainBranch',
       'updateFileStatus:Doing',
-      'updateFileStatus:Done',
+      'recordTaskCompletion',
     ]);
   });
 
@@ -693,8 +698,8 @@ describe('runTask', () => {
       { skipValidation: false },
     );
 
-    // タスクが Done に更新されること
-    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Done');
+    // タスク完了が Vault に記録されること
+    expect(mockedRecordTaskCompletion).toHaveBeenCalled();
 
     // マージ成功通知がユーザーに送信されること
     expect(notifier.notify).toHaveBeenCalledWith(
@@ -758,8 +763,8 @@ describe('runTask', () => {
       'my-story',
     );
 
-    // マージ失敗後はpr-lifecycleからretryされ、最終的にDoneになること
-    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Done');
+    // マージ失敗後はpr-lifecycleからretryされ、最終的にrecordTaskCompletionが呼ばれること
+    expect(mockedRecordTaskCompletion).toHaveBeenCalled();
   });
 
   it('CI失敗時、CI未通過通知が送信されimplementationからretryされる', async () => {
@@ -854,7 +859,7 @@ describe('runTask', () => {
     expect(prompt).toContain('実行しないこと');
   });
 
-  it('正常実行時は Doing → Done の順で更新される', async () => {
+  it('正常実行時は Doing で updateFileStatus が呼ばれ、完了時は recordTaskCompletion が呼ばれる', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
     const notifier = createMockNotifier('approve');
@@ -862,11 +867,13 @@ describe('runTask', () => {
 
     await runTask(task, story, notifier, repoPath);
 
+    // updateFileStatus は Doing のみ（Done は recordTaskCompletion に移行）
     const calls = mockedUpdateFileStatus.mock.calls;
     expect(calls).toEqual([
       [task.filePath, 'Doing'],
-      [task.filePath, 'Done'],
     ]);
+    // recordTaskCompletion が呼ばれること
+    expect(mockedRecordTaskCompletion).toHaveBeenCalled();
   });
 });
 
@@ -1022,6 +1029,9 @@ describe('runTask - マージ後ステータス更新フロー', () => {
     mockedUpdateFileStatus.mockImplementation((_path, status) => {
       callOrder.push(`updateFileStatus:${status}`);
     });
+    mockedRecordTaskCompletion.mockImplementation(() => {
+      callOrder.push('recordTaskCompletion');
+    });
     mockExecuteMerge.mockImplementationOnce(() => {
       callOrder.push('executeMerge');
       return { success: true, prUrl: 'https://github.com/test/repo/pull/42', output: undefined };
@@ -1029,11 +1039,11 @@ describe('runTask - マージ後ステータス更新フロー', () => {
 
     await runTask(task, story, notifier, repoPath);
 
-    // Doing → executeMerge → Done の順序で呼ばれること
+    // Doing → executeMerge → recordTaskCompletion の順序で呼ばれること
     expect(callOrder).toEqual([
       'updateFileStatus:Doing',
       'executeMerge',
-      'updateFileStatus:Done',
+      'recordTaskCompletion',
     ]);
   });
 
@@ -1065,8 +1075,8 @@ describe('runTask - マージ後ステータス更新フロー', () => {
       story.slug,
     );
 
-    // pr-lifecycleからretryされ最終的にDoneになること
-    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Done');
+    // pr-lifecycleからretryされ最終的にrecordTaskCompletionが呼ばれること
+    expect(mockedRecordTaskCompletion).toHaveBeenCalled();
   });
 
   it('executeMerge 失敗時にマージ処理中通知とエラー通知が順番に送信される', async () => {
@@ -1145,8 +1155,8 @@ describe('runTask - マージ後ステータス更新フロー', () => {
       { skipValidation: false },
     );
 
-    // 最終的にDoneになること
-    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Done');
+    // 最終的にrecordTaskCompletionが呼ばれること
+    expect(mockedRecordTaskCompletion).toHaveBeenCalled();
   });
 
   it('マージ成功時にマージ処理中通知とマージ完了通知が順番に送信される', async () => {
@@ -1232,8 +1242,8 @@ describe('runTask - マージ後ステータス更新フロー', () => {
       story.slug,
     );
 
-    // 最終的にDoneになること
-    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Done');
+    // 最終的にrecordTaskCompletionが呼ばれること
+    expect(mockedRecordTaskCompletion).toHaveBeenCalled();
   });
 
   it('権限不足(403)でマージ失敗時に適切なエラーメッセージが通知される', async () => {
@@ -1304,8 +1314,8 @@ describe('runTask - マージ後ステータス更新フロー', () => {
       story.slug,
     );
 
-    // retryされ最終的にDoneになること
-    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Done');
+    // retryされ最終的にrecordTaskCompletionが呼ばれること
+    expect(mockedRecordTaskCompletion).toHaveBeenCalled();
   });
 
   it('マージ完了通知にmergedステータスが含まれる', async () => {

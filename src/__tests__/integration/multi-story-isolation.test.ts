@@ -7,7 +7,7 @@ import { FakeNotifier, RecordedEvent } from '../helpers/fake-notifier';
 import { createFakeDeps } from '../helpers/fake-deps';
 import { runStory } from '../../runner';
 import { readStoryFile, TaskStatus } from '../../vault/reader';
-import { updateFileStatus } from '../../vault/writer';
+import { updateFileStatus, recordTaskCompletion, TaskCompletionRecord } from '../../vault/writer';
 import { RunnerDeps } from '../../runner-deps';
 
 // ---------------------------------------------------------------------------
@@ -56,6 +56,9 @@ function createIntegrationDeps(
     ),
     updateFileStatus: vi.fn().mockImplementation(
       (filePath: string, status: TaskStatus) => updateFileStatus(filePath, status),
+    ),
+    recordTaskCompletion: vi.fn().mockImplementation(
+      (filePath: string, record: TaskCompletionRecord) => recordTaskCompletion(filePath, record),
     ),
     createTaskFile: vi.fn(),
     execCommand: vi.fn().mockImplementation((cmd: string) => {

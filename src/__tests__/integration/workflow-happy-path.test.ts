@@ -7,7 +7,7 @@ import { FakeNotifier } from '../helpers/fake-notifier';
 import { createFakeDeps } from '../helpers/fake-deps';
 import { runStory } from '../../runner';
 import { readStoryFile, TaskFile, TaskStatus } from '../../vault/reader';
-import { updateFileStatus, TaskDraft } from '../../vault/writer';
+import { updateFileStatus, recordTaskCompletion, TaskDraft, TaskCompletionRecord } from '../../vault/writer';
 import { RunnerDeps } from '../../runner-deps';
 
 // detectNoRemote をモック化（テスト環境では remote なしと判定されるため）
@@ -106,6 +106,9 @@ function createIntegrationDeps(
     ),
     updateFileStatus: vi.fn().mockImplementation(
       (filePath: string, status: TaskStatus) => updateFileStatus(filePath, status),
+    ),
+    recordTaskCompletion: vi.fn().mockImplementation(
+      (filePath: string, record: TaskCompletionRecord) => recordTaskCompletion(filePath, record),
     ),
     createTaskFile: vi.fn().mockImplementation(
       (proj: string, slug: string, draft: TaskDraft) =>
@@ -238,17 +241,23 @@ describe('正常系ワークフロー結合テスト', () => {
         const notifier = new FakeNotifier();
         const drafts = sampleTaskDrafts(STORY_SLUG);
 
-        // updateFileStatus の呼び出し順序を記録する
+        // updateFileStatus / recordTaskCompletion の呼び出し順序を記録する
         const statusTransitions: Array<{ slug: string; status: string }> = [];
         const trackingUpdateFileStatus = (filePath: string, status: TaskStatus) => {
           updateFileStatus(filePath, status);
           const slug = path.basename(filePath, '.md');
           statusTransitions.push({ slug, status });
         };
+        const trackingRecordTaskCompletion = (filePath: string, record: TaskCompletionRecord) => {
+          recordTaskCompletion(filePath, record);
+          const slug = path.basename(filePath, '.md');
+          statusTransitions.push({ slug, status: 'Done' });
+        };
 
         const deps = createIntegrationDeps(vault, {
           decomposeTasks: vi.fn().mockResolvedValue(drafts),
           updateFileStatus: vi.fn().mockImplementation(trackingUpdateFileStatus),
+          recordTaskCompletion: vi.fn().mockImplementation(trackingRecordTaskCompletion),
         });
 
         const story = readStoryFile(vault.storyFilePath);
