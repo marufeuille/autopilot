@@ -20,7 +20,9 @@ vi.mock('../notification', () => ({
   generateApprovalId: vi.fn(
     (story: string, task: string) => `${story}--${task}--1`,
   ),
-  buildMergeApprovalMessage: vi.fn((ctx: any) => `マージ承認依頼: ${ctx.taskSlug}`),
+  buildMergeApprovalMessage: vi.fn((ctx: any) => `マージ実行依頼: ${ctx.taskSlug}`),
+  buildMergeCompletedMessage: vi.fn((taskSlug: string, prUrl: string) => `✅ *マージ完了*\n*タスク*: \`${taskSlug}\`\n*PR*: ${prUrl}\n*ステータス*: \`merged\``),
+  buildMergeBlockedMessage: vi.fn((taskSlug: string, prUrl: string) => `🚫 *マージ不可*\n*タスク*: \`${taskSlug}\`\n*PR*: ${prUrl}`),
   buildReviewEscalationMessage: vi.fn((ctx: any) => `レビューエスカレーション: ${ctx.taskSlug}`),
   buildCIEscalationMessage: vi.fn((ctx: any) => `CIエスカレーション: ${ctx.taskSlug}`),
   buildThreadOriginMessage: vi.fn((slug: string) => `スレッド起点: ${slug}`),
@@ -39,12 +41,24 @@ vi.mock('../git', () => ({
 // マージモジュールをモック
 const mockExecuteMerge = vi.fn().mockReturnValue({ success: true, prUrl: '', output: undefined });
 const mockFormatMergeErrorMessage = vi.fn((error: any) => `❌ ${error.reason}`);
+const mockFetchPullRequestStatus = vi.fn().mockReturnValue({
+  state: 'OPEN',
+  mergeable: 'MERGEABLE',
+  reviewDecision: 'APPROVED',
+  statusCheckRollup: [{ name: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+});
+const mockValidateMergeConditions = vi.fn().mockReturnValue({
+  mergeable: true,
+  errors: [],
+});
 vi.mock('../merge', async (importOriginal) => {
   const actual = await importOriginal() as Record<string, unknown>;
   return {
     ...actual,
     executeMerge: (...args: unknown[]) => mockExecuteMerge(...args),
     formatMergeErrorMessage: (...args: unknown[]) => mockFormatMergeErrorMessage(...args),
+    fetchPullRequestStatus: (...args: unknown[]) => mockFetchPullRequestStatus(...args),
+    validateMergeConditions: (...args: unknown[]) => mockValidateMergeConditions(...args),
   };
 });
 
@@ -584,7 +598,7 @@ describe('runTask', () => {
     consoleSpy.mockRestore();
   });
 
-  it('セルフレビュー通過時、PRが作成されCIパス後にマージ承認依頼が送信される', async () => {
+  it('セルフレビュー通過時、PRが作成されCIパス後にマージ実行依頼が送信される', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
     const notifier = createMockNotifier('approve');
@@ -608,10 +622,10 @@ describe('runTask', () => {
       expect.any(Object),
     );
 
-    // CI成功 → マージ承認依頼が送信されること
+    // CI成功 → マージ実行依頼が送信されること
     const approvalCalls = (notifier.requestApproval as ReturnType<typeof vi.fn>).mock.calls;
     const mergeApprovalCall = approvalCalls.find(
-      (call: unknown[]) => (call[1] as string).includes('マージ承認依頼'),
+      (call: unknown[]) => (call[1] as string).includes('マージ実行依頼'),
     );
     expect(mergeApprovalCall).toBeDefined();
   });
@@ -636,7 +650,7 @@ describe('runTask', () => {
     );
   });
 
-  it('CI成功時、マージ承認依頼が送信される', async () => {
+  it('CI成功時、マージ実行依頼が送信される', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
     const notifier = createMockNotifier('approve');
@@ -650,14 +664,14 @@ describe('runTask', () => {
 
     const approvalCalls = (notifier.requestApproval as ReturnType<typeof vi.fn>).mock.calls;
     const mergeApprovalCall = approvalCalls.find(
-      (call: unknown[]) => (call[1] as string).includes('マージ承認依頼'),
+      (call: unknown[]) => (call[1] as string).includes('マージ実行依頼'),
     );
     expect(mergeApprovalCall).toBeDefined();
-    // マージ承認のボタンラベルが正しいこと
-    expect(mergeApprovalCall![2]).toEqual({ approve: 'マージ承認', reject: '差し戻し' });
+    // マージ実行のボタンラベルが正しいこと
+    expect(mergeApprovalCall![2]).toEqual({ approve: 'マージ実行', reject: '差し戻し' });
   });
 
-  it('マージ承認後に executeMerge が実行されPRがマージされる', async () => {
+  it('マージ実行後に executeMerge が実行されPRがマージされる', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
     const notifier = createMockNotifier('approve');
@@ -980,8 +994,8 @@ describe('runTask - マージ後ステータス更新フロー', () => {
   });
 
   /**
-   * ヘルパー: マージ承認フローに到達するための標準モック設定
-   * レビューOK → PR作成成功 → CI成功 → マージ承認 の前提条件を設定する
+   * ヘルパー: マージ実行フローに到達するための標準モック設定
+   * レビューOK → PR作成成功 → CI成功 → マージ実行 の前提条件を設定する
    */
   function setupMergeFlowMocks(
     notifier: NotificationBackend,
@@ -1001,10 +1015,10 @@ describe('runTask - マージ後ステータス更新フロー', () => {
       mockExecuteMerge.mockReturnValueOnce({ success: true, prUrl: 'https://github.com/test/repo/pull/42', output: undefined });
     }
 
-    // requestApproval を順番に設定: 開始承認→マージ承認
+    // requestApproval を順番に設定: 開始承認→マージ実行
     (notifier.requestApproval as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce({ action: 'approve' })  // タスク開始承認
-      .mockResolvedValueOnce({ action: 'approve' }); // マージ承認
+      .mockResolvedValueOnce({ action: 'approve' }); // マージ実行
   }
 
   it('executeMerge 成功後に updateFileStatus(Done) が呼ばれ、呼び出し順序が正しい', async () => {
@@ -1018,10 +1032,10 @@ describe('runTask - マージ後ステータス更新フロー', () => {
       .mockReturnValueOnce('') // git push
       .mockReturnValueOnce('https://github.com/test/repo/pull/42'); // gh pr create
 
-    // requestApproval: 開始承認→マージ承認
+    // requestApproval: 開始承認→マージ実行
     (notifier.requestApproval as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce({ action: 'approve' })  // タスク開始承認
-      .mockResolvedValueOnce({ action: 'approve' }); // マージ承認
+      .mockResolvedValueOnce({ action: 'approve' }); // マージ実行
 
     const callOrder: string[] = [];
     mockedUpdateFileStatus.mockImplementation((_path, status) => {
@@ -1122,7 +1136,7 @@ describe('runTask - マージ後ステータス更新フロー', () => {
     consoleErrorSpy.mockRestore();
   });
 
-  it('マージ承認で差し戻された場合、executeMerge は呼ばれず再実行ループに入る', async () => {
+  it('マージ実行で差し戻された場合、executeMerge は呼ばれず再実行ループに入る', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
     const notifier: NotificationBackend = {
@@ -1130,7 +1144,7 @@ describe('runTask - マージ後ステータス更新フロー', () => {
       requestApproval: vi.fn()
         .mockResolvedValueOnce({ action: 'approve' })  // タスク開始承認
         .mockResolvedValueOnce({ action: 'reject', reason: '要修正' })  // マージ差し戻し
-        .mockResolvedValueOnce({ action: 'approve' })   // 2回目マージ承認
+        .mockResolvedValueOnce({ action: 'approve' })   // 2回目マージ実行
       ,
       startThread: vi.fn().mockResolvedValue(undefined),
       getThreadTs: vi.fn().mockReturnValue(undefined),
@@ -1204,9 +1218,9 @@ describe('runTask - マージ後ステータス更新フロー', () => {
       notify: vi.fn().mockResolvedValue(undefined),
       requestApproval: vi.fn()
         .mockResolvedValueOnce({ action: 'approve' })                             // タスク開始承認
-        .mockResolvedValueOnce({ action: 'approve' })                             // マージ承認（1回目）
+        .mockResolvedValueOnce({ action: 'approve' })                             // マージ実行（1回目）
         .mockResolvedValueOnce({ action: 'reject', reason: 'コンフリクト解消して' }) // タスク完了確認（マージ失敗後）→ reject
-        .mockResolvedValueOnce({ action: 'approve' })                             // 2回目マージ承認
+        .mockResolvedValueOnce({ action: 'approve' })                             // 2回目マージ実行
       ,
       startThread: vi.fn().mockResolvedValue(undefined),
       getThreadTs: vi.fn().mockReturnValue(undefined),
@@ -1297,7 +1311,7 @@ describe('runTask - マージ後ステータス更新フロー', () => {
     expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 
-  it('CI失敗でマージ承認に到達しない場合、executeMerge は呼ばれずタスク完了確認に遷移する', async () => {
+  it('CI失敗でマージ実行に到達しない場合、executeMerge は呼ばれずタスク完了確認に遷移する', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
     const notifier = createMockNotifier('approve');
@@ -1324,6 +1338,160 @@ describe('runTask - マージ後ステータス更新フロー', () => {
 
     // タスクはDoneになること（完了承認で承認された場合）
     expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Done');
+  });
+
+  it('マージ条件未充足時にマージ不可メッセージが通知され、条件再確認ボタンが表示される', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    mockExecSync
+      .mockReturnValueOnce('') // git push
+      .mockReturnValueOnce('https://github.com/test/repo/pull/42');
+
+    // マージ条件未充足: レビュー承認が不足
+    mockFetchPullRequestStatus.mockReturnValueOnce({
+      state: 'OPEN',
+      mergeable: 'MERGEABLE',
+      reviewDecision: 'REVIEW_REQUIRED',
+      statusCheckRollup: [{ name: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+    });
+    mockValidateMergeConditions.mockReturnValueOnce({
+      mergeable: false,
+      errors: [{ code: 'insufficient_approvals', message: '承認数が不足しています' }],
+    });
+
+    // approve で条件再確認してマージ試行、executeMerge は成功
+    mockExecuteMerge.mockReturnValueOnce({ success: true, prUrl: 'https://github.com/test/repo/pull/42', output: undefined });
+
+    await runTask(task, story, notifier, repoPath);
+
+    // マージ不可メッセージが通知されること
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('マージ不可'),
+      story.slug,
+    );
+
+    // 条件再確認ボタンが表示されること
+    const approvalCalls = (notifier.requestApproval as ReturnType<typeof vi.fn>).mock.calls;
+    const blockedApprovalCall = approvalCalls.find(
+      (call: unknown[]) => (call[2] as { approve: string }).approve === '条件を再確認してマージ',
+    );
+    expect(blockedApprovalCall).toBeDefined();
+  });
+
+  it('マージ条件未充足時に差し戻しを選択するとやり直しループに入る', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier: NotificationBackend = {
+      notify: vi.fn().mockResolvedValue(undefined),
+      requestApproval: vi.fn()
+        .mockResolvedValueOnce({ action: 'approve' })  // タスク開始承認
+        .mockResolvedValueOnce({ action: 'reject', reason: '承認を取得してから再実行' })  // マージ不可 → 差し戻し
+        .mockResolvedValueOnce({ action: 'approve' })   // 2回目マージ実行
+      ,
+      startThread: vi.fn().mockResolvedValue(undefined),
+      getThreadTs: vi.fn().mockReturnValue(undefined),
+      endSession: vi.fn(),
+    };
+    const repoPath = '/Users/test/dev/myproject';
+
+    // 1回目: マージ条件未充足
+    mockFetchPullRequestStatus.mockReturnValueOnce({
+      state: 'OPEN',
+      mergeable: 'MERGEABLE',
+      reviewDecision: 'REVIEW_REQUIRED',
+      statusCheckRollup: [],
+    });
+    mockValidateMergeConditions.mockReturnValueOnce({
+      mergeable: false,
+      errors: [{ code: 'insufficient_approvals', message: '承認数が不足' }],
+    });
+
+    // 2回目: マージ条件充足
+    mockFetchPullRequestStatus.mockReturnValueOnce({
+      state: 'OPEN',
+      mergeable: 'MERGEABLE',
+      reviewDecision: 'APPROVED',
+      statusCheckRollup: [],
+    });
+    mockValidateMergeConditions.mockReturnValueOnce({
+      mergeable: true,
+      errors: [],
+    });
+
+    mockExecSync
+      .mockReturnValueOnce('') // 1回目 git push
+      .mockReturnValueOnce('https://github.com/test/repo/pull/42') // 1回目 gh pr create
+      .mockReturnValueOnce('') // 2回目 git push
+      .mockReturnValueOnce('https://github.com/test/repo/pull/42'); // 2回目 gh pr create
+
+    mockExecuteMerge.mockReturnValueOnce({ success: true, prUrl: 'https://github.com/test/repo/pull/42', output: undefined });
+
+    await runTask(task, story, notifier, repoPath);
+
+    // 差し戻し後に再実行でマージが成功すること
+    expect(mockExecuteMerge).toHaveBeenCalledTimes(1);
+    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(task.filePath, 'Done');
+  });
+
+  it('マージ条件の事前検証でマージ条件詳細がメッセージに反映される', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    mockExecSync
+      .mockReturnValueOnce('') // git push
+      .mockReturnValueOnce('https://github.com/test/repo/pull/42');
+
+    // マージ条件充足
+    mockFetchPullRequestStatus.mockReturnValueOnce({
+      state: 'OPEN',
+      mergeable: 'MERGEABLE',
+      reviewDecision: 'APPROVED',
+      statusCheckRollup: [{ name: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+    });
+    mockValidateMergeConditions.mockReturnValueOnce({
+      mergeable: true,
+      errors: [],
+    });
+
+    mockExecuteMerge.mockReturnValueOnce({ success: true, prUrl: 'https://github.com/test/repo/pull/42', output: undefined });
+
+    await runTask(task, story, notifier, repoPath);
+
+    // fetchPullRequestStatus が呼ばれること
+    expect(mockFetchPullRequestStatus).toHaveBeenCalledWith(
+      'https://github.com/test/repo/pull/42',
+      repoPath,
+      expect.any(Object),
+    );
+
+    // マージ実行ボタンが表示されること
+    const approvalCalls = (notifier.requestApproval as ReturnType<typeof vi.fn>).mock.calls;
+    const mergeApprovalCall = approvalCalls.find(
+      (call: unknown[]) => (call[2] as { approve: string }).approve === 'マージ実行',
+    );
+    expect(mergeApprovalCall).toBeDefined();
+  });
+
+  it('マージ完了通知にmergedステータスが含まれる', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    setupMergeFlowMocks(notifier);
+
+    await runTask(task, story, notifier, repoPath);
+
+    // マージ完了通知にmergedステータスが含まれること
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('merged'),
+      story.slug,
+    );
   });
 });
 

@@ -16,10 +16,13 @@ export { ResilientNotificationBackend, ResilientOptions } from './resilient';
 export {
   buildNotificationMessage,
   buildMergeApprovalMessage,
+  buildMergeCompletedMessage,
+  buildMergeBlockedMessage,
   buildReviewEscalationMessage,
   buildCIEscalationMessage,
   buildThreadOriginMessage,
 } from './message-builder';
+export type { MergeConditionItem } from './types';
 
 import { NotificationBackend } from './types';
 import { LocalNotificationBackend } from './local';

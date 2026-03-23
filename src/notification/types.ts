@@ -73,6 +73,16 @@ export type NotificationEventType =
   | 'ci_result';          // CI結果（情報通知）
 
 /**
+ * マージ条件の検証項目
+ */
+export interface MergeConditionItem {
+  /** 条件を満たしているかどうか */
+  passed: boolean;
+  /** 条件のラベル */
+  label: string;
+}
+
+/**
  * 構造化された通知コンテキスト
  */
 export interface NotificationContext {
@@ -90,4 +100,8 @@ export interface NotificationContext {
   ciSummary?: string;
   /** CI実行URL */
   ciRunUrl?: string;
+  /** マージ条件の検証結果一覧 */
+  mergeConditions?: MergeConditionItem[];
+  /** マージ条件をすべて満たしているか */
+  mergeReady?: boolean;
 }
