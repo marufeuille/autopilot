@@ -31,6 +31,8 @@ export interface TaskContextStore {
   reviewResult?: import('../review').ReviewLoopResult;
   /** リトライ理由（pipeline 内部で使用） */
   retryReason?: string;
+  /** git worktree の作業ディレクトリパス */
+  worktreePath?: string;
 }
 
 /** TaskContextStore のキー型 */
