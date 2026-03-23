@@ -861,6 +861,56 @@ describe('runTask', () => {
     expect(prompt).toContain('実行しないこと');
   });
 
+  it('buildTaskPrompt の出力に設計思想指針（CLAUDE.mdとREADMEを読みシンプルに実装）が含まれる', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    await runTask(task, story, notifier, repoPath);
+
+    expect(mockQuery).toHaveBeenCalled();
+    const callArgs = mockQuery.mock.calls[0] as unknown[];
+    const options = callArgs[0] as { prompt: string };
+    const prompt = options.prompt;
+
+    expect(prompt).toContain('CLAUDE.mdとREADMEを最初に読み');
+    expect(prompt).toContain('設計思想');
+    expect(prompt).toContain('シンプルに実装');
+    expect(prompt).toContain('既存設計から逸脱した過剰な実装は避ける');
+  });
+
+  it('buildRetryPrompt の出力に設計思想指針（CLAUDE.mdとREADMEを読みシンプルに実装）が含まれる', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    // 1回目のレビューをNG+エスカレーションにして retry を発生させる
+    mockRunReviewLoop
+      .mockResolvedValueOnce({
+        finalVerdict: 'NG',
+        escalationRequired: true,
+        iterations: [
+          { iteration: 1, reviewResult: { verdict: 'NG', summary: 'Issues found', findings: [] }, timestamp: new Date() },
+        ],
+        lastReviewResult: { verdict: 'NG', summary: 'Issues found', findings: [] },
+      });
+
+    await runTask(task, story, notifier, repoPath);
+
+    // retry により mockQuery が2回呼ばれる（初回 + retry）
+    expect(mockQuery.mock.calls.length).toBeGreaterThanOrEqual(2);
+    const retryCallArgs = mockQuery.mock.calls[1] as unknown[];
+    const retryOptions = retryCallArgs[0] as { prompt: string };
+    const retryPrompt = retryOptions.prompt;
+
+    expect(retryPrompt).toContain('CLAUDE.mdとREADMEを読み');
+    expect(retryPrompt).toContain('設計思想');
+    expect(retryPrompt).toContain('シンプルに実装');
+    expect(retryPrompt).toContain('既存設計から逸脱した過剰な実装は避ける');
+  });
+
   it('正常実行時は Doing で updateFileStatus が呼ばれ、完了時は recordTaskCompletion が呼ばれる', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
