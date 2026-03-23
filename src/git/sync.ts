@@ -1,4 +1,4 @@
-import { execSync } from "child_process";
+import { execSync, execFileSync } from "child_process";
 
 export class GitSyncError extends Error {
   constructor(message: string) {
@@ -78,15 +78,24 @@ export async function syncMainBranch(repoPath: string): Promise<void> {
 
 /**
  * git worktree を作成する。
- * `git worktree add <worktreePath> -b <branch>` を実行し、
- * 指定パスに独立した作業ディレクトリを作成する。
+ * createBranch が true（デフォルト）の場合は `git worktree add <worktreePath> -b <branch>` を実行し、
+ * false の場合は `git worktree add <worktreePath> <branch>` で既存ブランチをチェックアウトする。
  * 失敗時は GitSyncError をスローする。
  */
-export function createWorktree(repoPath: string, worktreePath: string, branch: string): void {
-  console.log(`[git-worktree] worktreeを作成します: ${worktreePath} (branch: ${branch})`);
+export function createWorktree(
+  repoPath: string,
+  worktreePath: string,
+  branch: string,
+  options: { createBranch?: boolean } = {},
+): void {
+  const { createBranch = true } = options;
+  console.log(`[git-worktree] worktreeを作成します: ${worktreePath} (branch: ${branch}, createBranch: ${createBranch})`);
 
   try {
-    execSync(`git worktree add ${worktreePath} -b ${branch}`, {
+    const args = createBranch
+      ? ["worktree", "add", worktreePath, "-b", branch]
+      : ["worktree", "add", worktreePath, branch];
+    execFileSync("git", args, {
       cwd: repoPath,
       stdio: "pipe",
     });
@@ -110,7 +119,7 @@ export function removeWorktree(repoPath: string, worktreePath: string): void {
   console.log(`[git-worktree] worktreeを削除します: ${worktreePath}`);
 
   try {
-    execSync(`git worktree remove ${worktreePath} --force`, {
+    execFileSync("git", ["worktree", "remove", worktreePath, "--force"], {
       cwd: repoPath,
       stdio: "pipe",
     });

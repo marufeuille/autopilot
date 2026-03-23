@@ -46,7 +46,7 @@ export interface RunnerDeps {
   recordTaskCompletion: (filePath: string, record: TaskCompletionRecord) => void;
 
   /** git worktree を作成する */
-  createWorktree: (repoPath: string, worktreePath: string, branch: string) => void;
+  createWorktree: (repoPath: string, worktreePath: string, branch: string, options?: { createBranch?: boolean }) => void;
 
   /** git worktree を削除する */
   removeWorktree: (repoPath: string, worktreePath: string) => void;
