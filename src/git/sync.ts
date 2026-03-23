@@ -8,6 +8,39 @@ export class GitSyncError extends Error {
 }
 
 /**
+ * リモートリポジトリの有無を検出する。
+ * `git remote get-url origin` を実行し、失敗（exit code !== 0）なら true を返す。
+ * 結果はプロセス内でキャッシュし、複数回呼び出しても git コマンドは1回だけ実行する。
+ */
+let noRemoteCache: boolean | null = null;
+
+export async function detectNoRemote(repoPath: string): Promise<boolean> {
+  if (noRemoteCache !== null) {
+    return noRemoteCache;
+  }
+
+  try {
+    execSync("git remote get-url origin", {
+      cwd: repoPath,
+      stdio: "pipe",
+    });
+    noRemoteCache = false;
+  } catch {
+    console.warn("[git-sync] リモート 'origin' が見つかりません。ローカルオンリーモードで動作します。");
+    noRemoteCache = true;
+  }
+
+  return noRemoteCache;
+}
+
+/**
+ * テスト用: キャッシュをリセットする。
+ */
+export function resetNoRemoteCache(): void {
+  noRemoteCache = null;
+}
+
+/**
  * main ブランチをチェックアウトし、最新の状態に同期する。
  * git checkout main → git pull origin main を順番に実行する。
  * いずれかのコマンドが失敗した場合は GitSyncError をスローする。
