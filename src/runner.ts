@@ -6,53 +6,16 @@ import { TaskDraft } from './vault/writer';
 import {
   NotificationBackend,
   generateApprovalId,
-  buildMergeApprovalMessage,
-  buildMergeCompletedMessage,
-  buildMergeBlockedMessage,
-  buildReviewEscalationMessage,
-  buildCIEscalationMessage,
   buildThreadOriginMessage,
-  NotificationContext,
-  MergeConditionItem,
 } from './notification';
 import { GitSyncError } from './git';
-import { formatReviewLoopResult, ReviewLoopResult } from './review';
-import { formatCIPollingResult, CIPollingResult } from './ci';
+import { ReviewLoopResult } from './review';
 import { RunnerDeps, createDefaultRunnerDeps } from './runner-deps';
-import {
-  executeMerge,
-  MergeError,
-  formatMergeErrorMessage,
-  fetchPullRequestStatus,
-  validateMergeConditions,
-} from './merge';
+import { createTaskContext } from './pipeline/runner';
+import { taskPipeline } from './pipeline/task-pipeline';
 
 export { RunnerDeps, createDefaultRunnerDeps } from './runner-deps';
 
-function buildTaskPrompt(task: TaskFile, story: StoryFile, repoPath: string): string {
-  return `あなたは優秀なソフトウェアエンジニアです。以下のタスクを実装してください。
-
-## ストーリー: ${story.slug}
-${story.content}
-
-## タスク: ${task.slug}
-${task.content}
-
-## 作業環境
-- リポジトリパス: ${repoPath}
-- ブランチ名規則: feature/${task.slug}
-
-## 前提条件
-- mainブランチは最新の状態に同期済みです。git checkout main や git pull は不要です。直接 feature ブランチを作成してください。
-
-## 重要なルール
-1. 作業は必ず ${repoPath} ディレクトリ内で行うこと
-2. 実装が完了したらタスクの完了条件をすべて確認すること
-3. PRの作成は自動で行われるため、\`gh pr create\` は実行しないこと
-4. 実装完了後、最後に「実装完了」と出力すること
-
-それでは実装を開始してください。`;
-}
 
 /**
  * レビューループ結果をPR本文用のMarkdownサマリーに変換する
@@ -169,291 +132,20 @@ export async function runTask(
   deps?: RunnerDeps,
 ): Promise<void> {
   const d = deps ?? createDefaultRunnerDeps();
+  const ctx = createTaskContext({ task, story, repoPath, notifier, deps: d });
 
-  // タスク開始承認
-  console.log(`[runner] requesting start approval: ${task.slug}`);
-  const startId = generateApprovalId(story.slug, task.slug);
-  const startResult = await notifier.requestApproval(
-    startId,
-    `*タスク開始確認*\n\n*ストーリー*: ${story.slug}\n*タスク*: ${task.slug}\n\nこのタスクを開始しますか？`,
-    { approve: '開始', reject: 'スキップ' },
-    story.slug,
-  );
-
-  if (startResult.action === 'reject') {
-    d.updateFileStatus(task.filePath, 'Skipped');
-    console.log(`[runner] task skipped: ${task.slug}`);
-    return;
-  }
-
-  // mainブランチを最新化してからタスクを開始する
   try {
-    console.log(`[runner] syncing main branch before task: ${task.slug}`);
-    await d.syncMainBranch(repoPath);
-    console.log(`[runner] main branch synced successfully`);
+    const result = await taskPipeline(ctx);
+    if (result === 'skipped') {
+      d.updateFileStatus(task.filePath, 'Skipped');
+    }
   } catch (error) {
+    d.updateFileStatus(task.filePath, 'Failed');
     if (error instanceof GitSyncError) {
-      const errorMessage = `❌ main同期失敗: ${task.slug}\n原因: ${error.message}`;
-      await notifier.notify(errorMessage, story.slug);
-      d.updateFileStatus(task.filePath, 'Failed');
-      console.error(`[runner] main sync failed, task aborted: ${task.slug}`, error);
       return;
     }
     throw error;
   }
-
-  try {
-    d.updateFileStatus(task.filePath, 'Doing');
-    console.log(`[runner] task started: ${task.slug}`);
-
-    // Claudeエージェント実行（やり直しループ）
-    let prompt = buildTaskPrompt(task, story, repoPath);
-    while (true) {
-      await d.runAgent(prompt, repoPath);
-
-      // セルフレビューループ実行
-      const branch = `feature/${task.slug}`;
-      console.log(`[runner] starting self-review loop for: ${task.slug}`);
-      const reviewLoopResult = await d.runReviewLoop(
-        repoPath,
-        branch,
-        task.content,
-      );
-
-      // レビュー結果を通知
-      const reviewMessage = formatReviewLoopResult(reviewLoopResult);
-      const reviewSummary = reviewMessage;
-      console.log(`[runner] self-review complete: verdict=${reviewLoopResult.finalVerdict}, iterations=${reviewLoopResult.iterations.length}, escalation=${reviewLoopResult.escalationRequired}`);
-
-      // 通知コンテキストの基本情報
-      const baseCtx: Omit<NotificationContext, 'eventType'> = {
-        taskSlug: task.slug,
-        storySlug: story.slug,
-        reviewSummary,
-      };
-
-      // PR作成ゲート: セルフレビューOKの場合のみPRを作成
-      let prUrl = '';
-      let ciPollingResult: CIPollingResult | undefined;
-      if (reviewLoopResult.finalVerdict === 'OK') {
-        // レビュー通過の情報通知
-        await notifier.notify(`*セルフレビュー結果* (${task.slug})\n\n${reviewMessage}`, story.slug);
-
-        console.log(`[runner] self-review passed, creating PR for: ${task.slug}`);
-        prUrl = createPullRequest(repoPath, branch, task, story, reviewLoopResult, d);
-
-        // PR作成成功時、CIポーリングループを実行
-        if (prUrl) {
-          console.log(`[runner] starting CI polling for: ${task.slug}`);
-          ciPollingResult = await d.runCIPollingLoop(
-            repoPath,
-            branch,
-            task.content,
-          );
-          const ciMessage = formatCIPollingResult(ciPollingResult);
-          const ciRunUrl = ciPollingResult.lastCIResult?.runUrl;
-          console.log(`[runner] CI polling complete: status=${ciPollingResult.finalStatus}, attempts=${ciPollingResult.attempts}`);
-
-          if (ciPollingResult.finalStatus === 'success') {
-            // CI通過 → マージ条件を事前検証してからマージ実行依頼を送信
-            console.log(`[runner] CI passed, pre-validating merge conditions: ${task.slug}, prUrl=${prUrl}`);
-
-            // マージ条件の事前検証
-            const mergeConditions: MergeConditionItem[] = [
-              { passed: true, label: 'セルフレビュー通過' },
-              { passed: true, label: 'CI通過' },
-            ];
-            let mergeReady = true;
-            try {
-              const prStatus = fetchPullRequestStatus(prUrl, repoPath, d);
-              const validation = validateMergeConditions(prStatus);
-
-              // PR状態
-              mergeConditions.push({
-                passed: prStatus.state === 'OPEN',
-                label: prStatus.state === 'OPEN' ? 'PRがオープン状態' : `PRがオープン状態ではありません（現在: ${prStatus.state}）`,
-              });
-
-              // マージコンフリクト
-              mergeConditions.push({
-                passed: prStatus.mergeable !== 'CONFLICTING',
-                label: prStatus.mergeable === 'CONFLICTING' ? 'マージコンフリクトが発生しています' : 'コンフリクトなし',
-              });
-
-              // レビュー承認
-              const reviewOk = prStatus.reviewDecision !== 'CHANGES_REQUESTED' && prStatus.reviewDecision !== 'REVIEW_REQUIRED';
-              mergeConditions.push({
-                passed: reviewOk,
-                label: reviewOk ? 'レビュー承認済み' : (prStatus.reviewDecision === 'CHANGES_REQUESTED' ? '変更がリクエストされています' : '承認数が不足しています'),
-              });
-
-              mergeReady = validation.mergeable;
-            } catch (preValidationError) {
-              console.warn(`[runner] pre-validation failed, proceeding with merge attempt: ${task.slug}`, preValidationError);
-              // 事前検証に失敗しても、マージ自体は試みる（executeMerge 内で再度バリデーションされる）
-            }
-
-            const mergeCtx: NotificationContext = {
-              ...baseCtx,
-              eventType: 'merge_approval',
-              prUrl,
-              ciSummary: ciMessage,
-              ciRunUrl,
-              mergeConditions,
-              mergeReady,
-            };
-            const mergeMessage = buildMergeApprovalMessage(mergeCtx);
-            const mergeApprovalId = generateApprovalId(story.slug, `${task.slug}-merge`);
-
-            if (!mergeReady) {
-              // マージ条件未充足: ブロックメッセージを表示し、差し戻しのみ受け付ける
-              console.log(`[runner] merge conditions not met, showing blocked message: ${task.slug}`);
-              const blockedMessage = buildMergeBlockedMessage(task.slug, prUrl, mergeConditions);
-              await notifier.notify(blockedMessage, story.slug);
-              // マージ不可時は条件確認か差し戻しを選択させる
-              const blockedResult = await notifier.requestApproval(
-                mergeApprovalId,
-                mergeMessage,
-                { approve: '条件を再確認してマージ', reject: '差し戻し' },
-                story.slug,
-              );
-              if (blockedResult.action === 'reject') {
-                prompt = `前回の実装を修正してください。タスク: ${task.slug}\n\n${task.content}\n\n作業ディレクトリ: ${repoPath}\n\n## 修正依頼\n${blockedResult.reason}\n\n上記の修正依頼を踏まえて、完了条件を再確認しながら修正してください。`;
-                console.log(`[runner] merge blocked and rejected, retrying task: ${task.slug}`);
-                continue;
-              }
-              // 「条件を再確認してマージ」→ executeMerge で再度バリデーションされる
-              console.log(`[runner] user requested merge despite blocked conditions, attempting merge: ${task.slug}`);
-            } else {
-              // マージ条件充足: マージ実行ボタンを表示
-              console.log(`[runner] merge conditions met, sending merge execution request: ${task.slug}, prUrl=${prUrl}`);
-              const mergeResult = await notifier.requestApproval(
-                mergeApprovalId,
-                mergeMessage,
-                { approve: 'マージ実行', reject: '差し戻し' },
-                story.slug,
-              );
-              console.log(`[runner] merge execution result: action=${mergeResult.action}, task=${task.slug}`);
-              if (mergeResult.action === 'reject') {
-                // 差し戻しの場合はやり直しループへ
-                prompt = `前回の実装を修正してください。タスク: ${task.slug}\n\n${task.content}\n\n作業ディレクトリ: ${repoPath}\n\n## 修正依頼\n${mergeResult.reason}\n\n上記の修正依頼を踏まえて、完了条件を再確認しながら修正してください。`;
-                console.log(`[runner] merge rejected, retrying task: ${task.slug}`);
-                continue;
-              }
-            }
-
-            // マージ実行
-            console.log(`[runner] executing merge: ${prUrl}`);
-            // マージ処理中通知（ローディング表示）
-            await notifier.notify(
-              `⏳ *マージ処理中*: \`${task.slug}\`\n*PR*: ${prUrl}\nマージを実行しています...`,
-              story.slug,
-            );
-            let mergeSucceeded = false;
-            try {
-              const result = executeMerge(prUrl, repoPath, d, { skipValidation: false });
-              mergeSucceeded = true;
-              console.log(`[runner] PR merged successfully: ${prUrl}`);
-              if (result.output) {
-                console.log(`[runner] merge output: ${result.output}`);
-              }
-              // マージ完了通知をユーザーに送信（ステータス: merged）
-              await notifier.notify(
-                buildMergeCompletedMessage(task.slug, prUrl),
-                story.slug,
-              );
-            } catch (mergeError) {
-              if (mergeError instanceof MergeError) {
-                const formattedMessage = formatMergeErrorMessage(mergeError);
-                console.error(`[runner] PR merge failed [${mergeError.code}] (${mergeError.statusCode}): ${prUrl}`, mergeError.reason);
-                // 構造化されたエラー情報をユーザーに送信
-                await notifier.notify(
-                  `❌ *マージ失敗*: \`${task.slug}\`\n*PR*: ${prUrl}\n*エラーコード*: \`${mergeError.code}\`\n*原因*: ${formattedMessage}`,
-                  story.slug,
-                );
-              } else {
-                const errorMessage = mergeError instanceof Error ? mergeError.message : String(mergeError);
-                console.error(`[runner] PR merge failed: ${prUrl}`, mergeError);
-                await notifier.notify(
-                  `❌ *マージ失敗*: \`${task.slug}\`\n*PR*: ${prUrl}\n*原因*: ${errorMessage}`,
-                  story.slug,
-                );
-              }
-              // マージ失敗時は throw せずにループを継続し、
-              // タスク完了確認で再試行の機会を提供する
-              console.log(`[runner] merge failed, continuing to completion approval for retry opportunity: ${task.slug}`);
-            }
-            if (mergeSucceeded) {
-              break;
-            }
-            // マージ失敗時はタスク完了確認フローへ fall through し、
-            // ユーザーにやり直しの機会を提供する
-          } else if (
-            ciPollingResult.finalStatus === 'max_retries_exceeded' ||
-            ciPollingResult.finalStatus === 'failure' ||
-            ciPollingResult.finalStatus === 'timeout'
-          ) {
-            // CI失敗エスカレーション通知
-            const ciEscCtx: NotificationContext = {
-              ...baseCtx,
-              eventType: 'ci_escalation',
-              prUrl,
-              ciSummary: ciMessage,
-              ciRunUrl,
-            };
-            await notifier.notify(buildCIEscalationMessage(ciEscCtx), story.slug);
-            console.log(`[runner] CI escalation notified for: ${task.slug}`);
-          }
-        }
-      } else {
-        console.log(`[runner] self-review NG, skipping PR creation for: ${task.slug}`);
-        if (reviewLoopResult.escalationRequired) {
-          // レビューNGエスカレーション通知
-          const reviewEscCtx: NotificationContext = {
-            ...baseCtx,
-            eventType: 'review_escalation',
-          };
-          await notifier.notify(buildReviewEscalationMessage(reviewEscCtx), story.slug);
-          console.log(`[runner] review escalation notified for: ${task.slug}`);
-        } else {
-          // レビューNG（エスカレーションなし）の情報通知
-          await notifier.notify(`*セルフレビュー結果* (${task.slug})\n\n${reviewMessage}`, story.slug);
-        }
-      }
-
-      const prLine = prUrl ? `\n*PR*: ${prUrl}` : '';
-      const reviewLine = reviewLoopResult.escalationRequired
-        ? '\n⚠️ セルフレビュー未通過（要確認）'
-        : `\n✅ セルフレビュー通過 (${reviewLoopResult.iterations.length}回)`;
-      const ciLine = ciPollingResult
-        ? ciPollingResult.finalStatus === 'success'
-          ? '\n✅ CI通過'
-          : `\n❌ CI未通過 (${ciPollingResult.finalStatus})`
-        : '';
-
-      // タスク完了承認
-      const doneId = generateApprovalId(story.slug, `${task.slug}-done`);
-      const doneResult = await notifier.requestApproval(
-        doneId,
-        `*タスク完了確認*\n\n*タスク*: ${task.slug}${prLine}${reviewLine}${ciLine}\n\n実装を確認してください。`,
-        { approve: '完了', reject: 'やり直し' },
-        story.slug,
-      );
-
-      if (doneResult.action === 'approve') break;
-
-      // やり直し: 理由をプロンプトに含めて再実行
-      prompt = `前回の実装を修正してください。タスク: ${task.slug}\n\n${task.content}\n\n作業ディレクトリ: ${repoPath}\n\n## 修正依頼\n${doneResult.reason}\n\n上記の修正依頼を踏まえて、完了条件を再確認しながら修正してください。`;
-      console.log(`[runner] retrying task: ${task.slug}`);
-    }
-  } catch (error) {
-    d.updateFileStatus(task.filePath, 'Failed');
-    console.error(`[runner] task failed: ${task.slug}`, error);
-    throw error;
-  }
-
-  d.updateFileStatus(task.filePath, 'Done');
-  console.log(`[runner] task done: ${task.slug}`);
 }
 
 function formatDecompositionMessage(story: StoryFile, drafts: TaskDraft[]): string {

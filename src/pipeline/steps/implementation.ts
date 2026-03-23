@@ -48,6 +48,8 @@ export async function handleImplementation(ctx: TaskContext): Promise<FlowSignal
   const { task, story, repoPath, notifier, deps } = ctx;
   const branch = `feature/${task.slug}`;
 
+  deps.updateFileStatus(task.filePath, 'Doing');
+
   const retryReason = ctx.getRetryReason();
   const prompt = retryReason
     ? buildRetryPrompt(task, repoPath, retryReason)

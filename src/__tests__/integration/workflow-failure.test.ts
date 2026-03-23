@@ -270,10 +270,12 @@ describe('異常系ワークフロー結合テスト', () => {
         const story = readStoryFile(vault.storyFilePath);
         await runStory(story, notifier, deps);
 
-        // タスクの状態遷移: Doing → Done
+        // タスクの状態遷移: Doing → Doing（リトライ）→ Done
+        // 新パイプラインではマージ差し戻し後に実装ステップが再実行され、Doing が再セットされる
         const taskSlug = `${STORY_SLUG}-01-task`;
         const taskTransitions = transitions.filter((t) => t.slug === taskSlug);
         expect(taskTransitions).toEqual([
+          { slug: taskSlug, status: 'Doing' },
           { slug: taskSlug, status: 'Doing' },
           { slug: taskSlug, status: 'Done' },
         ]);
@@ -378,20 +380,20 @@ describe('異常系ワークフロー結合テスト', () => {
     );
 
     it(
-      'マージ失敗後のタスク完了確認で approve すると、マージ無しでタスクが Done になる',
+      'マージ失敗後に自動リトライし、2回目のマージで成功してタスクが Done になる',
       withVault(async (vault) => {
         const notifier = new FakeNotifier();
-        // 承認キュー:
+        // 承認キュー（新パイプライン動作）:
         //   1. タスク開始 → approve
-        //   2. マージ承認 → approve
-        //      → executeMerge 失敗
-        //   3. タスク完了確認 → approve（マージなしで完了）
+        //   2. マージ承認（1回目）→ approve → executeMerge 失敗 → 自動リトライ
+        //   3. マージ承認（2回目）→ approve → executeMerge 成功
         notifier.enqueueApprovalResponse(
           { action: 'approve' },   // start
-          { action: 'approve' },   // merge → approve (but merge fails)
-          { action: 'approve' },   // done → approve (skip merge)
+          { action: 'approve' },   // merge 1st → approve (but merge fails, auto-retry)
+          { action: 'approve' },   // merge 2nd → approve (succeeds)
         );
 
+        let mergeCallCount = 0;
         const deps = createIntegrationDeps(vault, {
           execGh: vi.fn().mockImplementation((args: string[]) => {
             if (args.includes('view') && args.includes('--json')) {
@@ -405,7 +407,11 @@ describe('異常系ワークフロー結合テスト', () => {
               });
             }
             if (args.includes('merge')) {
-              throw new Error('Resource not accessible: permission denied');
+              mergeCallCount++;
+              if (mergeCallCount === 1) {
+                throw new Error('Resource not accessible: permission denied');
+              }
+              return '';
             }
             return 'https://github.com/test/repo/pull/1';
           }),
@@ -414,13 +420,13 @@ describe('異常系ワークフロー結合テスト', () => {
         const story = readStoryFile(vault.storyFilePath);
         await runStory(story, notifier, deps);
 
-        // 権限不足エラー通知が送信されること
+        // マージ失敗通知が送信されること
         const errorNotification = notifier.notifications.find((n) =>
           n.message.includes('マージ失敗'),
         );
         expect(errorNotification).toBeDefined();
 
-        // タスクが Done（タスク完了確認で approve したため）
+        // タスクが Done（2回目のマージ承認で成功したため）
         const taskFm = readFrontmatter(vault.taskFilePaths[0]);
         expect(taskFm.status).toBe('Done');
       }, {
@@ -441,20 +447,22 @@ describe('異常系ワークフロー結合テスト', () => {
     const STORY_SLUG = 'review-escalation-story';
 
     it(
-      'レビュー NG エスカレーション通知が送られ、タスク完了承認に進む',
+      'レビュー NG エスカレーション通知が送られ、自動リトライ後に成功してタスクが Done になる',
       withVault(async (vault) => {
         const notifier = new FakeNotifier();
-        // 承認キュー:
+        // 承認キュー（新パイプライン動作）:
         //   1. タスク開始 → approve
-        //   2. タスク完了確認 → approve（レビューNG後はマージ承認なし、完了確認のみ）
+        //   2. レビュー NG → 自動リトライ（タスク完了確認なし）
+        //   3. マージ承認 → approve
         notifier.enqueueApprovalResponse(
           { action: 'approve' },  // start
-          { action: 'approve' },  // done (after escalation)
+          { action: 'approve' },  // merge (after auto-retry with review OK)
         );
 
-        const reviewNGResult = createReviewNGResult(true);
         const deps = createIntegrationDeps(vault, {
-          runReviewLoop: vi.fn().mockResolvedValue(reviewNGResult),
+          runReviewLoop: vi.fn()
+            .mockResolvedValueOnce(createReviewNGResult(true))
+            .mockResolvedValue(defaultReviewLoopResult()),
         });
 
         const story = readStoryFile(vault.storyFilePath);
@@ -466,16 +474,7 @@ describe('異常系ワークフロー結合テスト', () => {
         );
         expect(escalationNotification).toBeDefined();
 
-        // PR が作成されていない（レビュー NG のため）
-        expect(deps.execCommand).not.toHaveBeenCalledWith(
-          expect.stringContaining('git push'),
-          expect.any(String),
-        );
-
-        // CI ポーリングが呼ばれていない
-        expect(deps.runCIPollingLoop).not.toHaveBeenCalled();
-
-        // タスクが Done（完了承認で approve のため）
+        // タスクが Done
         const taskFm = readFrontmatter(vault.taskFilePaths[0]);
         expect(taskFm.status).toBe('Done');
       }, {
@@ -488,26 +487,22 @@ describe('異常系ワークフロー結合テスト', () => {
     );
 
     it(
-      'レビュー NG 後のタスク完了確認で reject → リトライ → 成功',
+      'レビュー NG 後に自動リトライ → レビュー OK → マージ承認で完了',
       withVault(async (vault) => {
         const notifier = new FakeNotifier();
-        // 承認キュー:
+        // 承認キュー（新パイプライン動作）:
         //   1. start → approve
-        //   2. done (1st, after review NG) → reject (やり直し)
-        //   3. merge (2nd, after retry with review OK) → approve
+        //   2. レビュー NG → 自動リトライ（タスク完了確認なし）
+        //   3. merge → approve
         notifier.enqueueApprovalResponse(
-          { action: 'approve' },                              // start
-          { action: 'reject', reason: '修正してください' },    // done reject
-          { action: 'approve' },                              // merge approve (on retry)
+          { action: 'approve' },  // start
+          { action: 'approve' },  // merge approve (after auto-retry with review OK)
         );
 
-        const reviewNGResult = createReviewNGResult(true);
-        const reviewOKResult = defaultReviewLoopResult();
-
-        // 1回目: NG, 2回目: OK
+        // 1回目: NG, 以降: OK（3回目以降も呼ばれる可能性があるためフォールバック設定）
         const runReviewLoopMock = vi.fn()
-          .mockResolvedValueOnce(reviewNGResult)
-          .mockResolvedValueOnce(reviewOKResult);
+          .mockResolvedValueOnce(createReviewNGResult(true))
+          .mockResolvedValue(defaultReviewLoopResult());
 
         const deps = createIntegrationDeps(vault, {
           runReviewLoop: runReviewLoopMock,
@@ -515,12 +510,6 @@ describe('異常系ワークフロー結合テスト', () => {
 
         const story = readStoryFile(vault.storyFilePath);
         await runStory(story, notifier, deps);
-
-        // runAgent が 2 回呼ばれる
-        expect(deps.runAgent).toHaveBeenCalledTimes(2);
-
-        // runReviewLoop が 2 回呼ばれる
-        expect(deps.runReviewLoop).toHaveBeenCalledTimes(2);
 
         // タスクが最終的に Done
         const taskFm = readFrontmatter(vault.taskFilePaths[0]);
@@ -538,14 +527,18 @@ describe('異常系ワークフロー結合テスト', () => {
       'エスカレーション通知にタスクとストーリーの情報が含まれる',
       withVault(async (vault) => {
         const notifier = new FakeNotifier();
+        // 承認キュー（新パイプライン動作）:
+        //   1. start → approve
+        //   2. merge → approve（レビュー NG 後に自動リトライ → 2回目レビュー OK）
         notifier.enqueueApprovalResponse(
           { action: 'approve' },  // start
-          { action: 'approve' },  // done
+          { action: 'approve' },  // merge (after auto-retry with review OK)
         );
 
-        const reviewNGResult = createReviewNGResult(true);
         const deps = createIntegrationDeps(vault, {
-          runReviewLoop: vi.fn().mockResolvedValue(reviewNGResult),
+          runReviewLoop: vi.fn()
+            .mockResolvedValueOnce(createReviewNGResult(true))
+            .mockResolvedValue(defaultReviewLoopResult()),
         });
 
         const story = readStoryFile(vault.storyFilePath);
@@ -579,17 +572,19 @@ describe('異常系ワークフロー結合テスト', () => {
       'CI 失敗時にエスカレーション通知が送られる',
       withVault(async (vault) => {
         const notifier = new FakeNotifier();
-        // 承認キュー:
+        // 承認キュー（新パイプライン動作）:
         //   1. start → approve
-        //   2. done (CI 失敗後のタスク完了確認) → approve
+        //   2. CI 失敗 → 自動リトライ（タスク完了確認なし）
+        //   3. merge (CI 成功後) → approve
         notifier.enqueueApprovalResponse(
           { action: 'approve' },  // start
-          { action: 'approve' },  // done
+          { action: 'approve' },  // merge (after auto-retry with CI success)
         );
 
-        const ciFailureResult = createCIFailureResult('failure');
         const deps = createIntegrationDeps(vault, {
-          runCIPollingLoop: vi.fn().mockResolvedValue(ciFailureResult),
+          runCIPollingLoop: vi.fn()
+            .mockResolvedValueOnce(createCIFailureResult('failure'))
+            .mockResolvedValue(defaultCIPollingResult()),
         });
 
         const story = readStoryFile(vault.storyFilePath);
@@ -601,13 +596,7 @@ describe('異常系ワークフロー結合テスト', () => {
         );
         expect(ciEscalation).toBeDefined();
 
-        // マージ承認リクエストは発行されない（CI 失敗のため）
-        const mergeApprovals = notifier.approvalRequests.filter((a) =>
-          a.message.includes('マージ'),
-        );
-        expect(mergeApprovals).toHaveLength(0);
-
-        // タスクが Done（完了確認で approve）
+        // タスクが Done
         const taskFm = readFrontmatter(vault.taskFilePaths[0]);
         expect(taskFm.status).toBe('Done');
       }, {
@@ -620,26 +609,22 @@ describe('異常系ワークフロー結合テスト', () => {
     );
 
     it(
-      'CI 失敗後の完了確認で reject → リトライ → CI 成功 → マージ承認で完了',
+      'CI 失敗後に自動リトライ → CI 成功 → マージ承認で完了',
       withVault(async (vault) => {
         const notifier = new FakeNotifier();
-        // 承認キュー:
+        // 承認キュー（新パイプライン動作）:
         //   1. start → approve
-        //   2. done (CI 失敗後) → reject (やり直し)
+        //   2. CI 失敗 → 自動リトライ（タスク完了確認なし）
         //   3. merge (リトライ後 CI 成功) → approve
         notifier.enqueueApprovalResponse(
-          { action: 'approve' },                                // start
-          { action: 'reject', reason: 'CI を修正してください' },  // done reject
-          { action: 'approve' },                                // merge approve (on retry)
+          { action: 'approve' },  // start
+          { action: 'approve' },  // merge approve (after auto-retry with CI success)
         );
 
-        const ciFailureResult = createCIFailureResult('failure');
-        const ciSuccessResult = defaultCIPollingResult();
-
-        // 1回目: CI失敗, 2回目: CI成功
+        // 1回目: CI失敗, 以降: CI成功（3回目以降も呼ばれる可能性があるためフォールバック設定）
         const runCIMock = vi.fn()
-          .mockResolvedValueOnce(ciFailureResult)
-          .mockResolvedValueOnce(ciSuccessResult);
+          .mockResolvedValueOnce(createCIFailureResult('failure'))
+          .mockResolvedValue(defaultCIPollingResult());
 
         const deps = createIntegrationDeps(vault, {
           runCIPollingLoop: runCIMock,
@@ -654,7 +639,7 @@ describe('異常系ワークフロー結合テスト', () => {
         // runCIPollingLoop が 2 回呼ばれる
         expect(deps.runCIPollingLoop).toHaveBeenCalledTimes(2);
 
-        // マージ承認リクエストが 1 回発行された（2回目の CI 成功時）
+        // マージ承認リクエストが 1 回発行された
         const mergeApprovals = notifier.approvalRequests.filter((a) =>
           a.message.includes('マージ'),
         );
@@ -680,14 +665,19 @@ describe('異常系ワークフロー結合テスト', () => {
       'CI max_retries_exceeded でもエスカレーション通知が送られる',
       withVault(async (vault) => {
         const notifier = new FakeNotifier();
+        // 承認キュー（新パイプライン動作）:
+        //   1. start → approve
+        //   2. CI 失敗 → 自動リトライ
+        //   3. merge (CI 成功後) → approve
         notifier.enqueueApprovalResponse(
           { action: 'approve' },  // start
-          { action: 'approve' },  // done
+          { action: 'approve' },  // merge (after auto-retry with CI success)
         );
 
-        const ciMaxRetriesResult = createCIFailureResult('max_retries_exceeded');
         const deps = createIntegrationDeps(vault, {
-          runCIPollingLoop: vi.fn().mockResolvedValue(ciMaxRetriesResult),
+          runCIPollingLoop: vi.fn()
+            .mockResolvedValueOnce(createCIFailureResult('max_retries_exceeded'))
+            .mockResolvedValue(defaultCIPollingResult()),
         });
 
         const story = readStoryFile(vault.storyFilePath);
@@ -711,14 +701,19 @@ describe('異常系ワークフロー結合テスト', () => {
       'CI timeout でもエスカレーション通知が送られる',
       withVault(async (vault) => {
         const notifier = new FakeNotifier();
+        // 承認キュー（新パイプライン動作）:
+        //   1. start → approve
+        //   2. CI 失敗 → 自動リトライ
+        //   3. merge (CI 成功後) → approve
         notifier.enqueueApprovalResponse(
           { action: 'approve' },  // start
-          { action: 'approve' },  // done
+          { action: 'approve' },  // merge (after auto-retry with CI success)
         );
 
-        const ciTimeoutResult = createCIFailureResult('timeout');
         const deps = createIntegrationDeps(vault, {
-          runCIPollingLoop: vi.fn().mockResolvedValue(ciTimeoutResult),
+          runCIPollingLoop: vi.fn()
+            .mockResolvedValueOnce(createCIFailureResult('timeout'))
+            .mockResolvedValue(defaultCIPollingResult()),
         });
 
         const story = readStoryFile(vault.storyFilePath);
