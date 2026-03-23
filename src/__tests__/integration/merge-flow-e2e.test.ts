@@ -299,48 +299,40 @@ describe('マージフロー E2E テスト', () => {
     // -----------------------------------------------------------------------
     describe('条件未充足時', () => {
       it(
-        'CI未完了時にマージブロックメッセージが表示される',
+        'CI未通過時に通知が送信される',
         withVault(async (vault) => {
           const notifier = new FakeNotifier();
-          // start approve → blocked merge (差し戻し) → task done approve
+          // start approve → CIポーリング失敗→retry → 再実行後のマージ承認
           notifier.enqueueApprovalResponse(
-            { action: 'approve' },                          // タスク開始承認
-            { action: 'reject', reason: '修正してください' }, // マージブロック時の差し戻し
-            { action: 'approve' },                          // 再実行後のマージ承認
-            { action: 'approve' },                          // タスク完了承認（マージ失敗 fall-through の場合）
+            { action: 'approve' }, // タスク開始承認
+            { action: 'approve' }, // 再実行後のマージ承認
           );
 
-          // CI が未完了の PR ステータスを返す execGh
+          // CIポーリングが1回目は失敗、2回目以降は成功
           const deps = createIntegrationDeps(vault, {
-            execGh: vi.fn().mockImplementation((args: string[]) => {
-              if (args.includes('view') && args.includes('--json')) {
-                return JSON.stringify({
-                  state: 'OPEN',
-                  mergeable: 'MERGEABLE',
-                  reviewDecision: 'APPROVED',
-                  statusCheckRollup: [
-                    { name: 'CI Build', status: 'IN_PROGRESS', conclusion: '' },
-                  ],
-                });
-              }
-              if (args.includes('merge')) {
-                return '';
-              }
-              return PR_URL;
-            }),
+            runCIPollingLoop: vi.fn()
+              .mockResolvedValueOnce({
+                finalStatus: 'failure' as const,
+                attempts: 1,
+                attemptResults: [
+                  { attempt: 1, ciResult: { status: 'failure', summary: 'CI failed' }, timestamp: new Date() },
+                ],
+                lastCIResult: { status: 'failure', summary: 'CI failed' },
+              })
+              .mockResolvedValue(defaultCIPollingResult()),
           });
 
           const story = readStoryFile(vault.storyFilePath);
           await runStory(story, notifier, deps);
 
-          // マージブロックメッセージが送信されたこと
-          const blockedNotification = notifier.notifications.find((n) =>
-            n.message.includes('マージ不可'),
+          // CI未通過通知が送信されたこと
+          const ciNotification = notifier.notifications.find((n) =>
+            n.message.includes('CI未通過'),
           );
-          expect(blockedNotification).toBeDefined();
+          expect(ciNotification).toBeDefined();
 
-          // 未充足条件がメッセージに含まれること
-          expect(blockedNotification!.message).toContain(TASK_SLUG);
+          // タスクスラッグがメッセージに含まれること
+          expect(ciNotification!.message).toContain(TASK_SLUG);
         }, {
           project: PROJECT,
           story: { slug: STORY_SLUG, status: 'Doing' },
@@ -351,26 +343,34 @@ describe('マージフロー E2E テスト', () => {
       );
 
       it(
-        'コンフリクト発生時にマージブロックメッセージが表示される',
+        'コンフリクト発生時にマージ失敗メッセージが表示される',
         withVault(async (vault) => {
           const notifier = new FakeNotifier();
+          // start → 1st merge approve (fails: CONFLICTING) → 2nd merge approve (succeeds)
           notifier.enqueueApprovalResponse(
-            { action: 'approve' },                          // タスク開始承認
-            { action: 'reject', reason: 'コンフリクト解消' }, // マージブロック → 差し戻し
-            { action: 'approve' },                          // 再実行後マージ承認
-            { action: 'approve' },                          // タスク完了承認
+            { action: 'approve' }, // タスク開始承認
+            { action: 'approve' }, // マージ承認（1回目・コンフリクトで失敗）
+            { action: 'approve' }, // マージ承認（2回目・成功）
           );
 
+          let viewCallCount = 0;
           const deps = createIntegrationDeps(vault, {
             execGh: vi.fn().mockImplementation((args: string[]) => {
               if (args.includes('view') && args.includes('--json')) {
+                viewCallCount++;
+                if (viewCallCount <= 1) {
+                  return JSON.stringify({
+                    state: 'OPEN',
+                    mergeable: 'CONFLICTING',
+                    reviewDecision: 'APPROVED',
+                    statusCheckRollup: [{ name: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+                  });
+                }
                 return JSON.stringify({
                   state: 'OPEN',
-                  mergeable: 'CONFLICTING',
+                  mergeable: 'MERGEABLE',
                   reviewDecision: 'APPROVED',
-                  statusCheckRollup: [
-                    { name: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' },
-                  ],
+                  statusCheckRollup: [{ name: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }],
                 });
               }
               if (args.includes('merge')) {
@@ -383,12 +383,12 @@ describe('マージフロー E2E テスト', () => {
           const story = readStoryFile(vault.storyFilePath);
           await runStory(story, notifier, deps);
 
-          // マージブロックメッセージが送信されたこと
-          const blockedNotification = notifier.notifications.find((n) =>
-            n.message.includes('マージ不可'),
+          // マージ失敗通知が送信されたこと
+          const failureNotification = notifier.notifications.find((n) =>
+            n.message.includes('マージ失敗'),
           );
-          expect(blockedNotification).toBeDefined();
-          expect(blockedNotification!.message).toContain('コンフリクト');
+          expect(failureNotification).toBeDefined();
+          expect(failureNotification!.message).toContain('merge_conflict');
         }, {
           project: PROJECT,
           story: { slug: STORY_SLUG, status: 'Doing' },
@@ -406,12 +406,14 @@ describe('マージフロー E2E テスト', () => {
       '権限不足（403）でマージ失敗時にエラーメッセージが表示される',
       withVault(async (vault) => {
         const notifier = new FakeNotifier();
+        // start → 1st merge approve (fails: permission denied) → 2nd merge approve (succeeds)
         notifier.enqueueApprovalResponse(
           { action: 'approve' }, // タスク開始承認
-          { action: 'approve' }, // マージ実行承認
-          { action: 'approve' }, // タスク完了承認（マージ失敗後の fall-through）
+          { action: 'approve' }, // マージ実行承認（1回目・失敗）
+          { action: 'approve' }, // マージ実行承認（2回目・成功）
         );
 
+        let mergeAttempt = 0;
         const deps = createIntegrationDeps(vault, {
           execGh: vi.fn().mockImplementation((args: string[]) => {
             if (args.includes('view') && args.includes('--json')) {
@@ -425,7 +427,11 @@ describe('マージフロー E2E テスト', () => {
               });
             }
             if (args.includes('merge')) {
-              throw new Error('permission denied: You do not have permission to merge this PR');
+              mergeAttempt++;
+              if (mergeAttempt === 1) {
+                throw new Error('permission denied: You do not have permission to merge this PR');
+              }
+              return '';
             }
             return PR_URL;
           }),
@@ -461,10 +467,11 @@ describe('マージフロー E2E テスト', () => {
       'ネットワークエラーでマージ失敗時にエラーメッセージが表示される',
       withVault(async (vault) => {
         const notifier = new FakeNotifier();
+        // start → 1st merge approve (fails: network error) → 2nd merge approve (succeeds)
         notifier.enqueueApprovalResponse(
           { action: 'approve' }, // タスク開始承認
-          { action: 'approve' }, // マージ実行承認
-          { action: 'approve' }, // タスク完了承認（マージ失敗後の fall-through）
+          { action: 'approve' }, // マージ実行承認（1回目・失敗）
+          { action: 'approve' }, // マージ実行承認（2回目・成功）
         );
 
         let mergeCallCount = 0;
@@ -482,7 +489,10 @@ describe('マージフロー E2E テスト', () => {
             }
             if (args.includes('merge')) {
               mergeCallCount++;
-              throw new Error('network error: connection timeout');
+              if (mergeCallCount === 1) {
+                throw new Error('network error: connection timeout');
+              }
+              return '';
             }
             return PR_URL;
           }),
@@ -514,32 +524,34 @@ describe('マージフロー E2E テスト', () => {
       withVault(async (vault) => {
         let viewCallCount = 0;
         const notifier = new FakeNotifier();
+        // start → 1st merge approve (executeMerge内バリデーション失敗) → 2nd merge approve (成功)
         notifier.enqueueApprovalResponse(
           { action: 'approve' }, // タスク開始承認
-          { action: 'approve' }, // マージ実行承認
-          { action: 'approve' }, // タスク完了承認
+          { action: 'approve' }, // マージ実行承認（1回目・バリデーション失敗）
+          { action: 'approve' }, // マージ実行承認（2回目・成功）
         );
 
-        // 1回目の pr view (事前検証) は OK、2回目 (executeMerge 内バリデーション) は承認不足
+        // 1回目の pr view (executeMerge内バリデーション) は承認不足、2回目以降はOK
         const deps = createIntegrationDeps(vault, {
           execGh: vi.fn().mockImplementation((args: string[]) => {
             if (args.includes('view') && args.includes('--json')) {
               viewCallCount++;
               if (viewCallCount <= 1) {
+                // 1回目: 承認が不足している状態
                 return JSON.stringify({
                   state: 'OPEN',
                   mergeable: 'MERGEABLE',
-                  reviewDecision: 'APPROVED',
+                  reviewDecision: 'REVIEW_REQUIRED',
                   statusCheckRollup: [
                     { name: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' },
                   ],
                 });
               }
-              // 2回目以降: 承認が取り消された
+              // 2回目以降: 承認済み
               return JSON.stringify({
                 state: 'OPEN',
                 mergeable: 'MERGEABLE',
-                reviewDecision: 'REVIEW_REQUIRED',
+                reviewDecision: 'APPROVED',
                 statusCheckRollup: [
                   { name: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' },
                 ],
@@ -861,43 +873,39 @@ describe('マージフロー E2E テスト', () => {
   // =========================================================================
   describe('マージスキップフロー', () => {
     it(
-      'CI 失敗時はマージ承認リクエストが発行されず、エスカレーション通知が送信される',
+      'CI 失敗時は CI未通過通知が送信され、実装が再試行される',
       withVault(async (vault) => {
         const notifier = new FakeNotifier();
+        // start → CI失敗→retry → 再試行後のマージ承認
         notifier.enqueueApprovalResponse(
           { action: 'approve' }, // タスク開始承認
-          { action: 'approve' }, // タスク完了承認
+          { action: 'approve' }, // 再試行後のマージ承認
         );
 
         const deps = createIntegrationDeps(vault, {
-          runCIPollingLoop: vi.fn().mockResolvedValue({
-            finalStatus: 'failure',
-            attempts: 3,
-            attemptResults: [
-              {
-                attempt: 1,
-                ciResult: { status: 'failure', summary: 'Tests failed' },
-                timestamp: new Date(),
-              },
-            ],
-            lastCIResult: { status: 'failure', summary: 'Tests failed' },
-          } satisfies import('../../ci/types').CIPollingResult),
+          runCIPollingLoop: vi.fn()
+            .mockResolvedValueOnce({
+              finalStatus: 'failure' as const,
+              attempts: 3,
+              attemptResults: [
+                { attempt: 1, ciResult: { status: 'failure', summary: 'Tests failed' }, timestamp: new Date() },
+              ],
+              lastCIResult: { status: 'failure', summary: 'Tests failed' },
+            })
+            .mockResolvedValue(defaultCIPollingResult()),
         });
 
         const story = readStoryFile(vault.storyFilePath);
         await runStory(story, notifier, deps);
 
-        // マージ承認リクエストが発行されていないこと
-        const mergeApprovals = notifier.approvalRequests.filter((a) =>
-          a.message.includes('マージ'),
+        // CI未通過通知が送信されたこと
+        const ciNotification = notifier.notifications.find((n) =>
+          n.message.includes('CI未通過'),
         );
-        expect(mergeApprovals).toHaveLength(0);
+        expect(ciNotification).toBeDefined();
 
-        // CI エスカレーション通知が送信されたこと
-        const escalationNotification = notifier.notifications.find((n) =>
-          n.message.includes('CI失敗 エスカレーション'),
-        );
-        expect(escalationNotification).toBeDefined();
+        // 実装が再試行されたこと（runAgent が2回呼ばれた）
+        expect(deps.runAgent).toHaveBeenCalledTimes(2);
       }, {
         project: PROJECT,
         story: { slug: STORY_SLUG, status: 'Doing' },
@@ -908,57 +916,53 @@ describe('マージフロー E2E テスト', () => {
     );
 
     it(
-      'セルフレビュー NG 時はマージが実行されないこと',
+      'セルフレビュー NG 時はエスカレーション通知が送信され、実装が再試行される',
       withVault(async (vault) => {
         const notifier = new FakeNotifier();
+        // start → レビューNG（エスカレーション）→retry → 再試行後のマージ承認
         notifier.enqueueApprovalResponse(
           { action: 'approve' }, // タスク開始承認
-          { action: 'approve' }, // タスク完了承認
+          { action: 'approve' }, // 再試行後のマージ承認
         );
 
-        const deps = createIntegrationDeps(vault, {
-          runReviewLoop: vi.fn().mockResolvedValue({
-            finalVerdict: 'NG',
-            escalationRequired: true,
-            iterations: [
-              {
-                iteration: 1,
-                reviewResult: {
-                  verdict: 'NG',
-                  summary: 'Critical issues found',
-                  findings: [{ severity: 'error', message: 'Missing null check', file: 'src/main.ts', line: 42 }],
-                },
-                timestamp: new Date(),
+        const ngResult = {
+          finalVerdict: 'NG' as const,
+          escalationRequired: true,
+          iterations: [
+            {
+              iteration: 1,
+              reviewResult: {
+                verdict: 'NG' as const,
+                summary: 'Critical issues found',
+                findings: [{ severity: 'error' as const, message: 'Missing null check', file: 'src/main.ts', line: 42 }],
               },
-            ],
-            lastReviewResult: {
-              verdict: 'NG',
-              summary: 'Critical issues found',
-              findings: [{ severity: 'error', message: 'Missing null check', file: 'src/main.ts', line: 42 }],
+              timestamp: new Date(),
             },
-          }),
+          ],
+          lastReviewResult: {
+            verdict: 'NG' as const,
+            summary: 'Critical issues found',
+            findings: [{ severity: 'error' as const, message: 'Missing null check', file: 'src/main.ts', line: 42 }],
+          },
+        };
+
+        const deps = createIntegrationDeps(vault, {
+          runReviewLoop: vi.fn()
+            .mockResolvedValueOnce(ngResult)
+            .mockResolvedValue(defaultReviewLoopResult()),
         });
 
         const story = readStoryFile(vault.storyFilePath);
         await runStory(story, notifier, deps);
-
-        // マージ承認リクエストが発行されていないこと
-        const mergeApprovals = notifier.approvalRequests.filter((a) =>
-          a.message.includes('マージ'),
-        );
-        expect(mergeApprovals).toHaveLength(0);
-
-        // PR が作成されていないこと
-        expect(deps.execCommand).not.toHaveBeenCalledWith(
-          expect.stringContaining('gh pr create'),
-          expect.any(String),
-        );
 
         // エスカレーション通知が送信されたこと
         const escalationNotification = notifier.notifications.find((n) =>
           n.message.includes('エスカレーション'),
         );
         expect(escalationNotification).toBeDefined();
+
+        // 実装が再試行されたこと（runAgent が2回呼ばれた）
+        expect(deps.runAgent).toHaveBeenCalledTimes(2);
       }, {
         project: PROJECT,
         story: { slug: STORY_SLUG, status: 'Doing' },
