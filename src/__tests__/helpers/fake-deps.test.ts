@@ -15,6 +15,7 @@ describe('createFakeDeps', () => {
     expect(deps.syncMainBranch).toBeDefined();
     expect(deps.getStoryTasks).toBeDefined();
     expect(deps.updateFileStatus).toBeDefined();
+    expect(deps.recordTaskCompletion).toBeDefined();
   });
 
   it('runAgent はデフォルトで成功を返す', async () => {

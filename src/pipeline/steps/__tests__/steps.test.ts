@@ -359,15 +359,6 @@ describe('handlePRLifecycle', () => {
 // -------- handleDone --------
 
 describe('handleDone', () => {
-  it('updateFileStatus(Done) を呼ぶ', async () => {
-    const { ctx } = makeCtx();
-    await handleDone(ctx);
-    expect(ctx.deps.updateFileStatus).toHaveBeenCalledWith(
-      '/vault/tasks/story/task.md',
-      'Done',
-    );
-  });
-
   it('完了通知を送る', async () => {
     const { ctx, notifier } = makeCtx();
     await handleDone(ctx);
@@ -378,6 +369,61 @@ describe('handleDone', () => {
     const { ctx } = makeCtx();
     const signal = await handleDone(ctx);
     expect(signal.kind).toBe('continue');
+  });
+
+  it('リモートありの場合は recordTaskCompletion を prUrl 付きで呼ぶ', async () => {
+    const { ctx } = makeCtx({
+      ctxStore: { prUrl: 'https://github.com/test/repo/pull/1' },
+    });
+    await handleDone(ctx);
+    expect(ctx.deps.recordTaskCompletion).toHaveBeenCalledWith(
+      '/vault/tasks/story/task.md',
+      {
+        prUrl: 'https://github.com/test/repo/pull/1',
+      },
+    );
+  });
+
+  it('リモートありの場合は mode フィールドを設定しない', async () => {
+    const { ctx } = makeCtx({
+      ctxStore: { prUrl: 'https://github.com/test/repo/pull/1' },
+    });
+    await handleDone(ctx);
+    const callArgs = vi.mocked(ctx.deps.recordTaskCompletion).mock.calls[0][1];
+    expect(callArgs.mode).toBeUndefined();
+  });
+
+  it('ローカルオンリー時は recordTaskCompletion を mode: local-only で呼ぶ', async () => {
+    const { ctx } = makeCtx({
+      ctxStore: { localOnly: true, commitSha: 'abc123' },
+    });
+    await handleDone(ctx);
+    expect(ctx.deps.recordTaskCompletion).toHaveBeenCalledWith(
+      '/vault/tasks/story/task.md',
+      {
+        mode: 'local-only',
+        prUrl: null,
+        localCommitSha: 'abc123',
+      },
+    );
+  });
+
+  it('ローカルオンリー時は prUrl が null で記録される', async () => {
+    const { ctx } = makeCtx({
+      ctxStore: { localOnly: true, commitSha: 'abc123' },
+    });
+    await handleDone(ctx);
+    const callArgs = vi.mocked(ctx.deps.recordTaskCompletion).mock.calls[0][1];
+    expect(callArgs.prUrl).toBeNull();
+  });
+
+  it('ローカルオンリー時は localCommitSha にコミットSHAが記録される', async () => {
+    const { ctx } = makeCtx({
+      ctxStore: { localOnly: true, commitSha: 'def456' },
+    });
+    await handleDone(ctx);
+    const callArgs = vi.mocked(ctx.deps.recordTaskCompletion).mock.calls[0][1];
+    expect(callArgs.localCommitSha).toBe('def456');
   });
 
   it('ローカルオンリー時はローカルオンリー完了として通知する', async () => {

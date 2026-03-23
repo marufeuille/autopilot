@@ -7,7 +7,7 @@ import { FakeNotifier } from '../helpers/fake-notifier';
 import { createFakeDeps, defaultReviewLoopResult, defaultCIPollingResult } from '../helpers/fake-deps';
 import { runStory } from '../../runner';
 import { readStoryFile, TaskFile, TaskStatus } from '../../vault/reader';
-import { updateFileStatus, TaskDraft } from '../../vault/writer';
+import { updateFileStatus, recordTaskCompletion, TaskDraft, TaskCompletionRecord } from '../../vault/writer';
 import { RunnerDeps } from '../../runner-deps';
 import { ReviewLoopResult } from '../../review/loop';
 import { CIPollingResult } from '../../ci/types';
@@ -76,6 +76,9 @@ function createIntegrationDeps(
     updateFileStatus: vi.fn().mockImplementation(
       (filePath: string, status: TaskStatus) => updateFileStatus(filePath, status),
     ),
+    recordTaskCompletion: vi.fn().mockImplementation(
+      (filePath: string, record: TaskCompletionRecord) => recordTaskCompletion(filePath, record),
+    ),
     createTaskFile: vi.fn(),
     execCommand: vi.fn().mockImplementation((cmd: string) => {
       if (cmd.includes('gh pr create') || cmd.includes('gh pr view')) {
@@ -116,6 +119,7 @@ function withVault(
 function createTrackingUpdateFileStatus(): {
   transitions: Array<{ slug: string; status: string }>;
   fn: (filePath: string, status: TaskStatus) => void;
+  completionFn: (filePath: string, record: TaskCompletionRecord) => void;
 } {
   const transitions: Array<{ slug: string; status: string }> = [];
   const fn = (filePath: string, status: TaskStatus) => {
@@ -123,7 +127,12 @@ function createTrackingUpdateFileStatus(): {
     const slug = path.basename(filePath, '.md');
     transitions.push({ slug, status });
   };
-  return { transitions, fn };
+  const completionFn = (filePath: string, record: TaskCompletionRecord) => {
+    recordTaskCompletion(filePath, record);
+    const slug = path.basename(filePath, '.md');
+    transitions.push({ slug, status: 'Done' });
+  };
+  return { transitions, fn, completionFn };
 }
 
 // ---------------------------------------------------------------------------
@@ -270,9 +279,10 @@ describe('異常系ワークフロー結合テスト', () => {
           { action: 'approve' },                              // merge approve
         );
 
-        const { transitions, fn: trackingFn } = createTrackingUpdateFileStatus();
+        const { transitions, fn: trackingFn, completionFn } = createTrackingUpdateFileStatus();
         const deps = createIntegrationDeps(vault, {
           updateFileStatus: vi.fn().mockImplementation(trackingFn),
+          recordTaskCompletion: vi.fn().mockImplementation(completionFn),
         });
 
         const story = readStoryFile(vault.storyFilePath);

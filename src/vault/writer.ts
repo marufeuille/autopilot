@@ -10,6 +10,50 @@ export function updateFileStatus(filePath: string, status: string): void {
   fs.writeFileSync(filePath, matter.stringify(parsed.content, parsed.data));
 }
 
+/**
+ * タスク完了時の Vault レコード記録オプション。
+ *
+ * mode フィールドは optional（後方互換性のため）。
+ */
+export interface TaskCompletionRecord {
+  /** 完了モード。'local-only' はリモートなし環境、'normal' は通常フロー */
+  mode?: 'local-only' | 'normal';
+  /** PR の URL。ローカルオンリー時は null */
+  prUrl: string | null;
+  /** ローカルコミットの SHA（ローカルオンリー時） */
+  localCommitSha?: string | null;
+}
+
+/**
+ * タスク完了をVaultに記録する。
+ *
+ * frontmatter に mode, pr, commit_sha, finished_at を書き込む。
+ * 既存フィールドとの後方互換性を保つため、mode は optional。
+ */
+export function recordTaskCompletion(filePath: string, record: TaskCompletionRecord): void {
+  const raw = fs.readFileSync(filePath, 'utf-8');
+  const parsed = matter(raw);
+
+  // gray-matter はパース結果をキャッシュするため、data を直接変更すると
+  // 同一内容のファイルに対する後続のパースに影響する。
+  // shallow copy して安全に変更する。
+  const data = { ...parsed.data };
+
+  data.status = 'Done';
+  data.finished_at = new Date().toISOString().slice(0, 10);
+  data.pr = record.prUrl ?? null;
+
+  if (record.mode) {
+    data.mode = record.mode;
+  }
+
+  if (record.localCommitSha) {
+    data.commit_sha = record.localCommitSha;
+  }
+
+  fs.writeFileSync(filePath, matter.stringify(parsed.content, data));
+}
+
 export interface TaskDraft {
   slug: string;
   title: string;
