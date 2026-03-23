@@ -1,4 +1,4 @@
-import { execSync } from "child_process";
+import { execSync, execFileSync } from "child_process";
 
 export class GitSyncError extends Error {
   constructor(message: string) {
@@ -74,4 +74,61 @@ export async function syncMainBranch(repoPath: string): Promise<void> {
   }
 
   console.log(`[git-sync] mainブランチの同期が完了しました`);
+}
+
+/**
+ * git worktree を作成する。
+ * createBranch が true（デフォルト）の場合は `git worktree add <worktreePath> -b <branch>` を実行し、
+ * false の場合は `git worktree add <worktreePath> <branch>` で既存ブランチをチェックアウトする。
+ * 失敗時は GitSyncError をスローする。
+ */
+export function createWorktree(
+  repoPath: string,
+  worktreePath: string,
+  branch: string,
+  options: { createBranch?: boolean } = {},
+): void {
+  const { createBranch = true } = options;
+  console.log(`[git-worktree] worktreeを作成します: ${worktreePath} (branch: ${branch}, createBranch: ${createBranch})`);
+
+  try {
+    const args = createBranch
+      ? ["worktree", "add", worktreePath, "-b", branch]
+      : ["worktree", "add", worktreePath, branch];
+    execFileSync("git", args, {
+      cwd: repoPath,
+      stdio: "pipe",
+    });
+  } catch (error: unknown) {
+    const stderr = error instanceof Error && "stderr" in error
+      ? String((error as { stderr: unknown }).stderr)
+      : String(error);
+    throw new GitSyncError(`Failed to create worktree at ${worktreePath}: ${stderr}`);
+  }
+
+  console.log(`[git-worktree] worktreeの作成が完了しました: ${worktreePath}`);
+}
+
+/**
+ * git worktree を削除する。
+ * `git worktree remove <worktreePath> --force` を実行し、
+ * 作業ディレクトリをクリーンアップする。
+ * 失敗時は GitSyncError をスローする。
+ */
+export function removeWorktree(repoPath: string, worktreePath: string): void {
+  console.log(`[git-worktree] worktreeを削除します: ${worktreePath}`);
+
+  try {
+    execFileSync("git", ["worktree", "remove", worktreePath, "--force"], {
+      cwd: repoPath,
+      stdio: "pipe",
+    });
+  } catch (error: unknown) {
+    const stderr = error instanceof Error && "stderr" in error
+      ? String((error as { stderr: unknown }).stderr)
+      : String(error);
+    throw new GitSyncError(`Failed to remove worktree at ${worktreePath}: ${stderr}`);
+  }
+
+  console.log(`[git-worktree] worktreeの削除が完了しました: ${worktreePath}`);
 }

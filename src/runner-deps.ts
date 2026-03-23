@@ -3,7 +3,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import { StoryFile, TaskFile, TaskStatus, getStoryTasks } from './vault/reader';
 import { updateFileStatus, createTaskFile, TaskDraft, recordTaskCompletion, TaskCompletionRecord } from './vault/writer';
 import { decomposeTasks } from './decomposer';
-import { syncMainBranch } from './git';
+import { syncMainBranch, createWorktree, removeWorktree } from './git';
 import { runReviewLoop, ReviewLoopResult } from './review';
 import { runCIPollingLoop, CIPollingResult } from './ci';
 
@@ -44,6 +44,12 @@ export interface RunnerDeps {
 
   /** タスク完了を Vault に記録する */
   recordTaskCompletion: (filePath: string, record: TaskCompletionRecord) => void;
+
+  /** git worktree を作成する */
+  createWorktree: (repoPath: string, worktreePath: string, branch: string, options?: { createBranch?: boolean }) => void;
+
+  /** git worktree を削除する */
+  removeWorktree: (repoPath: string, worktreePath: string) => void;
 }
 
 /**
@@ -107,5 +113,7 @@ export function createDefaultRunnerDeps(): RunnerDeps {
     getStoryTasks,
     updateFileStatus,
     recordTaskCompletion,
+    createWorktree,
+    removeWorktree,
   };
 }
