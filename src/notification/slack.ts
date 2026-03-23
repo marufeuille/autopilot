@@ -208,6 +208,7 @@ export class SlackNotificationBackend implements NotificationBackend {
     const blocks = buildApprovalBlocks(id, message, buttons);
     const res = await this.app.client.chat.postMessage({
       channel: config.slack.channelId,
+      text: message,
       blocks,
       ...(threadTs ? { thread_ts: threadTs } : {}),
     });
