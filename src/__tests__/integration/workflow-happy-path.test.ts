@@ -18,6 +18,15 @@ vi.mock('../../git', async (importOriginal) => {
   return { ...actual, detectNoRemote: vi.fn().mockReturnValue(false) };
 });
 
+// runMergePollingLoop をモック化（手動マージポーリングをスキップ）
+vi.mock('../../merge', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../merge')>();
+  return {
+    ...actual,
+    runMergePollingLoop: vi.fn().mockResolvedValue({ finalStatus: 'merged', elapsedMs: 1000 }),
+  };
+});
+
 // ---------------------------------------------------------------------------
 // Helper: fake vault のタスクディレクトリから TaskFile[] を読み取る
 // ---------------------------------------------------------------------------
@@ -367,18 +376,18 @@ describe('正常系ワークフロー結合テスト', () => {
   // -------------------------------------------------------------------------
   // テスト 3: 承認フローの検証
   //
-  // 正常系（レビューOK + CI通過 + マージ承認）では、runTask のフローは:
+  // 正常系（レビューOK + CI通過 + 手動マージ）では、runTask のフローは:
   //   1. タスク開始承認 (requestApproval)
-  //   2. agent実行 → レビュー → PR作成 → CI → マージ承認 (requestApproval)
-  //   3. merge approve → break → Done
-  // タスク完了承認は、マージがスキップされた場合のみ発行される。
+  //   2. agent実行 → レビュー → PR作成 → CI → マージ準備完了通知
+  //   3. MERGEDポーリング → Done
+  // マージ承認は不要（ユーザーがGitHubで手動マージ）。
   // -------------------------------------------------------------------------
   describe('承認フローの検証', () => {
     const PROJECT = 'approval-project';
     const STORY_SLUG = 'approval-story';
 
     it(
-      'タスク開始前・マージ前に承認リクエストが発行される',
+      'タスク開始前に承認リクエストが発行される（マージ承認は不要）',
       withVault(async (vault) => {
         const notifier = new FakeNotifier();
         const deps = createIntegrationDeps(vault);
@@ -389,16 +398,12 @@ describe('正常系ワークフロー結合テスト', () => {
         // 承認リクエストを検証
         const approvals = notifier.approvalRequests;
 
-        // 正常系: start(1) + merge(2) = 2 回
-        // (merge approve 後に break するためタスク完了承認はスキップ)
-        expect(approvals.length).toBe(2);
+        // 正常系: start(1) のみ（マージ承認不要）
+        expect(approvals.length).toBe(1);
 
         // 1. タスク開始承認
         expect(approvals[0].message).toContain('タスク開始確認');
         expect(approvals[0].message).toContain(`${STORY_SLUG}-01-task`);
-
-        // 2. マージ承認（CI通過後）
-        expect(approvals[1].message).toContain('マージ');
       }, {
         project: PROJECT,
         story: { slug: STORY_SLUG, status: 'Doing' },
@@ -412,10 +417,9 @@ describe('正常系ワークフロー結合テスト', () => {
       '全ての承認が approve で返されるとフローが正常に完了する',
       withVault(async (vault) => {
         const notifier = new FakeNotifier();
-        // 明示的に全て approve を設定
+        // 明示的に approve を設定
         notifier.enqueueApprovalResponse(
           { action: 'approve' }, // start
-          { action: 'approve' }, // merge
         );
 
         const deps = createIntegrationDeps(vault);
@@ -467,17 +471,14 @@ describe('正常系ワークフロー結合テスト', () => {
 
         const approvals = notifier.approvalRequests;
 
-        // 分解承認(1) + タスク開始(2) + マージ(3) = 3
-        expect(approvals.length).toBe(3);
+        // 分解承認(1) + タスク開始(2) = 2（マージ承認不要）
+        expect(approvals.length).toBe(2);
 
         // 最初の承認はタスク分解の承認
         expect(approvals[0].message).toContain('タスク分解案');
 
         // 2番目はタスク開始承認
         expect(approvals[1].message).toContain('タスク開始確認');
-
-        // 3番目はマージ承認
-        expect(approvals[2].message).toContain('マージ');
       }, {
         project: PROJECT,
         story: { slug: 'decompose-story', status: 'Doing' },

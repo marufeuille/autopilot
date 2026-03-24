@@ -16,7 +16,7 @@ import { TaskContext } from './types';
  * - Step 1 start-approval: skip (タスクをスキップ)
  * - Step 2 sync-main: abort (GitSyncError → 呼び出し側が Failed にセット)
  * - Step 3 implementation: retry from: 'implementation' (レビューNG)
- * - Step 4 pr-lifecycle: retry from: 'implementation' (CI失敗/マージ承認拒否), retry from: 'pr-lifecycle' (マージ失敗)
+ * - Step 4 pr-lifecycle: retry from: 'implementation' (CI失敗/PRクローズ/タイムアウト)
  * - Step 5 doc-update: (continue)
  * - Step 6 done: (常に continue)
  */

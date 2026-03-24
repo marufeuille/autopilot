@@ -11,6 +11,15 @@ vi.mock('../../git', async (importOriginal) => {
   return { ...actual, detectNoRemote: vi.fn().mockReturnValue(false) };
 });
 
+// runMergePollingLoop をモック化（手動マージポーリングをスキップ）
+vi.mock('../../merge', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../merge')>();
+  return {
+    ...actual,
+    runMergePollingLoop: vi.fn().mockResolvedValue({ finalStatus: 'merged', elapsedMs: 1000 }),
+  };
+});
+
 import { detectNoRemote } from '../../git';
 
 /**
