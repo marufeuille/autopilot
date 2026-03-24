@@ -204,6 +204,72 @@ export function buildCIEscalationMessage(ctx: NotificationContext): string {
 }
 
 /**
+ * 「マージ準備完了」通知の Block Kit ブロックを生成する
+ *
+ * CI 通過後にユーザーへ手動マージを促す通知。
+ * NG ボタン（action_id: 'pr_reject_ng'）を含み、
+ * クリックすると却下理由入力モーダルが開く。
+ *
+ * @param prUrl PR の URL（NG ボタンの value に埋め込む）
+ * @param taskSlug タスクの識別子
+ */
+export function buildMergeReadyBlocks(prUrl: string, taskSlug: string): unknown[] {
+  return [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `✅ *マージ準備完了*: \`${taskSlug}\`\n*PR*: ${prUrl}\nCIが通過しました。GitHubから手動でマージしてください。`,
+      },
+    },
+    {
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: '❌ NG（却下）' },
+          style: 'danger',
+          action_id: 'pr_reject_ng',
+          value: prUrl,
+        },
+      ],
+    },
+  ];
+}
+
+/**
+ * PR 却下理由入力モーダルの view 定義を生成する
+ *
+ * @param prUrl PR の URL（private_metadata に埋め込む）
+ */
+export function buildRejectModal(prUrl: string): Record<string, unknown> {
+  return {
+    type: 'modal',
+    callback_id: 'pr_reject_modal',
+    private_metadata: prUrl,
+    title: { type: 'plain_text', text: '却下理由' },
+    submit: { type: 'plain_text', text: '送信' },
+    close: { type: 'plain_text', text: 'キャンセル' },
+    blocks: [
+      {
+        type: 'input',
+        block_id: 'reason_block',
+        element: {
+          type: 'plain_text_input',
+          action_id: 'reason_input',
+          multiline: true,
+          placeholder: {
+            type: 'plain_text',
+            text: '却下理由を入力してください',
+          },
+        },
+        label: { type: 'plain_text', text: '理由' },
+      },
+    ],
+  };
+}
+
+/**
  * 通知コンテキストからイベント種別に応じたメッセージを生成する
  */
 export function buildNotificationMessage(ctx: NotificationContext): string {

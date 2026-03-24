@@ -18,7 +18,7 @@ export class NtfyNotificationBackend implements NotificationBackend {
   /**
    * ntfy.sh にプッシュ通知を送信する
    */
-  async notify(message: string, _storySlug?: string): Promise<void> {
+  async notify(message: string, _storySlug?: string, _options?: import('./types').NotifyOptions): Promise<void> {
     const url = `${this.serverUrl}/${this.topic}`;
 
     const response = await fetch(url, {

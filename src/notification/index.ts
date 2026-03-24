@@ -6,9 +6,9 @@
  * - "slack": Slack バックエンド
  * - 未設定: デフォルトは "local"
  */
-export { NotificationBackend, ApprovalResult, NotificationEventType, NotificationContext } from './types';
+export { NotificationBackend, ApprovalResult, NotificationEventType, NotificationContext, NotifyOptions } from './types';
 export { LocalNotificationBackend } from './local';
-export { SlackNotificationBackend } from './slack';
+export { SlackNotificationBackend, registerPRRejectHandlers } from './slack';
 export { NtfyNotificationBackend } from './ntfy';
 export { generateApprovalId } from './approval-id';
 export { ThreadSessionManager } from './thread-session';
@@ -21,6 +21,8 @@ export {
   buildReviewEscalationMessage,
   buildCIEscalationMessage,
   buildThreadOriginMessage,
+  buildMergeReadyBlocks,
+  buildRejectModal,
 } from './message-builder';
 export type { MergeConditionItem } from './types';
 
@@ -47,7 +49,7 @@ export async function createNotificationBackend(): Promise<NotificationBackend> 
     case 'slack': {
       // Slack 依存を動的インポート（local 使用時は不要な依存を読み込まない）
       const { createSlackApp } = await import('../slack/bot');
-      const { registerApprovalHandlers, SlackNotificationBackend } = await import('./slack');
+      const { registerApprovalHandlers, registerPRRejectHandlers, SlackNotificationBackend } = await import('./slack');
 
       const { registerSlashCommands, registerSubcommand } = await import('../slack/slash-commands');
       const { handleStatus } = await import('../slack/commands/status');
@@ -67,6 +69,7 @@ export async function createNotificationBackend(): Promise<NotificationBackend> 
       registerSubcommand('story', createStoryHandler(slackApp));
       registerSubcommand('fix', createFixHandler(slackApp));
       registerApprovalHandlers(slackApp);
+      registerPRRejectHandlers(slackApp);
       registerStoryApprovalHandlers(slackApp);
       registerFixApprovalHandlers(slackApp);
       registerSlashCommands(slackApp);

@@ -9,14 +9,21 @@ export type ApprovalResult =
   | { action: 'approve' }
   | { action: 'reject'; reason: string };
 
+/** notify のオプション */
+export interface NotifyOptions {
+  /** Block Kit ブロック配列（Slack バックエンドでのみ有効） */
+  blocks?: unknown[];
+}
+
 /** 通知バックエンドが実装すべきインターフェース */
 export interface NotificationBackend {
   /**
    * 通知を送信する（情報通知、完了通知など）
    * @param message 通知メッセージ
    * @param storySlug ストーリー識別子（指定時はスレッド内に投稿）
+   * @param options 追加オプション（Block Kit ブロック等）
    */
-  notify(message: string, storySlug?: string): Promise<void>;
+  notify(message: string, storySlug?: string, options?: NotifyOptions): Promise<void>;
 
   /**
    * 承認リクエストを送信し、結果を待つ

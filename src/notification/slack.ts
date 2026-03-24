@@ -1,7 +1,9 @@
 import { App } from '@slack/bolt';
 import type { Block, KnownBlock } from '@slack/types';
 import { config } from '../config';
-import type { NotificationBackend, ApprovalResult } from './types';
+import type { NotificationBackend, ApprovalResult, NotifyOptions } from './types';
+import { buildRejectModal } from './message-builder';
+import { signalRejection } from '../merge/rejection-registry';
 import { ThreadSessionManager } from './thread-session';
 
 interface PendingApproval {
@@ -151,6 +153,31 @@ export function registerApprovalHandlers(app: App): void {
 }
 
 /**
+ * PR 却下用の Slack アクションハンドラーを登録する
+ *
+ * 「マージ準備完了」通知の NG ボタンと却下理由入力モーダルのハンドラーを登録する。
+ */
+export function registerPRRejectHandlers(app: App): void {
+  // NG ボタン: モーダルを開く
+  app.action('pr_reject_ng', async ({ body, ack, client }) => {
+    await ack();
+    const prUrl = (body as any).actions[0].value as string;
+    await client.views.open({
+      trigger_id: (body as any).trigger_id,
+      view: buildRejectModal(prUrl) as any,
+    });
+  });
+
+  // モーダル送信: 却下理由を取得して RejectionRegistry にシグナル
+  app.view('pr_reject_modal', async ({ ack, view }) => {
+    await ack();
+    const prUrl = view.private_metadata;
+    const reason = view.state.values['reason_block']['reason_input'].value ?? '';
+    signalRejection(prUrl, reason);
+  });
+}
+
+/**
  * Slack 通知バックエンド
  *
  * NotificationBackend インターフェースを実装し、Slack API 経由で
@@ -179,11 +206,12 @@ export class SlackNotificationBackend implements NotificationBackend {
     this.threadSession.endSession(storySlug);
   }
 
-  async notify(message: string, storySlug?: string): Promise<void> {
+  async notify(message: string, storySlug?: string, options?: NotifyOptions): Promise<void> {
     const threadTs = storySlug ? this.threadSession.getThreadTs(storySlug) : undefined;
     await this.app.client.chat.postMessage({
       channel: config.slack.channelId,
       text: message,
+      ...(options?.blocks ? { blocks: options.blocks } : {}),
       ...(threadTs ? { thread_ts: threadTs } : {}),
     });
   }

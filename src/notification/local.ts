@@ -20,7 +20,7 @@ export class LocalNotificationBackend implements NotificationBackend {
   /**
    * macOS システム通知を送信する
    */
-  async notify(message: string, _storySlug?: string): Promise<void> {
+  async notify(message: string, _storySlug?: string, _options?: import('./types').NotifyOptions): Promise<void> {
     return new Promise<void>((resolve) => {
       execFile(
         'osascript',

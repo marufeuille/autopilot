@@ -27,6 +27,10 @@ vi.mock('../notification', () => ({
   buildReviewEscalationMessage: vi.fn((ctx: any) => `レビューエスカレーション: ${ctx.taskSlug}`),
   buildCIEscalationMessage: vi.fn((ctx: any) => `CIエスカレーション: ${ctx.taskSlug}`),
   buildThreadOriginMessage: vi.fn((slug: string) => `スレッド起点: ${slug}`),
+  buildMergeReadyBlocks: vi.fn((prUrl: string, taskSlug: string) => [
+    { type: 'section', text: { type: 'mrkdwn', text: `✅ *マージ準備完了*: \`${taskSlug}\`\n*PR*: ${prUrl}` } },
+    { type: 'actions', elements: [{ type: 'button', action_id: 'pr_reject_ng', value: prUrl }] },
+  ]),
 }));
 
 vi.mock('../git', () => ({
@@ -624,10 +628,11 @@ describe('runTask', () => {
       expect.any(Object),
     );
 
-    // CI成功 → マージ準備完了通知が送信されること
+    // CI成功 → マージ準備完了通知が送信されること（NG ボタン付き Block Kit ブロック含む）
     expect(notifier.notify).toHaveBeenCalledWith(
       expect.stringContaining('マージ準備完了'),
       'my-story',
+      expect.objectContaining({ blocks: expect.any(Array) }),
     );
   });
 
@@ -663,10 +668,11 @@ describe('runTask', () => {
 
     await runTask(task, story, notifier, repoPath);
 
-    // マージ準備完了通知が送信されること
+    // マージ準備完了通知が送信されること（NG ボタン付き Block Kit ブロック含む）
     expect(notifier.notify).toHaveBeenCalledWith(
       expect.stringContaining('マージ準備完了'),
       'my-story',
+      expect.objectContaining({ blocks: expect.any(Array) }),
     );
     // マージ承認（requestApproval）はタスク開始承認のみ
     const approvalCalls = (notifier.requestApproval as ReturnType<typeof vi.fn>).mock.calls;
