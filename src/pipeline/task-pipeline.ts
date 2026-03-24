@@ -20,11 +20,15 @@ import { TaskContext } from './types';
  * - Step 5 doc-update: (continue)
  * - Step 6 done: (常に continue)
  */
-export const taskPipeline = createPipeline<TaskContext>([
-  step('start-approval', handleStartApproval),
-  step('sync-main', handleSyncMain),
-  step('implementation', handleImplementation),
-  step('pr-lifecycle', handlePRLifecycle),
-  step('doc-update', handleDocUpdate),
-  step('done', handleDone),
-]);
+// パイプライン全体のリトライ上限: コスト保護および無限ループ防止のため明示的に設定
+export const taskPipeline = createPipeline<TaskContext>(
+  [
+    step('start-approval', handleStartApproval),
+    step('sync-main', handleSyncMain),
+    step('implementation', handleImplementation),
+    step('pr-lifecycle', handlePRLifecycle),
+    step('doc-update', handleDocUpdate),
+    step('done', handleDone),
+  ],
+  { maxRetries: 10 },
+);
