@@ -385,28 +385,18 @@ describe('taskPipeline integration', () => {
 
       const { ctx } = makeCtx();
 
-      await expect(pipeline(ctx)).rejects.toThrow(/Pipeline retry limit exceeded/);
-      await expect(pipeline(ctx)).rejects.toThrow(new RegExp(`${maxRetries}/${maxRetries}`));
+      // 1回の実行でエラーをキャッチし、複数のパターンを検証する
+      try {
+        await pipeline(ctx);
+        expect.unreachable('abort されるべき');
+      } catch (e) {
+        const msg = (e as Error).message;
+        expect(msg).toMatch(/Pipeline retry limit exceeded/);
+        expect(msg).toContain(`${maxRetries}/${maxRetries}`);
+      }
 
-      // maxRetries + 1 回呼ばれる（最初の1回 + maxRetries回のリトライ後に上限超過）
-      // 上の2回のpipeline呼び出しでカウンターはリセットされるため、別のコンテキストで再検証
-      let count = 0;
-      const pipeline2 = createPipeline<TaskContext>(
-        [
-          step('start', async () => ({ kind: 'continue' })),
-          step('implementation', async () => {
-            count++;
-            return { kind: 'retry', from: 'implementation', reason: `レビューNG` };
-          }),
-          step('done', async () => ({ kind: 'continue' })),
-        ],
-        { maxRetries },
-      );
-
-      const { ctx: ctx2 } = makeCtx();
-      await expect(pipeline2(ctx2)).rejects.toThrow(/Pipeline retry limit exceeded/);
       // 最初の1回 + maxRetries回リトライ = maxRetries+1 回ハンドラが呼ばれる
-      expect(count).toBe(maxRetries + 1);
+      expect(implCallCount).toBe(maxRetries + 1);
     });
 
     it('implementation と pr-lifecycle の両方から retry が発生する場合、カウンターが累積されて上限に達する', async () => {
@@ -414,12 +404,18 @@ describe('taskPipeline integration', () => {
       let implCallCount = 0;
       let prCallCount = 0;
 
+      // フロー:
+      //   start → impl(1回目: retry, retryCount=1)
+      //        → impl(2回目: continue) → pr(1回目: retry, retryCount=2)
+      //        → impl(3回目: continue) → pr(2回目: retry, retryCount=3)
+      //        → impl(4回目: continue) → pr(3回目: retry, retryCount=4 > 3 → abort)
+      // 合計: implCallCount=4, prCallCount=3, リトライ回数=impl(1) + pr(3) = 4
       const pipeline = createPipeline<TaskContext>(
         [
           step('start', async () => ({ kind: 'continue' })),
           step('implementation', async () => {
             implCallCount++;
-            // 1回目と3回目は retry（implementation からのリトライ）
+            // 1回目のみ retry（implementation からのリトライ）
             if (implCallCount === 1) {
               return { kind: 'retry', from: 'implementation', reason: 'レビューNG' };
             }
@@ -438,10 +434,10 @@ describe('taskPipeline integration', () => {
       const { ctx } = makeCtx();
       await expect(pipeline(ctx)).rejects.toThrow(/Pipeline retry limit exceeded/);
 
-      // implementation と pr-lifecycle の両方からリトライが発生し、合計で maxRetries を超える
-      const totalRetries = (implCallCount - 1) + prCallCount; // implCallCount-1 はimplからのretry回数を除外するため調整不要
-      // カウンターは累積されるので、合計リトライ回数が maxRetries を超えた時点で停止
-      expect(implCallCount + prCallCount).toBeGreaterThan(maxRetries);
+      // implementation からのリトライ1回 + pr-lifecycle からのリトライ3回 = 合計4回
+      // 4回目のリトライで retryCount(4) > maxRetries(3) となり abort
+      expect(implCallCount).toBe(4);
+      expect(prCallCount).toBe(3);
     });
 
     it('カスタム maxRetries 値（2）が正しく反映される', async () => {
@@ -514,8 +510,14 @@ describe('taskPipeline integration', () => {
     });
 
     it('taskPipeline にも maxRetries が設定されており、CI が繰り返し失敗すると上限超過で abort する', async () => {
+      // createFakeDeps は runAgent, runReviewLoop 等すべての deps をモック済み。
+      // ここでは CI 常時失敗を再現するために execCommand と runCIPollingLoop を上書きする。
+      // start-approval は FakeNotifier のデフォルト（自動承認）で通過し、
+      // sync-main は execCommand モックで通過し、
+      // implementation は runAgent + runReviewLoop のデフォルトモック（成功）で通過する。
       const { ctx } = makeCtx({
         depsOverrides: {
+          runAgent: vi.fn().mockResolvedValue(undefined),
           execCommand: vi.fn().mockImplementation((cmd: string) => {
             if (cmd.includes('git push')) return '';
             return 'https://github.com/test/repo/pull/1';
