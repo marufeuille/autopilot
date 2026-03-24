@@ -27,4 +27,4 @@ export const taskPipeline = createPipeline<TaskContext>([
   step('pr-lifecycle', handlePRLifecycle),
   step('doc-update', handleDocUpdate),
   step('done', handleDone),
-]);
+], { maxRetries: 10 });

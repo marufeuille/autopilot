@@ -1,5 +1,12 @@
 import { FlowSignal, PipelineResult, Step, StepName, TaskContext } from './types';
 
+export interface PipelineOptions {
+  /** パイプライン全体のリトライ上限（デフォルト: 10） */
+  maxRetries?: number;
+}
+
+const DEFAULT_MAX_RETRIES = 10;
+
 /**
  * Pipeline ランナーを生成する。
  *
@@ -9,11 +16,14 @@ import { FlowSignal, PipelineResult, Step, StepName, TaskContext } from './types
  * - continue: 次の step へ進む
  * - skip: pipeline を即座に終了し 'skipped' を返す
  * - abort: signal.error を throw する
- * - retry: signal.from で指定した step 名まで巻き戻す
+ * - retry: signal.from で指定した step 名まで巻き戻す（上限超過時は abort）
  */
-export function createPipeline<TCtx extends TaskContext>(steps: Step<TCtx>[]) {
+export function createPipeline<TCtx extends TaskContext>(steps: Step<TCtx>[], options?: PipelineOptions) {
+  const maxRetries = options?.maxRetries ?? DEFAULT_MAX_RETRIES;
+
   return async function run(ctx: TCtx): Promise<PipelineResult> {
     let stepIndex = 0;
+    let retryCount = 0;
 
     while (stepIndex < steps.length) {
       const current = steps[stepIndex];
@@ -38,6 +48,16 @@ export function createPipeline<TCtx extends TaskContext>(steps: Step<TCtx>[]) {
               `Available steps: ${steps.map((s) => s.name).join(', ')}`,
             );
           }
+
+          retryCount++;
+          if (retryCount > maxRetries) {
+            throw new Error(
+              `Pipeline retry limit exceeded (${retryCount}/${maxRetries}): ` +
+              `last retry requested by step "${current.name}", ` +
+              `reason: "${signal.reason}"`,
+            );
+          }
+
           ctx.set('retryReason', signal.reason);
           stepIndex = targetIndex;
           break;
