@@ -15,11 +15,52 @@ import { detectNoRemote } from '../../git';
  */
 function formatReviewSummaryForPR(result: ReviewLoopResult): string {
   const lines: string[] = ['## セルフレビュー結果', ''];
-  lines.push(result.finalVerdict === 'OK' ? '✅ **セルフレビュー通過**' : '⚠️ **セルフレビュー未通過**');
+
+  if (result.finalVerdict === 'OK') {
+    lines.push('✅ **セルフレビュー通過**');
+  } else {
+    lines.push('⚠️ **セルフレビュー未通過**');
+  }
   lines.push('');
+
   lines.push(`- イテレーション数: ${result.iterations.length}`);
   lines.push(`- 最終判定: ${result.lastReviewResult.verdict}`);
   lines.push(`- 要約: ${result.lastReviewResult.summary}`);
+
+  // 各イテレーションの修正履歴
+  if (result.iterations.length > 1) {
+    lines.push('');
+    lines.push('### 修正履歴');
+    lines.push('');
+    for (const iter of result.iterations) {
+      const verdict = iter.reviewResult.verdict === 'OK' ? '✅' : '❌';
+      lines.push(`**イテレーション ${iter.iteration}**: ${verdict} ${iter.reviewResult.verdict}`);
+      if (iter.reviewResult.findings.length > 0) {
+        for (const f of iter.reviewResult.findings) {
+          const location = [f.file, f.line].filter(Boolean).join(':');
+          const prefix = location ? `\`${location}\` ` : '';
+          lines.push(`  - [${f.severity.toUpperCase()}] ${prefix}${f.message}`);
+        }
+      }
+      if (iter.fixDescription) {
+        lines.push(`  - 修正実施済み`);
+      }
+      lines.push('');
+    }
+  }
+
+  // 最終レビューの指摘事項
+  if (result.lastReviewResult.findings.length > 0) {
+    lines.push('### 最終レビュー指摘事項');
+    lines.push('');
+    for (const f of result.lastReviewResult.findings) {
+      const location = [f.file, f.line].filter(Boolean).join(':');
+      const prefix = location ? `\`${location}\` ` : '';
+      lines.push(`- [${f.severity.toUpperCase()}] ${prefix}${f.message}`);
+    }
+    lines.push('');
+  }
+
   return lines.join('\n');
 }
 
