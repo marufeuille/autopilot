@@ -38,8 +38,12 @@ ${prerequisite}
 /**
  * retry時のプロンプトを生成する
  */
-function buildRetryPrompt(task: TaskFile, cwd: string, reason: string): string {
-  return `前回の実装を修正してください。タスク: ${task.slug}\n\n${task.content}\n\n作業ディレクトリ: ${cwd}\n\n## 修正依頼\n${reason}\n\n## 重要\n- プロジェクトのCLAUDE.mdとREADMEを読み、設計思想・規約に沿ってシンプルに実装すること。既存設計から逸脱した過剰な実装は避けること\n\n上記の修正依頼を踏まえて、完了条件を再確認しながら修正してください。`;
+function buildRetryPrompt(task: TaskFile, cwd: string, reason: string, useWorktree: boolean): string {
+  const branchInstruction = useWorktree
+    ? `- ワークツリーは既に feature/${task.slug} ブランチで作成済みです。直接作業してください。git checkout main や git pull は実行しないでください。`
+    : `- feature/${task.slug} ブランチが既に存在します。\`git checkout feature/${task.slug}\` してから作業を開始してください。git checkout main や新規ブランチ作成（git checkout -b）は不要です。`;
+
+  return `前回の実装を修正してください。タスク: ${task.slug}\n\n${task.content}\n\n作業ディレクトリ: ${cwd}\n\n## 前提条件\n${branchInstruction}\n\n## 修正依頼\n${reason}\n\n## 重要\n- プロジェクトのCLAUDE.mdとREADMEを読み、設計思想・規約に沿ってシンプルに実装すること。既存設計から逸脱した過剰な実装は避けること\n- PRの作成は自動で行われるため、\`gh pr create\` は実行しないこと\n\n上記の修正依頼を踏まえて、完了条件を再確認しながら修正してください。`;
 }
 
 /**
@@ -62,7 +66,7 @@ export async function handleImplementation(ctx: TaskContext): Promise<FlowSignal
   const rejectionReason = ctx.get('rejectionReason');
 
   let prompt = retryReason
-    ? buildRetryPrompt(task, cwd, retryReason)
+    ? buildRetryPrompt(task, cwd, retryReason, useWorktree)
     : buildTaskPrompt(task, story, cwd, useWorktree);
 
   // 却下理由がある場合はプロンプトに追記

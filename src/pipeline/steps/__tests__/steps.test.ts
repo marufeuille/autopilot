@@ -443,6 +443,30 @@ describe('handleImplementation', () => {
     expect(prompt).toContain('## 前回の却下理由');
     expect(prompt).toContain('パフォーマンスが悪い');
   });
+
+  it('worktreePath なし + retryReason あり の場合、既存ブランチへの checkout 指示が含まれる（却下後リトライの主要ケース）', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({ depsOverrides: { runAgent } });
+    // worktreePath は設定しない（pr-lifecycle でクリーン済みを想定）
+    ctx.setRetryReason('却下理由: エラーハンドリングが不十分');
+    await handleImplementation(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).toContain('git checkout feature/test-task');
+    expect(prompt).not.toContain('ワークツリーは既に');
+  });
+
+  it('worktreePath あり + retryReason あり の場合、ワークツリー直接作業の指示が含まれる', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({
+      depsOverrides: { runAgent },
+      ctxStore: { worktreePath: '/tmp/autopilot/test-task' },
+    });
+    ctx.setRetryReason('セルフレビュー未通過');
+    await handleImplementation(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).toContain('ワークツリーは既に feature/test-task ブランチで作成済みです');
+    expect(prompt).not.toContain('git checkout feature/test-task');
+  });
 });
 
 // -------- handlePRLifecycle --------
