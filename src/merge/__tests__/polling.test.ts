@@ -1,0 +1,323 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { runMergePollingLoop } from '../polling';
+import { MergeServiceDeps } from '../merge-service';
+import { MergeError } from '../types';
+
+// sleep をモックして即座に解決させる
+vi.mock('../../ci/poller', () => ({
+  sleep: vi.fn().mockResolvedValue(undefined),
+}));
+
+function createMockDeps(overrides?: Partial<MergeServiceDeps>): MergeServiceDeps {
+  return {
+    execGh: vi.fn().mockReturnValue(''),
+    ...overrides,
+  };
+}
+
+function prStatusJson(state: string): string {
+  return JSON.stringify({
+    state,
+    mergeable: 'UNKNOWN',
+    reviewDecision: '',
+    statusCheckRollup: [],
+  });
+}
+
+describe('runMergePollingLoop', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  it('PRが最初からMERGEDの場合に finalStatus: merged を返す', async () => {
+    const deps = createMockDeps({
+      execGh: vi.fn().mockReturnValue(prStatusJson('MERGED')),
+    });
+
+    const result = await runMergePollingLoop(
+      'https://github.com/org/repo/pull/1',
+      '/repo',
+      deps,
+      { pollingIntervalMs: 100, maxWaitMs: 5000 },
+    );
+
+    expect(result.finalStatus).toBe('merged');
+    expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(deps.execGh).toHaveBeenCalledTimes(1);
+  });
+
+  it('PRが最初からCLOSEDの場合に finalStatus: closed を返す', async () => {
+    const deps = createMockDeps({
+      execGh: vi.fn().mockReturnValue(prStatusJson('CLOSED')),
+    });
+
+    const result = await runMergePollingLoop(
+      'https://github.com/org/repo/pull/1',
+      '/repo',
+      deps,
+      { pollingIntervalMs: 100, maxWaitMs: 5000 },
+    );
+
+    expect(result.finalStatus).toBe('closed');
+    expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(deps.execGh).toHaveBeenCalledTimes(1);
+  });
+
+  it('ポーリング後にMERGEDを検知する', async () => {
+    const execGh = vi.fn()
+      .mockReturnValueOnce(prStatusJson('OPEN'))
+      .mockReturnValueOnce(prStatusJson('OPEN'))
+      .mockReturnValueOnce(prStatusJson('MERGED'));
+
+    const deps = createMockDeps({ execGh });
+
+    const result = await runMergePollingLoop(
+      'https://github.com/org/repo/pull/1',
+      '/repo',
+      deps,
+      { pollingIntervalMs: 100, maxWaitMs: 60000 },
+    );
+
+    expect(result.finalStatus).toBe('merged');
+    expect(execGh).toHaveBeenCalledTimes(3);
+  });
+
+  it('ポーリング後にCLOSEDを検知する', async () => {
+    const execGh = vi.fn()
+      .mockReturnValueOnce(prStatusJson('OPEN'))
+      .mockReturnValueOnce(prStatusJson('CLOSED'));
+
+    const deps = createMockDeps({ execGh });
+
+    const result = await runMergePollingLoop(
+      'https://github.com/org/repo/pull/1',
+      '/repo',
+      deps,
+      { pollingIntervalMs: 100, maxWaitMs: 60000 },
+    );
+
+    expect(result.finalStatus).toBe('closed');
+    expect(execGh).toHaveBeenCalledTimes(2);
+  });
+
+  it('タイムアウトで finalStatus: timeout を返す', async () => {
+    // maxWaitMs を 0 にしてタイムアウトを即座に発生させる
+    const deps = createMockDeps({
+      execGh: vi.fn().mockReturnValue(prStatusJson('OPEN')),
+    });
+
+    const result = await runMergePollingLoop(
+      'https://github.com/org/repo/pull/1',
+      '/repo',
+      deps,
+      { pollingIntervalMs: 100, maxWaitMs: 0 },
+    );
+
+    expect(result.finalStatus).toBe('timeout');
+  });
+
+  it('fetchPullRequestStatus に正しい引数を渡す', async () => {
+    const execGh = vi.fn().mockReturnValue(prStatusJson('MERGED'));
+    const deps = createMockDeps({ execGh });
+
+    await runMergePollingLoop(
+      'https://github.com/org/repo/pull/42',
+      '/my-repo',
+      deps,
+      { pollingIntervalMs: 100, maxWaitMs: 5000 },
+    );
+
+    expect(execGh).toHaveBeenCalledWith(
+      ['pr', 'view', 'https://github.com/org/repo/pull/42', '--json', 'state,mergeable,reviewDecision,statusCheckRollup'],
+      '/my-repo',
+    );
+  });
+
+  it('デフォルトオプションが使用される（オプション未指定時）', async () => {
+    const deps = createMockDeps({
+      execGh: vi.fn().mockReturnValue(prStatusJson('MERGED')),
+    });
+
+    // オプション未指定でもエラーにならないことを確認
+    const result = await runMergePollingLoop(
+      'https://github.com/org/repo/pull/1',
+      '/repo',
+      deps,
+    );
+
+    expect(result.finalStatus).toBe('merged');
+  });
+
+  it('elapsedMs が正の値を返す', async () => {
+    const execGh = vi.fn()
+      .mockReturnValueOnce(prStatusJson('OPEN'))
+      .mockReturnValueOnce(prStatusJson('MERGED'));
+
+    const deps = createMockDeps({ execGh });
+
+    const result = await runMergePollingLoop(
+      'https://github.com/org/repo/pull/1',
+      '/repo',
+      deps,
+      { pollingIntervalMs: 100, maxWaitMs: 60000 },
+    );
+
+    expect(result.finalStatus).toBe('merged');
+    expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
+  });
+
+  // --- エラーハンドリングのテスト ---
+
+  it('一時的なエラーが発生してもリトライして次のポーリングを続行する', async () => {
+    const execGh = vi.fn()
+      .mockImplementationOnce(() => { throw new MergeError('unknown', 'network error', 500); })
+      .mockReturnValueOnce(prStatusJson('OPEN'))
+      .mockReturnValueOnce(prStatusJson('MERGED'));
+
+    const deps = createMockDeps({ execGh });
+
+    const result = await runMergePollingLoop(
+      'https://github.com/org/repo/pull/1',
+      '/repo',
+      deps,
+      { pollingIntervalMs: 100, maxWaitMs: 60000 },
+    );
+
+    expect(result.finalStatus).toBe('merged');
+    expect(execGh).toHaveBeenCalledTimes(3);
+    expect(console.warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('連続エラーが上限に達したら finalStatus: error を返す', async () => {
+    const execGh = vi.fn().mockImplementation(() => {
+      throw new MergeError('unknown', 'gh CLI timeout', 500);
+    });
+
+    const deps = createMockDeps({ execGh });
+
+    const result = await runMergePollingLoop(
+      'https://github.com/org/repo/pull/1',
+      '/repo',
+      deps,
+      { pollingIntervalMs: 100, maxWaitMs: 60000, maxConsecutiveErrors: 3 },
+    );
+
+    expect(result.finalStatus).toBe('error');
+    expect(execGh).toHaveBeenCalledTimes(3);
+    expect(console.warn).toHaveBeenCalledTimes(3);
+    expect(console.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('エラー後に成功すると連続エラーカウントがリセットされる', async () => {
+    const execGh = vi.fn()
+      .mockImplementationOnce(() => { throw new Error('error 1'); })
+      .mockImplementationOnce(() => { throw new Error('error 2'); })
+      .mockReturnValueOnce(prStatusJson('OPEN'))  // 成功 → カウントリセット
+      .mockImplementationOnce(() => { throw new Error('error 3'); })
+      .mockImplementationOnce(() => { throw new Error('error 4'); })
+      .mockReturnValueOnce(prStatusJson('MERGED')); // 成功
+
+    const deps = createMockDeps({ execGh });
+
+    const result = await runMergePollingLoop(
+      'https://github.com/org/repo/pull/1',
+      '/repo',
+      deps,
+      { pollingIntervalMs: 100, maxWaitMs: 60000, maxConsecutiveErrors: 3 },
+    );
+
+    expect(result.finalStatus).toBe('merged');
+    expect(execGh).toHaveBeenCalledTimes(6);
+    // エラーは4回発生したが、連続では最大2回なので上限(3)に達しない
+    expect(console.warn).toHaveBeenCalledTimes(4);
+  });
+
+  it('Error以外の例外でもハンドリングされる', async () => {
+    const execGh = vi.fn()
+      .mockImplementationOnce(() => { throw 'string error'; }) // eslint-disable-line no-throw-literal
+      .mockReturnValueOnce(prStatusJson('MERGED'));
+
+    const deps = createMockDeps({ execGh });
+
+    const result = await runMergePollingLoop(
+      'https://github.com/org/repo/pull/1',
+      '/repo',
+      deps,
+      { pollingIntervalMs: 100, maxWaitMs: 60000 },
+    );
+
+    expect(result.finalStatus).toBe('merged');
+    expect(console.warn).toHaveBeenCalledTimes(1);
+  });
+
+  // --- バリデーションのテスト ---
+
+  it('pollingIntervalMs が負の値の場合にエラーをスローする', async () => {
+    const deps = createMockDeps();
+
+    await expect(
+      runMergePollingLoop('https://github.com/org/repo/pull/1', '/repo', deps, {
+        pollingIntervalMs: -1,
+        maxWaitMs: 5000,
+      }),
+    ).rejects.toThrow('pollingIntervalMs must be a positive finite number');
+  });
+
+  it('pollingIntervalMs が 0 の場合にエラーをスローする', async () => {
+    const deps = createMockDeps();
+
+    await expect(
+      runMergePollingLoop('https://github.com/org/repo/pull/1', '/repo', deps, {
+        pollingIntervalMs: 0,
+        maxWaitMs: 5000,
+      }),
+    ).rejects.toThrow('pollingIntervalMs must be a positive finite number');
+  });
+
+  it('pollingIntervalMs が NaN の場合にエラーをスローする', async () => {
+    const deps = createMockDeps();
+
+    await expect(
+      runMergePollingLoop('https://github.com/org/repo/pull/1', '/repo', deps, {
+        pollingIntervalMs: NaN,
+        maxWaitMs: 5000,
+      }),
+    ).rejects.toThrow('pollingIntervalMs must be a positive finite number');
+  });
+
+  it('pollingIntervalMs が Infinity の場合にエラーをスローする', async () => {
+    const deps = createMockDeps();
+
+    await expect(
+      runMergePollingLoop('https://github.com/org/repo/pull/1', '/repo', deps, {
+        pollingIntervalMs: Infinity,
+        maxWaitMs: 5000,
+      }),
+    ).rejects.toThrow('pollingIntervalMs must be a positive finite number');
+  });
+
+  it('maxWaitMs が負の値の場合にエラーをスローする', async () => {
+    const deps = createMockDeps();
+
+    await expect(
+      runMergePollingLoop('https://github.com/org/repo/pull/1', '/repo', deps, {
+        pollingIntervalMs: 100,
+        maxWaitMs: -1,
+      }),
+    ).rejects.toThrow('maxWaitMs must be a non-negative finite number');
+  });
+
+  it('maxWaitMs が NaN の場合にエラーをスローする', async () => {
+    const deps = createMockDeps();
+
+    await expect(
+      runMergePollingLoop('https://github.com/org/repo/pull/1', '/repo', deps, {
+        pollingIntervalMs: 100,
+        maxWaitMs: NaN,
+      }),
+    ).rejects.toThrow('maxWaitMs must be a non-negative finite number');
+  });
+});
