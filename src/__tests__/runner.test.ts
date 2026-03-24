@@ -44,27 +44,18 @@ vi.mock('../git', () => ({
 }));
 
 // マージモジュールをモック
-const mockExecuteMerge = vi.fn().mockReturnValue({ success: true, prUrl: '', output: undefined });
-const mockFormatMergeErrorMessage = vi.fn((error: any) => `❌ ${error.reason}`);
 const mockFetchPullRequestStatus = vi.fn().mockReturnValue({
   state: 'OPEN',
   mergeable: 'MERGEABLE',
   reviewDecision: 'APPROVED',
   statusCheckRollup: [{ name: 'CI', status: 'COMPLETED', conclusion: 'SUCCESS' }],
 });
-const mockValidateMergeConditions = vi.fn().mockReturnValue({
-  mergeable: true,
-  errors: [],
-});
 const mockRunMergePollingLoop = vi.fn().mockResolvedValue({ finalStatus: 'merged', elapsedMs: 1000 });
 vi.mock('../merge', async (importOriginal) => {
   const actual = await importOriginal() as Record<string, unknown>;
   return {
     ...actual,
-    executeMerge: (...args: unknown[]) => mockExecuteMerge(...args),
-    formatMergeErrorMessage: (...args: unknown[]) => mockFormatMergeErrorMessage(...args),
     fetchPullRequestStatus: (...args: unknown[]) => mockFetchPullRequestStatus(...args),
-    validateMergeConditions: (...args: unknown[]) => mockValidateMergeConditions(...args),
     runMergePollingLoop: (...args: unknown[]) => mockRunMergePollingLoop(...args),
   };
 });
@@ -125,7 +116,6 @@ import { getStoryTasks } from '../vault/reader';
 import { updateFileStatus, recordTaskCompletion } from '../vault/writer';
 import { decomposeTasks } from '../decomposer';
 import { syncMainBranch, GitSyncError } from '../git';
-import { MergeError } from '../merge';
 import { runStory, runTask, formatReviewSummaryForPR, createPullRequest } from '../runner';
 
 const mockedGetStoryTasks = vi.mocked(getStoryTasks);

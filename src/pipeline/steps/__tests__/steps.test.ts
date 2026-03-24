@@ -10,7 +10,6 @@ import { handleDone } from '../done';
 import { FakeNotifier } from '../../../__tests__/helpers/fake-notifier';
 import { createFakeDeps, defaultReviewLoopResult } from '../../../__tests__/helpers/fake-deps';
 import { GitSyncError } from '../../../git';
-import { MergeError } from '../../../merge';
 import { runMergePollingLoop } from '../../../merge';
 import type { MergePollingResult } from '../../../merge';
 
