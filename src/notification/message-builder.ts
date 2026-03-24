@@ -5,6 +5,8 @@
  * Slack mrkdwn 形式で出力し、ローカル通知ではストリップして使用する。
  */
 
+import type { KnownBlock } from '@slack/types';
+import type { ModalView } from '@slack/types';
 import { NotificationContext } from './types';
 import type { TaskFile } from '../vault/reader';
 
@@ -213,13 +215,16 @@ export function buildCIEscalationMessage(ctx: NotificationContext): string {
  * @param prUrl PR の URL（NG ボタンの value に埋め込む）
  * @param taskSlug タスクの識別子
  */
-export function buildMergeReadyBlocks(prUrl: string, taskSlug: string): unknown[] {
+export function buildMergeReadyBlocks(prUrl: string, taskSlug: string): KnownBlock[] {
+  // Slack mrkdwn のリンク構文を防ぐため <url|label> 形式でリンク化する
+  const safeUrl = prUrl.replace(/[<>|]/g, '');
+  const linkedUrl = `<${safeUrl}|${safeUrl}>`;
   return [
     {
       type: 'section',
       text: {
         type: 'mrkdwn',
-        text: `✅ *マージ準備完了*: \`${taskSlug}\`\n*PR*: ${prUrl}\nCIが通過しました。GitHubから手動でマージしてください。`,
+        text: `✅ *マージ準備完了*: \`${taskSlug}\`\n*PR*: ${linkedUrl}\nCIが通過しました。GitHubから手動でマージしてください。`,
       },
     },
     {
@@ -242,7 +247,7 @@ export function buildMergeReadyBlocks(prUrl: string, taskSlug: string): unknown[
  *
  * @param prUrl PR の URL（private_metadata に埋め込む）
  */
-export function buildRejectModal(prUrl: string): Record<string, unknown> {
+export function buildRejectModal(prUrl: string): ModalView {
   return {
     type: 'modal',
     callback_id: 'pr_reject_modal',

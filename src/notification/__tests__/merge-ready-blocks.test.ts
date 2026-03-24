@@ -7,7 +7,7 @@ describe('buildMergeReadyBlocks', () => {
 
   it('section ブロックにタスク slug と PR URL が含まれる', () => {
     const blocks = buildMergeReadyBlocks(prUrl, taskSlug) as any[];
-    const section = blocks.find((b) => b.type === 'section');
+    const section = blocks.find((b: any) => b.type === 'section');
     expect(section).toBeDefined();
     expect(section.text.type).toBe('mrkdwn');
     expect(section.text.text).toContain(taskSlug);
@@ -53,9 +53,24 @@ describe('buildMergeReadyBlocks', () => {
 
   it('既存の通知内容（CI通過メッセージ）が維持されている', () => {
     const blocks = buildMergeReadyBlocks(prUrl, taskSlug) as any[];
-    const section = blocks.find((b) => b.type === 'section');
+    const section = blocks.find((b: any) => b.type === 'section');
     expect(section.text.text).toContain('CIが通過しました');
     expect(section.text.text).toContain('手動でマージ');
+  });
+
+  it('PR URL が <url|label> 形式でリンク化される', () => {
+    const blocks = buildMergeReadyBlocks(prUrl, taskSlug) as any[];
+    const section = blocks.find((b: any) => b.type === 'section');
+    expect(section.text.text).toContain(`<${prUrl}|${prUrl}>`);
+  });
+
+  it('悪意ある mrkdwn 構文を含む URL がサニタイズされる', () => {
+    const maliciousUrl = 'https://evil.com|innocent<script>';
+    const blocks = buildMergeReadyBlocks(maliciousUrl, taskSlug) as any[];
+    const section = blocks.find((b: any) => b.type === 'section');
+    // < > | が除去されている
+    expect(section.text.text).not.toContain('|innocent');
+    expect(section.text.text).not.toContain('<script>');
   });
 });
 

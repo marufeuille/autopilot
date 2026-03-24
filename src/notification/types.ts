@@ -4,6 +4,8 @@
  * すべての通知バックエンド（local, slack など）はこのインターフェースを実装する。
  */
 
+import type { Block, KnownBlock } from '@slack/types';
+
 /** 承認リクエストの結果 */
 export type ApprovalResult =
   | { action: 'approve' }
@@ -12,7 +14,7 @@ export type ApprovalResult =
 /** notify のオプション */
 export interface NotifyOptions {
   /** Block Kit ブロック配列（Slack バックエンドでのみ有効） */
-  blocks?: unknown[];
+  blocks?: ReadonlyArray<KnownBlock | Block>;
 }
 
 /** 通知バックエンドが実装すべきインターフェース */

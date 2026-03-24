@@ -1,9 +1,11 @@
 import { App } from '@slack/bolt';
+import type { BlockAction, ButtonAction } from '@slack/bolt';
 import type { Block, KnownBlock } from '@slack/types';
 import { config } from '../config';
 import type { NotificationBackend, ApprovalResult, NotifyOptions } from './types';
 import { buildRejectModal } from './message-builder';
 import { signalRejection } from '../merge/rejection-registry';
+import { logError, logWarn } from '../logger';
 import { ThreadSessionManager } from './thread-session';
 
 interface PendingApproval {
@@ -159,21 +161,40 @@ export function registerApprovalHandlers(app: App): void {
  */
 export function registerPRRejectHandlers(app: App): void {
   // NG ボタン: モーダルを開く
-  app.action('pr_reject_ng', async ({ body, ack, client }) => {
+  app.action<BlockAction<ButtonAction>>('pr_reject_ng', async ({ body, ack, client }) => {
     await ack();
-    const prUrl = (body as any).actions[0].value as string;
-    await client.views.open({
-      trigger_id: (body as any).trigger_id,
-      view: buildRejectModal(prUrl) as any,
-    });
+    try {
+      const action = body.actions[0];
+      if (!action?.value) {
+        logWarn('pr_reject_ng: actions が空または value がありません', { phase: 'pr_reject_ng' });
+        return;
+      }
+      const prUrl = action.value;
+      await client.views.open({
+        trigger_id: body.trigger_id,
+        view: buildRejectModal(prUrl),
+      });
+    } catch (err) {
+      logError('pr_reject_ng: モーダルの表示に失敗しました', { phase: 'pr_reject_ng' }, err);
+    }
   });
 
   // モーダル送信: 却下理由を取得して RejectionRegistry にシグナル
   app.view('pr_reject_modal', async ({ ack, view }) => {
     await ack();
-    const prUrl = view.private_metadata;
-    const reason = view.state.values['reason_block']['reason_input'].value ?? '';
-    signalRejection(prUrl, reason);
+    try {
+      const prUrl = view.private_metadata;
+      const reason = view.state?.values?.['reason_block']?.['reason_input']?.value ?? '';
+      const accepted = signalRejection(prUrl, reason);
+      if (!accepted) {
+        logWarn('pr_reject_modal: signalRejection が受理されませんでした（待機中エントリなし）', {
+          phase: 'pr_reject_modal',
+          prUrl,
+        });
+      }
+    } catch (err) {
+      logError('pr_reject_modal: 却下処理に失敗しました', { phase: 'pr_reject_modal' }, err);
+    }
   });
 }
 
