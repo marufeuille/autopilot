@@ -31,3 +31,39 @@ mcp__obsidian-mcp-tools__get_vault_file(filename="Projects/autopilot/README.md")
 > [!IMPORTANT]
 > **Vault の `Projects/` 内のディレクトリ・ファイル構成は、Vault ルートの `README.md` に定義された構造に従うこと。**
 > ファイルやディレクトリを新規作成・移動・削除する際は、事前に Vault ルートの `README.md` を確認し、定義された構造に従うこと。
+
+## Obsidian Bases（ダッシュボード）
+
+`.base` ファイルでフロントマターを動的に一覧表示・編集できます。Obsidian 上でステータスをその場で変更可能。
+
+### ファイル形式（YAML）
+
+```yaml
+views:
+  - type: table
+    name: 表示名
+    filters:
+      and:
+        - file.folder == "Projects/foo/stories"   # 完全一致
+        - file.path contains "Projects/foo/tasks"  # 部分一致（サブフォルダ対応）
+    groupBy:
+      property: status
+      direction: ASC
+    order:
+      - file.name
+      - status
+      - priority
+    sort:
+      - property: created
+        direction: DESC
+```
+
+### 既存の Base ファイル
+
+| ファイル | 対象 | グループ |
+|---|---|---|
+| `Projects/autopilot/taskbase.base` | `stories/` | status |
+
+### MCP で Base ファイルを作成する場合
+
+`mcp__obsidian-mcp-tools__create_vault_file` で上記形式の YAML を書き込むだけで作成できます。
