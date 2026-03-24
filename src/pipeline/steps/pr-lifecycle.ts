@@ -7,13 +7,13 @@ import { ReviewLoopResult, formatReviewLoopResult } from '../../review';
 import { formatCIPollingResult } from '../../ci';
 import { runMergePollingLoop } from '../../merge';
 import { NotificationContext, buildMergeReadyBlocks } from '../../notification';
-import { RunnerDeps } from '../../runner-deps';
+import { RunnerDeps, createDefaultRunnerDeps } from '../../runner-deps';
 import { detectNoRemote } from '../../git';
 
 /**
  * PR 本文用のセルフレビューサマリーを生成する
  */
-function formatReviewSummaryForPR(result: ReviewLoopResult): string {
+export function formatReviewSummaryForPR(result: ReviewLoopResult): string {
   const lines: string[] = ['## セルフレビュー結果', ''];
 
   if (result.finalVerdict === 'OK') {
@@ -67,22 +67,23 @@ function formatReviewSummaryForPR(result: ReviewLoopResult): string {
 /**
  * PR を作成し URL を返す。失敗時は空文字を返す。
  */
-function createPullRequest(
+export function createPullRequest(
   repoPath: string,
   branch: string,
   task: TaskFile,
   story: StoryFile,
   reviewLoopResult: ReviewLoopResult,
-  deps: Pick<RunnerDeps, 'execCommand'>,
+  deps?: Pick<RunnerDeps, 'execCommand'>,
 ): string {
+  const d = deps ?? createDefaultRunnerDeps();
   const reviewSummary = formatReviewSummaryForPR(reviewLoopResult);
   const body = `## 概要\n\nタスク: ${task.slug}\nストーリー: ${story.slug}\n\n${task.content}\n\n${reviewSummary}`;
   const tmpFile = join(tmpdir(), `autopilot-pr-body-${Date.now()}.md`);
 
   try {
     writeFileSync(tmpFile, body, 'utf-8');
-    deps.execCommand(`git push -u origin ${branch}`, repoPath);
-    const prUrl = deps.execCommand(
+    d.execCommand(`git push -u origin ${branch}`, repoPath);
+    const prUrl = d.execCommand(
       `gh pr create --base main --head ${branch} --title "${task.slug}" --body-file ${tmpFile}`,
       repoPath,
     ).trim();
@@ -90,7 +91,7 @@ function createPullRequest(
     return prUrl;
   } catch {
     try {
-      return deps.execCommand(`gh pr view ${branch} --json url -q .url`, repoPath).trim();
+      return d.execCommand(`gh pr view ${branch} --json url -q .url`, repoPath).trim();
     } catch {
       return '';
     }
