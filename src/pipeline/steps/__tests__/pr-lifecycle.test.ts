@@ -1,0 +1,266 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { StoryFile, TaskFile } from '../../../vault/reader';
+
+// 外部パッケージの transitive import をモック
+vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
+  query: vi.fn(),
+}));
+
+vi.mock('dotenv', () => ({
+  default: { config: vi.fn() },
+  config: vi.fn(),
+}));
+
+vi.mock('gray-matter', () => ({
+  default: vi.fn(),
+}));
+
+vi.mock('glob', () => ({
+  glob: vi.fn(),
+}));
+
+// fs の writeFileSync / unlinkSync をモック（PR body一時ファイルで使われる）
+const mockWriteFileSync = vi.fn();
+const mockUnlinkSync = vi.fn();
+vi.mock('fs', () => ({
+  writeFileSync: (...args: unknown[]) => mockWriteFileSync(...args),
+  unlinkSync: (...args: unknown[]) => mockUnlinkSync(...args),
+}));
+
+// child_process をモック（transitive import で必要）
+vi.mock('child_process', () => ({
+  execSync: vi.fn(() => ''),
+  execFileSync: vi.fn(() => ''),
+}));
+
+import { formatReviewSummaryForPR, createPullRequest } from '../pr-lifecycle';
+
+function createStory(overrides: Partial<StoryFile> = {}): StoryFile {
+  return {
+    filePath: '/vault/Projects/myproject/stories/my-story.md',
+    project: 'myproject',
+    slug: 'my-story',
+    status: 'Doing',
+    frontmatter: { status: 'Doing' },
+    content: '# My Story\nStory content',
+    ...overrides,
+  };
+}
+
+function createTask(
+  slug: string,
+  status: string,
+  overrides: Partial<TaskFile> = {},
+): TaskFile {
+  return {
+    filePath: `/vault/Projects/myproject/tasks/my-story/${slug}.md`,
+    project: 'myproject',
+    storySlug: 'my-story',
+    slug,
+    status: status as TaskFile['status'],
+    frontmatter: { status },
+    content: `# ${slug}\nTask content`,
+    ...overrides,
+  };
+}
+
+describe('formatReviewSummaryForPR', () => {
+  it('OK判定の場合にセルフレビュー通過のMarkdownが生成される', () => {
+    const result = formatReviewSummaryForPR({
+      finalVerdict: 'OK',
+      escalationRequired: false,
+      iterations: [
+        {
+          iteration: 1,
+          reviewResult: { verdict: 'OK', summary: 'All good', findings: [] },
+          timestamp: new Date(),
+        },
+      ],
+      lastReviewResult: { verdict: 'OK', summary: 'All good', findings: [] },
+    });
+
+    expect(result).toContain('## セルフレビュー結果');
+    expect(result).toContain('✅ **セルフレビュー通過**');
+    expect(result).toContain('イテレーション数: 1');
+    expect(result).toContain('最終判定: OK');
+    expect(result).toContain('要約: All good');
+  });
+
+  it('NG判定の場合にセルフレビュー未通過のMarkdownが生成される', () => {
+    const result = formatReviewSummaryForPR({
+      finalVerdict: 'NG',
+      escalationRequired: true,
+      iterations: [
+        {
+          iteration: 1,
+          reviewResult: {
+            verdict: 'NG',
+            summary: 'Issues found',
+            findings: [
+              { severity: 'error', message: 'Missing error handling', file: 'src/index.ts', line: 10 },
+            ],
+          },
+          timestamp: new Date(),
+        },
+      ],
+      lastReviewResult: {
+        verdict: 'NG',
+        summary: 'Issues found',
+        findings: [
+          { severity: 'error', message: 'Missing error handling', file: 'src/index.ts', line: 10 },
+        ],
+      },
+    });
+
+    expect(result).toContain('⚠️ **セルフレビュー未通過**');
+    expect(result).toContain('最終レビュー指摘事項');
+    expect(result).toContain('[ERROR]');
+    expect(result).toContain('Missing error handling');
+    expect(result).toContain('`src/index.ts:10`');
+  });
+
+  it('複数イテレーションの場合に修正履歴が含まれる', () => {
+    const result = formatReviewSummaryForPR({
+      finalVerdict: 'OK',
+      escalationRequired: false,
+      iterations: [
+        {
+          iteration: 1,
+          reviewResult: {
+            verdict: 'NG',
+            summary: 'Issues found',
+            findings: [{ severity: 'error', message: 'Bug found' }],
+          },
+          fixDescription: 'Fixed the bug',
+          timestamp: new Date(),
+        },
+        {
+          iteration: 2,
+          reviewResult: { verdict: 'OK', summary: 'All fixed', findings: [] },
+          timestamp: new Date(),
+        },
+      ],
+      lastReviewResult: { verdict: 'OK', summary: 'All fixed', findings: [] },
+    });
+
+    expect(result).toContain('### 修正履歴');
+    expect(result).toContain('**イテレーション 1**: ❌ NG');
+    expect(result).toContain('**イテレーション 2**: ✅ OK');
+    expect(result).toContain('修正実施済み');
+    expect(result).toContain('イテレーション数: 2');
+  });
+});
+
+describe('createPullRequest', () => {
+  const mockExecCommand = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('正常時にgit pushとgh pr createが実行されPR URLが返される', () => {
+    const task = createTask('task-01', 'Todo');
+    const story = createStory();
+    const reviewResult = {
+      finalVerdict: 'OK' as const,
+      escalationRequired: false,
+      iterations: [
+        {
+          iteration: 1,
+          reviewResult: { verdict: 'OK' as const, summary: 'All good', findings: [] },
+          timestamp: new Date(),
+        },
+      ],
+      lastReviewResult: { verdict: 'OK' as const, summary: 'All good', findings: [] },
+    };
+
+    mockExecCommand
+      .mockReturnValueOnce('') // git push
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1'); // gh pr create
+
+    const url = createPullRequest('/repo', 'feature/task-01', task, story, reviewResult, {
+      execCommand: mockExecCommand,
+    });
+
+    expect(url).toBe('https://github.com/test/repo/pull/1');
+    expect(mockExecCommand).toHaveBeenCalledTimes(2);
+
+    // git push の呼び出し確認
+    expect(mockExecCommand).toHaveBeenCalledWith(
+      'git push -u origin feature/task-01',
+      '/repo',
+    );
+
+    // gh pr create の呼び出し確認（--body-file で一時ファイル経由）
+    const prCreateCall = mockExecCommand.mock.calls[1];
+    const prCreateCmd = prCreateCall[0] as string;
+    expect(prCreateCmd).toContain('gh pr create');
+    expect(prCreateCmd).toContain('--base main');
+    expect(prCreateCmd).toContain('--head feature/task-01');
+    expect(prCreateCmd).toContain('--body-file');
+    expect(prCreateCmd).not.toContain('--body ');
+
+    // 一時ファイルにbodyが書き出されていることを確認
+    expect(mockWriteFileSync).toHaveBeenCalledTimes(1);
+    const writtenBody = mockWriteFileSync.mock.calls[0][1] as string;
+    expect(writtenBody).toContain('セルフレビュー結果');
+
+    // 一時ファイルが削除されていることを確認
+    expect(mockUnlinkSync).toHaveBeenCalledTimes(1);
+  });
+
+  it('PR作成が失敗した場合に既存PRのURL取得を試みる', () => {
+    const task = createTask('task-01', 'Todo');
+    const story = createStory();
+    const reviewResult = {
+      finalVerdict: 'OK' as const,
+      escalationRequired: false,
+      iterations: [
+        {
+          iteration: 1,
+          reviewResult: { verdict: 'OK' as const, summary: 'All good', findings: [] },
+          timestamp: new Date(),
+        },
+      ],
+      lastReviewResult: { verdict: 'OK' as const, summary: 'All good', findings: [] },
+    };
+
+    mockExecCommand
+      .mockReturnValueOnce('') // git push
+      .mockImplementationOnce(() => { throw new Error('PR already exists'); }) // gh pr create
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1'); // gh pr view fallback
+
+    const url = createPullRequest('/repo', 'feature/task-01', task, story, reviewResult, {
+      execCommand: mockExecCommand,
+    });
+
+    expect(url).toBe('https://github.com/test/repo/pull/1');
+    expect(mockExecCommand).toHaveBeenCalledTimes(3);
+  });
+
+  it('PR作成もURL取得も失敗した場合に空文字が返される', () => {
+    const task = createTask('task-01', 'Todo');
+    const story = createStory();
+    const reviewResult = {
+      finalVerdict: 'OK' as const,
+      escalationRequired: false,
+      iterations: [
+        {
+          iteration: 1,
+          reviewResult: { verdict: 'OK' as const, summary: 'All good', findings: [] },
+          timestamp: new Date(),
+        },
+      ],
+      lastReviewResult: { verdict: 'OK' as const, summary: 'All good', findings: [] },
+    };
+
+    mockExecCommand
+      .mockImplementationOnce(() => { throw new Error('push failed'); }); // git push fails
+
+    const url = createPullRequest('/repo', 'feature/task-01', task, story, reviewResult, {
+      execCommand: mockExecCommand,
+    });
+
+    expect(url).toBe('');
+  });
+});
