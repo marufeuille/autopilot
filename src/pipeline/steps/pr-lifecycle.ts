@@ -186,6 +186,7 @@ export async function handlePRLifecycle(ctx: TaskContext): Promise<FlowSignal> {
 
     case 'rejected': {
       const rejectionReason = pollingResult.rejectionReason ?? '理由なし';
+      ctx.set('rejectionReason', rejectionReason);
       await notifier.notify(
         `❌ *PR却下*: \`${task.slug}\`\n*PR*: ${prUrl}\n*却下理由*: ${rejectionReason}\n実装からやり直します。`,
         story.slug,
