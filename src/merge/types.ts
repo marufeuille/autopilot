@@ -97,6 +97,8 @@ export interface MergePollingOptions {
   pollingIntervalMs?: number;
   /** 最大待機時間（ミリ秒、デフォルト: 86400000 = 24時間） */
   maxWaitMs?: number;
+  /** 連続エラーの上限回数（デフォルト: 10） */
+  maxConsecutiveErrors?: number;
 }
 
 /**
@@ -104,7 +106,7 @@ export interface MergePollingOptions {
  */
 export interface MergePollingResult {
   /** 最終ステータス */
-  finalStatus: 'merged' | 'closed' | 'timeout';
+  finalStatus: 'merged' | 'closed' | 'timeout' | 'error';
   /** 経過時間（ミリ秒） */
   elapsedMs: number;
 }
