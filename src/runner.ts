@@ -1,6 +1,3 @@
-import { writeFileSync, unlinkSync } from 'fs';
-import { join } from 'path';
-import { tmpdir } from 'os';
 import { StoryFile, TaskFile, TaskStatus } from './vault/reader';
 import { TaskDraft } from './vault/writer';
 import {
@@ -9,120 +6,11 @@ import {
   buildThreadOriginMessage,
 } from './notification';
 import { GitSyncError } from './git';
-import { ReviewLoopResult } from './review';
 import { RunnerDeps, createDefaultRunnerDeps } from './runner-deps';
 import { createTaskContext } from './pipeline/runner';
 import { taskPipeline } from './pipeline/task-pipeline';
 
 export { RunnerDeps, createDefaultRunnerDeps } from './runner-deps';
-
-
-/**
- * レビューループ結果をPR本文用のMarkdownサマリーに変換する
- */
-export function formatReviewSummaryForPR(result: ReviewLoopResult): string {
-  const lines: string[] = ['## セルフレビュー結果', ''];
-
-  if (result.finalVerdict === 'OK') {
-    lines.push('✅ **セルフレビュー通過**');
-  } else {
-    lines.push('⚠️ **セルフレビュー未通過**');
-  }
-  lines.push('');
-
-  lines.push(`- イテレーション数: ${result.iterations.length}`);
-  lines.push(`- 最終判定: ${result.lastReviewResult.verdict}`);
-  lines.push(`- 要約: ${result.lastReviewResult.summary}`);
-
-  // 各イテレーションの修正履歴
-  if (result.iterations.length > 1) {
-    lines.push('');
-    lines.push('### 修正履歴');
-    lines.push('');
-    for (const iter of result.iterations) {
-      const verdict = iter.reviewResult.verdict === 'OK' ? '✅' : '❌';
-      lines.push(`**イテレーション ${iter.iteration}**: ${verdict} ${iter.reviewResult.verdict}`);
-      if (iter.reviewResult.findings.length > 0) {
-        for (const f of iter.reviewResult.findings) {
-          const location = [f.file, f.line].filter(Boolean).join(':');
-          const prefix = location ? `\`${location}\` ` : '';
-          lines.push(`  - [${f.severity.toUpperCase()}] ${prefix}${f.message}`);
-        }
-      }
-      if (iter.fixDescription) {
-        lines.push(`  - 修正実施済み`);
-      }
-      lines.push('');
-    }
-  }
-
-  // 最終レビューの指摘事項
-  if (result.lastReviewResult.findings.length > 0) {
-    lines.push('### 最終レビュー指摘事項');
-    lines.push('');
-    for (const f of result.lastReviewResult.findings) {
-      const location = [f.file, f.line].filter(Boolean).join(':');
-      const prefix = location ? `\`${location}\` ` : '';
-      lines.push(`- [${f.severity.toUpperCase()}] ${prefix}${f.message}`);
-    }
-    lines.push('');
-  }
-
-  return lines.join('\n');
-}
-
-/**
- * セルフレビューOK後にPRを自動作成する
- * @returns PR URL（作成成功時）または空文字（失敗時）
- */
-export function createPullRequest(
-  repoPath: string,
-  branch: string,
-  task: TaskFile,
-  story: StoryFile,
-  reviewLoopResult: ReviewLoopResult,
-  deps?: Pick<RunnerDeps, 'execCommand'>,
-): string {
-  const d = deps ?? createDefaultRunnerDeps();
-  const reviewSummary = formatReviewSummaryForPR(reviewLoopResult);
-  const body = `## 概要\n\nタスク: ${task.slug}\nストーリー: ${story.slug}\n\n${task.content}\n\n${reviewSummary}`;
-
-  const tmpFile = join(tmpdir(), `autopilot-pr-body-${Date.now()}.md`);
-  try {
-    // 一時ファイルにbodyを書き出し
-    writeFileSync(tmpFile, body, 'utf-8');
-
-    // リモートにブランチをプッシュ
-    d.execCommand(`git push -u origin ${branch}`, repoPath);
-
-    // PR作成（--body-file で一時ファイル経由で渡す）
-    const prUrl = d.execCommand(
-      `gh pr create --base main --head ${branch} --title "${task.slug}" --body-file ${tmpFile}`,
-      repoPath,
-    ).trim();
-
-    console.log(`[runner] PR created: ${prUrl}`);
-    return prUrl;
-  } catch (error) {
-    console.error(`[runner] PR creation failed:`, error);
-    // 既にPRが存在する場合はURL取得を試みる
-    try {
-      return d.execCommand(
-        `gh pr view ${branch} --json url -q .url`,
-        repoPath,
-      ).trim();
-    } catch {
-      return '';
-    }
-  } finally {
-    // 一時ファイルを確実に削除
-    try {
-      unlinkSync(tmpFile);
-    } catch {
-      // 削除失敗は無視（既に存在しない場合など）
-    }
-  }
-}
 
 export async function runTask(
   task: TaskFile,
