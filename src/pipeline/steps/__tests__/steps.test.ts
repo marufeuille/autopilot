@@ -385,6 +385,64 @@ describe('handleImplementation', () => {
     const prompt = runAgent.mock.calls[0][0] as string;
     expect(prompt).toContain('作業ディレクトリ: /tmp/autopilot/test-task');
   });
+
+  it('rejectionReason が設定されている場合、プロンプトに「前回の却下理由」セクションが追記される', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({
+      depsOverrides: { runAgent },
+      ctxStore: { rejectionReason: 'テストが不足しています' },
+    });
+    ctx.setRetryReason('却下理由: テストが不足しています');
+    await handleImplementation(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).toContain('## 前回の却下理由');
+    expect(prompt).toContain('テストが不足しています');
+    expect(prompt).toContain('上記の指摘を踏まえて実装してください。');
+  });
+
+  it('rejectionReason が設定されていない場合、「前回の却下理由」セクションは追記されない', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({ depsOverrides: { runAgent } });
+    ctx.setRetryReason('CI未通過: failure');
+    await handleImplementation(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).not.toContain('前回の却下理由');
+  });
+
+  it('rejectionReason は使用後にクリアされる', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({
+      depsOverrides: { runAgent },
+      ctxStore: { rejectionReason: 'ロジックが間違っている' },
+    });
+    ctx.setRetryReason('却下理由: ロジックが間違っている');
+    await handleImplementation(ctx);
+    expect(ctx.get('rejectionReason')).toBeUndefined();
+  });
+
+  it('rejectionReason が空文字の場合、「前回の却下理由」セクションは追記されない', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({
+      depsOverrides: { runAgent },
+      ctxStore: { rejectionReason: '' },
+    });
+    await handleImplementation(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).not.toContain('前回の却下理由');
+  });
+
+  it('初回プロンプト（retryReasonなし）でも rejectionReason があれば却下理由が追記される', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({
+      depsOverrides: { runAgent },
+      ctxStore: { rejectionReason: 'パフォーマンスが悪い' },
+    });
+    await handleImplementation(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).toContain('実装してください');
+    expect(prompt).toContain('## 前回の却下理由');
+    expect(prompt).toContain('パフォーマンスが悪い');
+  });
 });
 
 // -------- handlePRLifecycle --------
@@ -564,6 +622,45 @@ describe('handlePRLifecycle', () => {
     expect(removeWorktreeMock).toHaveBeenCalledWith('/repo', '/tmp/autopilot/test-task');
     // worktreePath がクリアされている
     expect(ctx.get('worktreePath')).toBeUndefined();
+  });
+
+  it('PR却下（rejected） → rejectionReason がコンテキストにセットされ retry from: implementation', async () => {
+    vi.mocked(runMergePollingLoop).mockResolvedValue({
+      finalStatus: 'rejected',
+      elapsedMs: 2000,
+      rejectionReason: 'テストが不足しています',
+    });
+    const { ctx, notifier } = makeCtx({ ctxStore: baseCtxStore });
+    vi.mocked(ctx.deps.execCommand)
+      .mockReturnValueOnce('')
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1');
+
+    const signal = await handlePRLifecycle(ctx);
+    expect(signal.kind).toBe('retry');
+    if (signal.kind === 'retry') {
+      expect(signal.from).toBe('implementation');
+      expect(signal.reason).toContain('却下理由');
+      expect(signal.reason).toContain('テストが不足しています');
+    }
+    // rejectionReason がコンテキストにセットされている
+    expect(ctx.get('rejectionReason')).toBe('テストが不足しています');
+    // 通知にも却下理由が含まれる
+    expect(notifier.notifications.some((n) => n.message.includes('PR却下'))).toBe(true);
+    expect(notifier.notifications.some((n) => n.message.includes('テストが不足しています'))).toBe(true);
+  });
+
+  it('PR却下時に rejectionReason が未設定の場合は「理由なし」がセットされる', async () => {
+    vi.mocked(runMergePollingLoop).mockResolvedValue({
+      finalStatus: 'rejected',
+      elapsedMs: 2000,
+    });
+    const { ctx } = makeCtx({ ctxStore: baseCtxStore });
+    vi.mocked(ctx.deps.execCommand)
+      .mockReturnValueOnce('')
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1');
+
+    await handlePRLifecycle(ctx);
+    expect(ctx.get('rejectionReason')).toBe('理由なし');
   });
 
   it('worktreeクリーンアップが失敗してもポーリングは続行される', async () => {

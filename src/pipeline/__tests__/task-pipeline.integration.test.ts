@@ -284,4 +284,85 @@ describe('taskPipeline integration', () => {
       expect(notifier.notifications.some((n) => n.message.includes('タスク完了'))).toBe(true);
     });
   });
+
+  describe('却下 → リトライ シナリオ: rejected → implementation retry with rejection reason', () => {
+    it('PR却下 → implementation retry → プロンプトに却下理由が含まれる → 再成功 → done', async () => {
+      const { runMergePollingLoop: mockMergePolling } = await import('../../merge');
+      let mergeCallCount = 0;
+      vi.mocked(mockMergePolling).mockImplementation(async () => {
+        mergeCallCount++;
+        if (mergeCallCount === 1) {
+          // 1回目: 却下
+          return {
+            finalStatus: 'rejected' as const,
+            elapsedMs: 2000,
+            rejectionReason: 'エラーハンドリングが不十分',
+          };
+        }
+        // 2回目: マージ
+        return { finalStatus: 'merged' as const, elapsedMs: 1000 };
+      });
+
+      const runAgent = vi.fn().mockResolvedValue(undefined);
+      const { ctx, notifier } = makeCtx({
+        depsOverrides: {
+          runAgent,
+          execCommand: vi.fn().mockImplementation((cmd: string) => {
+            if (cmd.includes('git push')) return '';
+            return 'https://github.com/test/repo/pull/1';
+          }),
+        },
+      });
+
+      const result = await taskPipeline(ctx);
+      expect(result).toBe('done');
+
+      // 却下通知が送られている
+      expect(notifier.notifications.some((n) => n.message.includes('PR却下'))).toBe(true);
+      expect(notifier.notifications.some((n) => n.message.includes('エラーハンドリングが不十分'))).toBe(true);
+
+      // リトライ時の runAgent 呼び出しに却下理由が含まれている
+      // runAgent は implementation で呼ばれる（初回 + retry で最低2回、doc-update でも呼ばれる）
+      const agentCalls = runAgent.mock.calls.map((c: unknown[]) => c[0] as string);
+      const retryCall = agentCalls.find((prompt: string) => prompt.includes('前回の却下理由'));
+      expect(retryCall).toBeDefined();
+      expect(retryCall).toContain('エラーハンドリングが不十分');
+      expect(retryCall).toContain('上記の指摘を踏まえて実装してください。');
+
+      // 最終的にマージ完了
+      expect(notifier.notifications.some((n) => n.message.includes('マージ完了'))).toBe(true);
+    });
+
+    it('rejectionReason はリトライ後にクリアされ、2回目の implementation プロンプトには含まれない', async () => {
+      const { runMergePollingLoop: mockMergePolling } = await import('../../merge');
+      let mergeCallCount = 0;
+      vi.mocked(mockMergePolling).mockImplementation(async () => {
+        mergeCallCount++;
+        if (mergeCallCount === 1) {
+          return {
+            finalStatus: 'rejected' as const,
+            elapsedMs: 2000,
+            rejectionReason: '最初の却下理由',
+          };
+        }
+        return { finalStatus: 'merged' as const, elapsedMs: 1000 };
+      });
+
+      const runAgent = vi.fn().mockResolvedValue(undefined);
+      const { ctx } = makeCtx({
+        depsOverrides: {
+          runAgent,
+          execCommand: vi.fn().mockImplementation((cmd: string) => {
+            if (cmd.includes('git push')) return '';
+            return 'https://github.com/test/repo/pull/1';
+          }),
+        },
+      });
+
+      await taskPipeline(ctx);
+
+      // rejectionReason がクリアされている
+      expect(ctx.get('rejectionReason')).toBeUndefined();
+    });
+  });
 });

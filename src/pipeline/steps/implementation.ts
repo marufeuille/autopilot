@@ -59,9 +59,18 @@ export async function handleImplementation(ctx: TaskContext): Promise<FlowSignal
   deps.updateFileStatus(task.filePath, 'Doing');
 
   const retryReason = ctx.getRetryReason();
-  const prompt = retryReason
+  const rejectionReason = ctx.get('rejectionReason');
+
+  let prompt = retryReason
     ? buildRetryPrompt(task, cwd, retryReason)
     : buildTaskPrompt(task, story, cwd, useWorktree);
+
+  // 却下理由がある場合はプロンプトに追記
+  if (rejectionReason) {
+    prompt += `\n\n## 前回の却下理由\n${rejectionReason}\n上記の指摘を踏まえて実装してください。`;
+    // 次回の implementation 実行時に残らないようクリア
+    ctx.set('rejectionReason', undefined);
+  }
 
   await deps.runAgent(prompt, cwd);
 
