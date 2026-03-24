@@ -5,6 +5,7 @@ import { handleStartApproval } from '../start-approval';
 import { handleSyncMain, sanitizeSlug, WORKTREE_BASE_DIR } from '../sync-main';
 import { handleImplementation } from '../implementation';
 import { handlePRLifecycle } from '../pr-lifecycle';
+import { handleDocUpdate } from '../doc-update';
 import { handleDone } from '../done';
 import { FakeNotifier } from '../../../__tests__/helpers/fake-notifier';
 import { createFakeDeps, defaultReviewLoopResult } from '../../../__tests__/helpers/fake-deps';
@@ -507,6 +508,126 @@ describe('handlePRLifecycle', () => {
     if (signal.kind === 'retry') {
       expect(signal.from).toBe('pr-lifecycle');
     }
+  });
+});
+
+// -------- handleDocUpdate --------
+
+describe('handleDocUpdate', () => {
+  it('成功時に continue を返す', async () => {
+    const { ctx } = makeCtx();
+    const signal = await handleDocUpdate(ctx);
+    expect(signal.kind).toBe('continue');
+  });
+
+  it('runAgent にプロンプトと cwd を渡して呼ぶ', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({ depsOverrides: { runAgent } });
+    await handleDocUpdate(ctx);
+    expect(runAgent).toHaveBeenCalledOnce();
+    expect(runAgent).toHaveBeenCalledWith(expect.any(String), '/repo');
+  });
+
+  it('worktreePath が設定されている場合、runAgent に worktreePath を cwd として渡す', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({
+      depsOverrides: { runAgent },
+      ctxStore: { worktreePath: '/tmp/autopilot/test-task' },
+    });
+    await handleDocUpdate(ctx);
+    expect(runAgent).toHaveBeenCalledWith(
+      expect.any(String),
+      '/tmp/autopilot/test-task',
+    );
+  });
+
+  it('プロンプトに「README に what」の旨が含まれる', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({ depsOverrides: { runAgent } });
+    await handleDocUpdate(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).toContain('README');
+    expect(prompt).toContain('何をするか（what）');
+  });
+
+  it('プロンプトに「Vault に why」の旨が含まれる（localOnly でない場合）', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({ depsOverrides: { runAgent } });
+    await handleDocUpdate(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).toContain('Vault');
+    expect(prompt).toContain('なぜその設計か（why）');
+  });
+
+  it('プロンプトに「実装の詳細は書かない」の旨が含まれる', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({ depsOverrides: { runAgent } });
+    await handleDocUpdate(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).toContain('実装の詳細（how）は書かない');
+  });
+
+  it('localOnly 時は Vault 更新をスキップし README のみ対象とする', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({
+      depsOverrides: { runAgent },
+      ctxStore: { localOnly: true },
+    });
+    await handleDocUpdate(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).toContain('README のみを対象');
+    expect(prompt).not.toContain('なぜその設計か（why）');
+  });
+
+  it('localOnly でない場合は Vault も対象に含まれる', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({ depsOverrides: { runAgent } });
+    await handleDocUpdate(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).toContain('README と Vault');
+  });
+
+  it('成功時に通知を送る', async () => {
+    const { ctx, notifier } = makeCtx();
+    await handleDocUpdate(ctx);
+    expect(notifier.notifications.some((n) => n.message.includes('ドキュメント更新完了'))).toBe(true);
+  });
+
+  it('runAgent がエラーを投げても continue を返す（パイプラインを止めない）', async () => {
+    const runAgent = vi.fn().mockRejectedValue(new Error('agent failed'));
+    const { ctx } = makeCtx({ depsOverrides: { runAgent } });
+    const signal = await handleDocUpdate(ctx);
+    expect(signal.kind).toBe('continue');
+  });
+
+  it('エラー時に notifier で警告通知を送る', async () => {
+    const runAgent = vi.fn().mockRejectedValue(new Error('agent failed'));
+    const { ctx, notifier } = makeCtx({ depsOverrides: { runAgent } });
+    await handleDocUpdate(ctx);
+    expect(notifier.notifications.some((n) => n.message.includes('ドキュメント更新失敗'))).toBe(true);
+    expect(notifier.notifications.some((n) => n.message.includes('agent failed'))).toBe(true);
+  });
+
+  it('エラー時に notifier.notify が例外を投げても continue を返す（二重障害耐性）', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const runAgent = vi.fn().mockRejectedValue(new Error('agent failed'));
+    const { ctx, notifier } = makeCtx({ depsOverrides: { runAgent } });
+    // notifier.notify を上書きして例外を投げさせる
+    vi.spyOn(notifier, 'notify').mockRejectedValue(new Error('notification service down'));
+    const signal = await handleDocUpdate(ctx);
+    expect(signal.kind).toBe('continue');
+    warnSpy.mockRestore();
+  });
+
+  it('エラー時に console.warn でログ出力する', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const runAgent = vi.fn().mockRejectedValue(new Error('agent failed'));
+    const { ctx } = makeCtx({ depsOverrides: { runAgent } });
+    await handleDocUpdate(ctx);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('ドキュメント更新に失敗しました'),
+    );
+    warnSpy.mockRestore();
   });
 });
 
