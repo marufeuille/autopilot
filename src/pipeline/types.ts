@@ -12,6 +12,10 @@ export type FlowSignal =
 
 export type PipelineResult = 'done' | 'skipped' | 'aborted';
 
+export interface PipelineOptions {
+  maxRetries?: number;
+}
+
 export interface Step<TCtx> {
   name: StepName;
   handler: (ctx: TCtx) => Promise<FlowSignal>;

@@ -1,4 +1,4 @@
-import { FlowSignal, PipelineResult, Step, StepName, TaskContext } from './types';
+import { FlowSignal, PipelineOptions, PipelineResult, Step, StepName, TaskContext } from './types';
 
 /**
  * Pipeline ランナーを生成する。
@@ -11,7 +11,11 @@ import { FlowSignal, PipelineResult, Step, StepName, TaskContext } from './types
  * - abort: signal.error を throw する
  * - retry: signal.from で指定した step 名まで巻き戻す
  */
-export function createPipeline<TCtx extends TaskContext>(steps: Step<TCtx>[]) {
+export const DEFAULT_MAX_RETRIES = 10;
+
+export function createPipeline<TCtx extends TaskContext>(steps: Step<TCtx>[], options?: PipelineOptions) {
+  const _maxRetries = options?.maxRetries ?? DEFAULT_MAX_RETRIES;
+
   return async function run(ctx: TCtx): Promise<PipelineResult> {
     let stepIndex = 0;
 
