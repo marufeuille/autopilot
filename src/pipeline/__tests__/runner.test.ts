@@ -82,6 +82,128 @@ describe('createPipeline', () => {
     expect(ctx.getRetryReason()).toBe('first attempt failed');
   });
 
+  it('retryCount > maxRetries の場合に abort として処理される', async () => {
+    const alwaysRetry = vi.fn(async (_ctx: TaskContext): Promise<FlowSignal> => ({
+      kind: 'retry', from: 'a', reason: 'always fails',
+    }));
+
+    const run = createPipeline([
+      step('a', handler({ kind: 'continue' })),
+      step('b', alwaysRetry),
+    ], { maxRetries: 3 });
+
+    await expect(run(makeCtx())).rejects.toThrow(
+      'Pipeline retry limit exceeded (3/3): last retry requested by step "b", reason: "always fails"',
+    );
+    // 初回 + 3回リトライ = 4回呼ばれる
+    expect(alwaysRetry).toHaveBeenCalledTimes(4);
+  });
+
+  it('maxRetries未満のリトライは正常に巻き戻る', async () => {
+    let callCount = 0;
+    const retriable = vi.fn(async (_ctx: TaskContext): Promise<FlowSignal> => {
+      callCount++;
+      // 3回リトライして4回目でcontinue
+      return callCount <= 3
+        ? { kind: 'retry', from: 'a', reason: `attempt ${callCount}` }
+        : { kind: 'continue' };
+    });
+
+    const run = createPipeline([
+      step('a', handler({ kind: 'continue' })),
+      step('b', retriable),
+    ], { maxRetries: 3 });
+
+    const result = await run(makeCtx());
+    expect(result).toBe('done');
+  });
+
+  it('リトライカウンターはステップをまたいで累積する', async () => {
+    let stepBCalls = 0;
+    let stepCCalls = 0;
+
+    const stepB = vi.fn(async (_ctx: TaskContext): Promise<FlowSignal> => {
+      stepBCalls++;
+      // 1回目はretry、2回目以降はcontinue
+      return stepBCalls === 1
+        ? { kind: 'retry', from: 'a', reason: 'b failed' }
+        : { kind: 'continue' };
+    });
+
+    const stepC = vi.fn(async (_ctx: TaskContext): Promise<FlowSignal> => {
+      stepCCalls++;
+      // 1回目はretry、2回目以降はcontinue
+      return stepCCalls === 1
+        ? { kind: 'retry', from: 'a', reason: 'c failed' }
+        : { kind: 'continue' };
+    });
+
+    const run = createPipeline([
+      step('a', handler({ kind: 'continue' })),
+      step('b', stepB),
+      step('c', stepC),
+    ], { maxRetries: 2 });
+
+    // b が1回 retry、c が1回 retry → 合計2回で上限ちょうど → 成功
+    const result = await run(makeCtx());
+    expect(result).toBe('done');
+  });
+
+  it('ステップ累積リトライが上限を超えるとabortになる', async () => {
+    let stepBCalls = 0;
+    let stepCCalls = 0;
+
+    const stepB = vi.fn(async (_ctx: TaskContext): Promise<FlowSignal> => {
+      stepBCalls++;
+      return stepBCalls === 1
+        ? { kind: 'retry', from: 'a', reason: 'b failed' }
+        : { kind: 'continue' };
+    });
+
+    const stepC = vi.fn(async (_ctx: TaskContext): Promise<FlowSignal> => {
+      stepCCalls++;
+      // 常にretry
+      return { kind: 'retry', from: 'a', reason: 'c always fails' };
+    });
+
+    const run = createPipeline([
+      step('a', handler({ kind: 'continue' })),
+      step('b', stepB),
+      step('c', stepC),
+    ], { maxRetries: 2 });
+
+    // b: 1回retry (累積1), c: 1回retry (累積2), c: 再度retry (累積3 > 2) → abort
+    await expect(run(makeCtx())).rejects.toThrow(
+      'Pipeline retry limit exceeded (2/2): last retry requested by step "c", reason: "c always fails"',
+    );
+  });
+
+  it('エラーメッセージにステップ名・リトライ回数・reasonが含まれる', async () => {
+    const run = createPipeline([
+      step('implementation', handler({ kind: 'retry', from: 'implementation', reason: 'Review NG: 型安全性の問題' })),
+    ], { maxRetries: 1 });
+
+    await expect(run(makeCtx())).rejects.toThrow('Pipeline retry limit exceeded');
+    await expect(run(makeCtx())).rejects.toThrow('step "implementation"');
+    await expect(run(makeCtx())).rejects.toThrow('reason: "Review NG: 型安全性の問題"');
+  });
+
+  it('maxRetriesのデフォルト値は10', async () => {
+    let callCount = 0;
+    const alwaysRetry = vi.fn(async (_ctx: TaskContext): Promise<FlowSignal> => {
+      callCount++;
+      return { kind: 'retry', from: 'a', reason: 'fail' };
+    });
+
+    const run = createPipeline([
+      step('a', alwaysRetry),
+    ]);
+
+    await expect(run(makeCtx())).rejects.toThrow('Pipeline retry limit exceeded (10/10)');
+    // 初回 + 10回リトライ + 上限超過の1回 = 11回
+    expect(callCount).toBe(11);
+  });
+
   it('存在しないstep名でretryするとエラーになる', async () => {
     const run = createPipeline([
       step('a', handler({ kind: 'retry', from: 'no-such-step', reason: 'oops' })),
