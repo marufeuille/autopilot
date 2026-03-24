@@ -18,6 +18,7 @@ export function createPipeline<TCtx extends TaskContext>(steps: Step<TCtx>[], op
 
   return async function run(ctx: TCtx): Promise<PipelineResult> {
     let stepIndex = 0;
+    let retryCount = 0;
 
     while (stepIndex < steps.length) {
       const current = steps[stepIndex];
@@ -42,6 +43,15 @@ export function createPipeline<TCtx extends TaskContext>(steps: Step<TCtx>[], op
               `Available steps: ${steps.map((s) => s.name).join(', ')}`,
             );
           }
+
+          retryCount++;
+          if (retryCount > _maxRetries) {
+            throw new Error(
+              `Pipeline retry limit exceeded (${retryCount - 1}/${_maxRetries}): ` +
+              `last retry requested by step "${current.name}", reason: "${signal.reason}"`,
+            );
+          }
+
           ctx.set('retryReason', signal.reason);
           stepIndex = targetIndex;
           break;
