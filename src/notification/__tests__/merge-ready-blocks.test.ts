@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildMergeReadyBlocks, buildRejectModal } from '../message-builder';
+import { buildMergeReadyBlocks, buildRejectModal, sanitizePrUrl } from '../message-builder';
 
 describe('buildMergeReadyBlocks', () => {
   const prUrl = 'https://github.com/org/repo/pull/42';
@@ -72,6 +72,18 @@ describe('buildMergeReadyBlocks', () => {
     expect(section.text.text).not.toContain('|innocent');
     expect(section.text.text).not.toContain('<script>');
   });
+
+  it('NG ボタンの value にもサニタイズ済み URL が使われる', () => {
+    const maliciousUrl = 'https://evil.com|innocent<script>';
+    const blocks = buildMergeReadyBlocks(maliciousUrl, taskSlug) as any[];
+    const actions = blocks.find((b) => b.type === 'actions');
+    const button = actions.elements[0];
+    // value にも < > | が除去された safeUrl が使われる
+    expect(button.value).toBe('https://evil.cominnocentscript');
+    expect(button.value).not.toContain('<');
+    expect(button.value).not.toContain('>');
+    expect(button.value).not.toContain('|');
+  });
 });
 
 describe('buildRejectModal', () => {
@@ -87,9 +99,23 @@ describe('buildRejectModal', () => {
     expect(modal.callback_id).toBe('pr_reject_modal');
   });
 
-  it('private_metadata に prUrl が埋め込まれている', () => {
+  it('private_metadata にサニタイズ済み prUrl が埋め込まれている', () => {
     const modal = buildRejectModal(prUrl);
     expect(modal.private_metadata).toBe(prUrl);
+  });
+
+  it('悪意ある文字列を含む prUrl がサニタイズされて private_metadata に入る', () => {
+    const maliciousUrl = 'https://evil.com|innocent<script>';
+    const modal = buildRejectModal(maliciousUrl);
+    expect(modal.private_metadata).toBe('https://evil.cominnocentscript');
+    expect(modal.private_metadata).not.toContain('<');
+    expect(modal.private_metadata).not.toContain('>');
+    expect(modal.private_metadata).not.toContain('|');
+  });
+
+  it('private_metadata の 3000 文字制限を超える URL でエラーがスローされる', () => {
+    const longUrl = 'https://github.com/org/repo/pull/' + 'a'.repeat(3000);
+    expect(() => buildRejectModal(longUrl)).toThrow('3000 文字を超えています');
   });
 
   it('submit ボタンと close ボタンが設定されている', () => {
@@ -109,5 +135,26 @@ describe('buildRejectModal', () => {
     expect(inputBlock.element.type).toBe('plain_text_input');
     expect(inputBlock.element.action_id).toBe('reason_input');
     expect(inputBlock.element.multiline).toBe(true);
+  });
+});
+
+describe('sanitizePrUrl', () => {
+  it('< > | を除去する', () => {
+    expect(sanitizePrUrl('https://evil.com|foo<bar>')).toBe('https://evil.comfoobar');
+  });
+
+  it('正常な URL はそのまま返す', () => {
+    const url = 'https://github.com/org/repo/pull/42';
+    expect(sanitizePrUrl(url)).toBe(url);
+  });
+
+  it('maxLength を超える場合にエラーをスローする', () => {
+    const longUrl = 'https://example.com/' + 'x'.repeat(2000);
+    expect(() => sanitizePrUrl(longUrl, 100)).toThrow('100 文字を超えています');
+  });
+
+  it('maxLength ちょうどの場合はエラーにならない', () => {
+    const url = 'x'.repeat(100);
+    expect(() => sanitizePrUrl(url, 100)).not.toThrow();
   });
 });

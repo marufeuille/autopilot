@@ -205,6 +205,32 @@ export function buildCIEscalationMessage(ctx: NotificationContext): string {
   return lines.join('\n');
 }
 
+/** Slack Button value の最大文字数 */
+const SLACK_BUTTON_VALUE_MAX = 2000;
+/** Slack private_metadata の最大文字数 */
+const SLACK_PRIVATE_METADATA_MAX = 3000;
+
+/**
+ * PR URL をサニタイズする
+ *
+ * Slack mrkdwn インジェクションを防ぐために `<`, `>`, `|` を除去し、
+ * Slack API の文字数制限内に収まるようバリデーションを行う。
+ *
+ * @param prUrl 生の PR URL
+ * @param maxLength 許容する最大文字数（デフォルト: SLACK_BUTTON_VALUE_MAX）
+ * @returns サニタイズ済み URL
+ * @throws maxLength を超過した場合
+ */
+export function sanitizePrUrl(prUrl: string, maxLength: number = SLACK_BUTTON_VALUE_MAX): string {
+  const sanitized = prUrl.replace(/[<>|]/g, '');
+  if (sanitized.length > maxLength) {
+    throw new Error(
+      `PR URL が ${maxLength} 文字を超えています (${sanitized.length} 文字): URL を確認してください`,
+    );
+  }
+  return sanitized;
+}
+
 /**
  * 「マージ準備完了」通知の Block Kit ブロックを生成する
  *
@@ -217,7 +243,7 @@ export function buildCIEscalationMessage(ctx: NotificationContext): string {
  */
 export function buildMergeReadyBlocks(prUrl: string, taskSlug: string): KnownBlock[] {
   // Slack mrkdwn のリンク構文を防ぐため <url|label> 形式でリンク化する
-  const safeUrl = prUrl.replace(/[<>|]/g, '');
+  const safeUrl = sanitizePrUrl(prUrl);
   const linkedUrl = `<${safeUrl}|${safeUrl}>`;
   return [
     {
@@ -235,7 +261,7 @@ export function buildMergeReadyBlocks(prUrl: string, taskSlug: string): KnownBlo
           text: { type: 'plain_text', text: '❌ NG（却下）' },
           style: 'danger',
           action_id: 'pr_reject_ng',
-          value: prUrl,
+          value: safeUrl,
         },
       ],
     },
@@ -248,10 +274,11 @@ export function buildMergeReadyBlocks(prUrl: string, taskSlug: string): KnownBlo
  * @param prUrl PR の URL（private_metadata に埋め込む）
  */
 export function buildRejectModal(prUrl: string): ModalView {
+  const safeUrl = sanitizePrUrl(prUrl, SLACK_PRIVATE_METADATA_MAX);
   return {
     type: 'modal',
     callback_id: 'pr_reject_modal',
-    private_metadata: prUrl,
+    private_metadata: safeUrl,
     title: { type: 'plain_text', text: '却下理由' },
     submit: { type: 'plain_text', text: '送信' },
     close: { type: 'plain_text', text: 'キャンセル' },

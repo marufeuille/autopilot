@@ -161,7 +161,7 @@ export function registerApprovalHandlers(app: App): void {
  */
 export function registerPRRejectHandlers(app: App): void {
   // NG ボタン: モーダルを開く
-  app.action<BlockAction<ButtonAction>>('pr_reject_ng', async ({ body, ack, client }) => {
+  app.action<BlockAction<ButtonAction>>('pr_reject_ng', async ({ body, ack, client, respond }) => {
     await ack();
     try {
       const action = body.actions[0];
@@ -169,19 +169,29 @@ export function registerPRRejectHandlers(app: App): void {
         logWarn('pr_reject_ng: actions が空または value がありません', { phase: 'pr_reject_ng' });
         return;
       }
+      const triggerId = body.trigger_id;
+      if (!triggerId) {
+        logWarn('pr_reject_ng: trigger_id が取得できませんでした', { phase: 'pr_reject_ng' });
+        await respond({ text: '⚠️ モーダルを開けませんでした。もう一度お試しください。', replace_original: false });
+        return;
+      }
       const prUrl = action.value;
       await client.views.open({
-        trigger_id: body.trigger_id,
+        trigger_id: triggerId,
         view: buildRejectModal(prUrl),
       });
     } catch (err) {
       logError('pr_reject_ng: モーダルの表示に失敗しました', { phase: 'pr_reject_ng' }, err);
+      try {
+        await respond({ text: '⚠️ モーダルの表示に失敗しました。もう一度お試しください。', replace_original: false });
+      } catch {
+        // respond が失敗してもログは既に出力済み
+      }
     }
   });
 
   // モーダル送信: 却下理由を取得して RejectionRegistry にシグナル
   app.view('pr_reject_modal', async ({ ack, view }) => {
-    await ack();
     try {
       const prUrl = view.private_metadata;
       const reason = view.state?.values?.['reason_block']?.['reason_input']?.value ?? '';
@@ -192,8 +202,15 @@ export function registerPRRejectHandlers(app: App): void {
           prUrl,
         });
       }
+      await ack();
     } catch (err) {
       logError('pr_reject_modal: 却下処理に失敗しました', { phase: 'pr_reject_modal' }, err);
+      await ack({
+        response_action: 'errors',
+        errors: {
+          reason_block: '却下処理に失敗しました。もう一度お試しください。',
+        },
+      });
     }
   });
 }

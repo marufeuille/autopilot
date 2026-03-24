@@ -84,6 +84,7 @@ describe('registerPRRejectHandlers', () => {
         client: {
           views: { open: vi.fn().mockResolvedValue({}) },
         },
+        respond: vi.fn(),
       });
       expect(ack).toHaveBeenCalled();
     });
@@ -100,6 +101,7 @@ describe('registerPRRejectHandlers', () => {
         client: {
           views: { open: mockViewsOpen },
         },
+        respond: vi.fn(),
       });
 
       expect(mockViewsOpen).toHaveBeenCalledWith(
@@ -126,6 +128,7 @@ describe('registerPRRejectHandlers', () => {
         client: {
           views: { open: mockViewsOpen },
         },
+        respond: vi.fn(),
       });
 
       const viewArg = mockViewsOpen.mock.calls[0][0].view;
@@ -147,12 +150,35 @@ describe('registerPRRejectHandlers', () => {
         client: {
           views: { open: mockViewsOpen },
         },
+        respond: vi.fn(),
       });
 
       expect(mockViewsOpen).not.toHaveBeenCalled();
       expect(logWarn).toHaveBeenCalledWith(
         expect.stringContaining('actions が空'),
         expect.any(Object),
+      );
+    });
+
+    it('trigger_id が undefined の場合はモーダルを開かず respond でユーザーに通知する', async () => {
+      const handler = mockApp._actionHandlers.get('pr_reject_ng');
+      const mockViewsOpen = vi.fn().mockResolvedValue({});
+      const mockRespond = vi.fn().mockResolvedValue({});
+      await handler({
+        ack: vi.fn(),
+        body: {
+          actions: [{ value: 'https://github.com/org/repo/pull/42' }],
+          trigger_id: undefined,
+        },
+        client: {
+          views: { open: mockViewsOpen },
+        },
+        respond: mockRespond,
+      });
+
+      expect(mockViewsOpen).not.toHaveBeenCalled();
+      expect(mockRespond).toHaveBeenCalledWith(
+        expect.objectContaining({ text: expect.stringContaining('モーダルを開けませんでした') }),
       );
     });
   });
@@ -259,6 +285,36 @@ describe('registerPRRejectHandlers', () => {
       expect(signalRejection).toHaveBeenCalledWith(
         'https://github.com/org/repo/pull/42',
         '',
+      );
+    });
+
+    it('signalRejection が例外をスローした場合に ack で errors を返す', async () => {
+      vi.mocked(signalRejection).mockImplementationOnce(() => {
+        throw new Error('unexpected error');
+      });
+      const handler = mockApp._viewHandlers.get('submit:pr_reject_modal');
+      const ack = vi.fn();
+      await handler({
+        ack,
+        view: {
+          private_metadata: 'https://github.com/org/repo/pull/42',
+          state: {
+            values: {
+              reason_block: {
+                reason_input: { value: '理由' },
+              },
+            },
+          },
+        },
+      });
+
+      expect(ack).toHaveBeenCalledWith(
+        expect.objectContaining({
+          response_action: 'errors',
+          errors: expect.objectContaining({
+            reason_block: expect.stringContaining('却下処理に失敗しました'),
+          }),
+        }),
       );
     });
   });
