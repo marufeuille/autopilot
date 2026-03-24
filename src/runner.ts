@@ -6,6 +6,7 @@ import {
   buildThreadOriginMessage,
 } from './notification';
 import { GitSyncError } from './git';
+import { resolveRepoPath } from './config';
 import { RunnerDeps, createDefaultRunnerDeps } from './runner-deps';
 import { createTaskContext } from './pipeline/runner';
 import { taskPipeline } from './pipeline/task-pipeline';
@@ -81,7 +82,7 @@ export async function runStory(
   deps?: RunnerDeps,
 ): Promise<void> {
   const d = deps ?? createDefaultRunnerDeps();
-  const repoPath = `${process.env.HOME}/dev/${story.project}`;
+  const repoPath = resolveRepoPath(story.project);
   console.log(`[runner] starting story: ${story.slug}`);
 
   const tasks = await d.getStoryTasks(story.project, story.slug);
