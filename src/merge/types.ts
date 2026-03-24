@@ -76,7 +76,9 @@ export interface MergePollingOptions {
  */
 export interface MergePollingResult {
   /** 最終ステータス */
-  finalStatus: 'merged' | 'closed' | 'timeout' | 'error';
+  finalStatus: 'merged' | 'closed' | 'timeout' | 'error' | 'rejected';
   /** 経過時間（ミリ秒） */
   elapsedMs: number;
+  /** 却下理由（finalStatus が 'rejected' の場合のみ） */
+  rejectionReason?: string;
 }

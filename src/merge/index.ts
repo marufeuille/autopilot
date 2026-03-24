@@ -19,3 +19,9 @@ export {
 } from './merge-service';
 
 export { runMergePollingLoop } from './polling';
+
+export {
+  waitForRejection,
+  signalRejection,
+  cancelWaitForRejection,
+} from './rejection-registry';
