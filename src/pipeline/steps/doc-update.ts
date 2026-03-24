@@ -89,7 +89,7 @@ export async function handleDocUpdate(ctx: TaskContext): Promise<FlowSignal> {
     await notifier.notify(
       `⚠️ *ドキュメント更新失敗* (${task.slug}): ${message}`,
       story.slug,
-    );
+    ).catch(() => {});
   }
 
   return { kind: 'continue' };
