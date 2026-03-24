@@ -2,11 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { runMergePollingLoop } from '../polling';
 import { MergeServiceDeps } from '../merge-service';
 import { MergeError } from '../types';
+import { signalRejection } from '../rejection-registry';
+import { sleep } from '../../ci/poller';
 
 // sleep をモックして即座に解決させる
 vi.mock('../../ci/poller', () => ({
   sleep: vi.fn().mockResolvedValue(undefined),
 }));
+
+const mockedSleep = vi.mocked(sleep);
 
 function createMockDeps(overrides?: Partial<MergeServiceDeps>): MergeServiceDeps {
   return {
@@ -319,5 +323,101 @@ describe('runMergePollingLoop', () => {
         maxWaitMs: NaN,
       }),
     ).rejects.toThrow('maxWaitMs must be a non-negative finite number');
+  });
+
+  // --- rejection シグナルのテスト ---
+
+  it('ポーリング中に signalRejection が呼ばれると finalStatus: rejected と rejectionReason が返る', async () => {
+    const prUrl = 'https://github.com/org/repo/pull/100';
+    const execGh = vi.fn().mockReturnValue(prStatusJson('OPEN'));
+    const deps = createMockDeps({ execGh });
+
+    // sleep の1回目呼び出し時に rejection シグナルを送信
+    mockedSleep.mockImplementationOnce(async () => {
+      signalRejection(prUrl, 'テストが不十分です');
+    });
+
+    const result = await runMergePollingLoop(prUrl, '/repo', deps, {
+      pollingIntervalMs: 100,
+      maxWaitMs: 60000,
+    });
+
+    expect(result.finalStatus).toBe('rejected');
+    expect(result.rejectionReason).toBe('テストが不十分です');
+    expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('ポーリング側が先に完了した場合（MERGED）は従来と同じ結果が返り、registry がクリーンアップされる', async () => {
+    const prUrl = 'https://github.com/org/repo/pull/101';
+    const deps = createMockDeps({
+      execGh: vi.fn().mockReturnValue(prStatusJson('MERGED')),
+    });
+
+    const result = await runMergePollingLoop(prUrl, '/repo', deps, {
+      pollingIntervalMs: 100,
+      maxWaitMs: 5000,
+    });
+
+    expect(result.finalStatus).toBe('merged');
+    expect(result.rejectionReason).toBeUndefined();
+
+    // クリーンアップされているので signalRejection は false を返す
+    const signaled = signalRejection(prUrl, '遅延シグナル');
+    expect(signaled).toBe(false);
+  });
+
+  it('ポーリング側が先に完了した場合（CLOSED）も registry がクリーンアップされる', async () => {
+    const prUrl = 'https://github.com/org/repo/pull/102';
+    const deps = createMockDeps({
+      execGh: vi.fn().mockReturnValue(prStatusJson('CLOSED')),
+    });
+
+    const result = await runMergePollingLoop(prUrl, '/repo', deps, {
+      pollingIntervalMs: 100,
+      maxWaitMs: 5000,
+    });
+
+    expect(result.finalStatus).toBe('closed');
+
+    // クリーンアップ確認
+    const signaled = signalRejection(prUrl, '遅延シグナル');
+    expect(signaled).toBe(false);
+  });
+
+  it('rejection 理由が空文字でも正しく返る', async () => {
+    const prUrl = 'https://github.com/org/repo/pull/103';
+    const execGh = vi.fn().mockReturnValue(prStatusJson('OPEN'));
+    const deps = createMockDeps({ execGh });
+
+    // sleep の1回目呼び出し時に空文字の rejection シグナルを送信
+    mockedSleep.mockImplementationOnce(async () => {
+      signalRejection(prUrl, '');
+    });
+
+    const result = await runMergePollingLoop(prUrl, '/repo', deps, {
+      pollingIntervalMs: 100,
+      maxWaitMs: 60000,
+    });
+
+    expect(result.finalStatus).toBe('rejected');
+    expect(result.rejectionReason).toBe('');
+  });
+
+  it('タイムアウト時も registry がクリーンアップされる', async () => {
+    const prUrl = 'https://github.com/org/repo/pull/104';
+    const deps = createMockDeps({
+      execGh: vi.fn().mockReturnValue(prStatusJson('OPEN')),
+    });
+
+    const result = await runMergePollingLoop(prUrl, '/repo', deps, {
+      pollingIntervalMs: 100,
+      maxWaitMs: 0,
+    });
+
+    expect(result.finalStatus).toBe('timeout');
+
+    // クリーンアップ確認
+    const signaled = signalRejection(prUrl, '遅延シグナル');
+    expect(signaled).toBe(false);
   });
 });

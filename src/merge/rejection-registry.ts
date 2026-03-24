@@ -32,3 +32,12 @@ export function signalRejection(prUrl: string, reason: string): boolean {
   resolve(reason);
   return true;
 }
+
+/**
+ * 指定 prUrl の待機エントリを削除する（クリーンアップ用）。
+ * ポーリング側が先に完了した場合に waitForRejection の Promise がリークしないよう、
+ * registry からエントリを取り除く。
+ */
+export function cancelWaitForRejection(prUrl: string): void {
+  registry.delete(prUrl);
+}

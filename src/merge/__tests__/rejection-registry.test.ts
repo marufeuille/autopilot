@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { waitForRejection, signalRejection } from '../rejection-registry';
+import { waitForRejection, signalRejection, cancelWaitForRejection } from '../rejection-registry';
 
 describe('RejectionRegistry', () => {
   it('waitForRejection → signalRejection で reason が resolve される', async () => {
@@ -48,5 +48,20 @@ describe('RejectionRegistry', () => {
 
     await expect(promise1).resolves.toBe('理由A');
     await expect(promise2).resolves.toBe('理由B');
+  });
+
+  it('cancelWaitForRejection でエントリが削除され signalRejection は false を返す', () => {
+    const prUrl = 'https://github.com/owner/repo/pull/20';
+    waitForRejection(prUrl);
+
+    cancelWaitForRejection(prUrl);
+
+    const result = signalRejection(prUrl, '遅延シグナル');
+    expect(result).toBe(false);
+  });
+
+  it('cancelWaitForRejection は未登録の prUrl に対しても安全に呼べる', () => {
+    // エラーが発生しないことを確認
+    cancelWaitForRejection('https://github.com/owner/repo/pull/999');
   });
 });
