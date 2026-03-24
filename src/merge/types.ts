@@ -1,7 +1,7 @@
 /**
  * マージサービスの型定義
  *
- * マージ実行の結果やエラーを構造化して表現する。
+ * PRステータスの取得やマージポーリングに使用する型を定義する。
  */
 
 /**
@@ -37,24 +37,6 @@ export class MergeError extends Error {
 }
 
 /**
- * マージ前のバリデーション結果
- */
-export interface MergeValidationResult {
-  /** マージ可能かどうか */
-  mergeable: boolean;
-  /** マージ不可の場合の理由一覧 */
-  errors: MergeValidationError[];
-}
-
-/**
- * バリデーションエラー個別項目
- */
-export interface MergeValidationError {
-  code: MergeErrorCode;
-  message: string;
-}
-
-/**
  * PRのステータス情報（gh pr view で取得）
  */
 export interface PullRequestStatus {
@@ -75,18 +57,6 @@ export interface StatusCheck {
   name: string;
   status: string;
   conclusion: string;
-}
-
-/**
- * マージ実行結果
- */
-export interface MergeResult {
-  /** マージ成功かどうか */
-  success: boolean;
-  /** マージされたPR URL */
-  prUrl: string;
-  /** マージ出力メッセージ */
-  output?: string;
 }
 
 /**
