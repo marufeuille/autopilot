@@ -42,6 +42,25 @@ export const config = {
   watchProject: process.env.WATCH_PROJECT ?? 'claude-workflow-kit',
 } as const;
 
+/**
+ * repoPath の解決。
+ * 優先順位: REPO_BASE_PATH > ${HOME}/dev > エラー
+ */
+export function resolveRepoPath(project: string): string {
+  const repoBasePath = process.env.REPO_BASE_PATH;
+  if (repoBasePath) {
+    return path.join(repoBasePath, project);
+  }
+  const home = process.env.HOME;
+  if (home) {
+    return path.join(home, 'dev', project);
+  }
+  throw new Error(
+    'Cannot resolve repo path: neither REPO_BASE_PATH nor HOME environment variable is set. ' +
+    'Please set REPO_BASE_PATH to specify the base directory for repositories.',
+  );
+}
+
 export function vaultProjectPath(project: string): string {
   return path.join(config.vaultPath, 'Projects', project);
 }
