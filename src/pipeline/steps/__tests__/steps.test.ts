@@ -629,6 +629,67 @@ describe('handleDocUpdate', () => {
     );
     warnSpy.mockRestore();
   });
+
+  it('プロンプトにタスク slug とストーリー slug が含まれる', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({ depsOverrides: { runAgent } });
+    await handleDocUpdate(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).toContain('test-task');
+    expect(prompt).toContain('test-story');
+  });
+
+  it('プロンプトにタスク内容とストーリー内容が含まれる', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({ depsOverrides: { runAgent } });
+    await handleDocUpdate(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).toContain('タスク内容');
+    expect(prompt).toContain('ストーリー内容');
+  });
+
+  it('localOnly + worktreePath の組み合わせで正しく動作する', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({
+      depsOverrides: { runAgent },
+      ctxStore: { localOnly: true, worktreePath: '/tmp/autopilot/test-task' },
+    });
+    await handleDocUpdate(ctx);
+    // worktreePath が cwd として使われる
+    expect(runAgent).toHaveBeenCalledWith(expect.any(String), '/tmp/autopilot/test-task');
+    // localOnly なので README のみ
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).toContain('README のみを対象');
+    expect(prompt).not.toContain('なぜその設計か（why）');
+  });
+
+  it('非 Error オブジェクトが throw されても continue を返す', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const runAgent = vi.fn().mockRejectedValue('string error');
+    const { ctx, notifier } = makeCtx({ depsOverrides: { runAgent } });
+    const signal = await handleDocUpdate(ctx);
+    expect(signal.kind).toBe('continue');
+    expect(notifier.notifications.some((n) => n.message.includes('string error'))).toBe(true);
+    warnSpy.mockRestore();
+  });
+
+  it('成功時の通知にタスク slug が含まれる', async () => {
+    const { ctx, notifier } = makeCtx();
+    await handleDocUpdate(ctx);
+    const docNotif = notifier.notifications.find((n) => n.message.includes('ドキュメント更新完了'));
+    expect(docNotif).toBeDefined();
+    expect(docNotif!.message).toContain('test-task');
+  });
+
+  it('エラー時の通知にタスク slug とエラーメッセージが含まれる', async () => {
+    const runAgent = vi.fn().mockRejectedValue(new Error('timeout exceeded'));
+    const { ctx, notifier } = makeCtx({ depsOverrides: { runAgent } });
+    await handleDocUpdate(ctx);
+    const failNotif = notifier.notifications.find((n) => n.message.includes('ドキュメント更新失敗'));
+    expect(failNotif).toBeDefined();
+    expect(failNotif!.message).toContain('test-task');
+    expect(failNotif!.message).toContain('timeout exceeded');
+  });
 });
 
 // -------- handleDone --------
