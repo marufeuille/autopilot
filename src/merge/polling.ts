@@ -19,20 +19,31 @@ const DEFAULT_MAX_WAIT_MS = 86_400_000; // 24時間
 const DEFAULT_MAX_CONSECUTIVE_ERRORS = 10;
 
 /**
+ * runPollingInternal の引数をまとめた構造体
+ */
+interface PollingInternalOptions {
+  prUrl: string;
+  cwd: string;
+  deps: MergeServiceDeps;
+  pollingInterval: number;
+  maxWait: number;
+  maxConsecutiveErrors: number;
+  startTime: number;
+  abortSignal: { aborted: boolean };
+}
+
+/**
  * ポーリングループの内部実装（Promise に包んで Promise.race に渡す用）
  *
  * aborted フラグが true になったらループを抜ける（rejection 側が先に完了した場合のクリーンアップ）
  */
 async function runPollingInternal(
-  prUrl: string,
-  cwd: string,
-  deps: MergeServiceDeps,
-  pollingInterval: number,
-  maxWait: number,
-  maxConsecutiveErrors: number,
-  startTime: number,
-  abortSignal: { aborted: boolean },
+  options: PollingInternalOptions,
 ): Promise<MergePollingResult> {
+  const {
+    prUrl, cwd, deps, pollingInterval, maxWait,
+    maxConsecutiveErrors, startTime, abortSignal,
+  } = options;
   let consecutiveErrors = 0;
 
   while (!abortSignal.aborted) {
@@ -137,9 +148,10 @@ export async function runMergePollingLoop(
   }));
 
   // ポーリングループ本体
-  const pollingPromise = runPollingInternal(
-    prUrl, cwd, deps, pollingInterval, maxWait, maxConsecutiveErrors, startTime, abortSignal,
-  );
+  const pollingPromise = runPollingInternal({
+    prUrl, cwd, deps, pollingInterval, maxWait,
+    maxConsecutiveErrors, startTime, abortSignal,
+  });
 
   // Promise.race で競合させる
   const result = await Promise.race([pollingPromise, rejectionPromise]);
@@ -149,6 +161,8 @@ export async function runMergePollingLoop(
     abortSignal.aborted = true;
   } else {
     // ポーリングが先に完了 → registry のクリーンアップ
+    // cancelWaitForRejection は rejectionPromise を resolve して
+    // メモリリークを防止する
     cancelWaitForRejection(prUrl);
   }
 

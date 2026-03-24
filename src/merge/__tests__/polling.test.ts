@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { runMergePollingLoop } from '../polling';
 import { MergeServiceDeps } from '../merge-service';
 import { MergeError } from '../types';
-import { signalRejection } from '../rejection-registry';
+import { signalRejection, _resetForTest } from '../rejection-registry';
 import { sleep } from '../../ci/poller';
 
 // sleep をモックして即座に解決させる
@@ -11,6 +11,16 @@ vi.mock('../../ci/poller', () => ({
 }));
 
 const mockedSleep = vi.mocked(sleep);
+
+/**
+ * 手動制御の Deferred Promise を作成する。
+ * テスト内で非同期処理のタイミングを明示的に制御するために使用。
+ */
+function createDeferred<T = void>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => { resolve = r; });
+  return { promise, resolve };
+}
 
 function createMockDeps(overrides?: Partial<MergeServiceDeps>): MergeServiceDeps {
   return {
@@ -31,6 +41,7 @@ function prStatusJson(state: string): string {
 describe('runMergePollingLoop', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetForTest();
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -109,6 +120,7 @@ describe('runMergePollingLoop', () => {
 
   it('タイムアウトで finalStatus: timeout を返す', async () => {
     // maxWaitMs を 0 にしてタイムアウトを即座に発生させる
+    // ループ先頭の elapsed >= maxWait チェックで 0 >= 0 が常に成立するため決定的
     const deps = createMockDeps({
       execGh: vi.fn().mockReturnValue(prStatusJson('OPEN')),
     });
@@ -121,6 +133,9 @@ describe('runMergePollingLoop', () => {
     );
 
     expect(result.finalStatus).toBe('timeout');
+    // タイムアウトチェックが fetchPullRequestStatus より先に実行されるため、
+    // execGh は呼ばれない
+    expect(deps.execGh).not.toHaveBeenCalled();
   });
 
   it('fetchPullRequestStatus に正しい引数を渡す', async () => {
@@ -332,19 +347,30 @@ describe('runMergePollingLoop', () => {
     const execGh = vi.fn().mockReturnValue(prStatusJson('OPEN'));
     const deps = createMockDeps({ execGh });
 
-    // sleep の1回目呼び出し時に rejection シグナルを送信
-    mockedSleep.mockImplementationOnce(async () => {
-      signalRejection(prUrl, 'テストが不十分です');
-    });
+    // sleep を手動 Promise で制御し、ポーリングの進行を明示的に管理する。
+    // これにより sleep が呼ばれるタイミングへの依存を排除する。
+    const sleepDeferred = createDeferred();
+    mockedSleep.mockImplementation(() => sleepDeferred.promise);
 
-    const result = await runMergePollingLoop(prUrl, '/repo', deps, {
+    const resultPromise = runMergePollingLoop(prUrl, '/repo', deps, {
       pollingIntervalMs: 100,
       maxWaitMs: 60000,
     });
 
+    // マイクロタスクを消化してポーリングが sleep に到達するのを待つ
+    await Promise.resolve();
+
+    // rejection シグナルを送信（sleep が未解決なのでポーリングはブロック中）
+    signalRejection(prUrl, 'テストが不十分です');
+
+    const result = await resultPromise;
+
     expect(result.finalStatus).toBe('rejected');
     expect(result.rejectionReason).toBe('テストが不十分です');
     expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
+
+    // クリーンアップ: sleep Promise を解決してポーリングループの停止を促す
+    sleepDeferred.resolve();
   });
 
   it('ポーリング側が先に完了した場合（MERGED）は従来と同じ結果が返り、registry がクリーンアップされる', async () => {
@@ -361,7 +387,7 @@ describe('runMergePollingLoop', () => {
     expect(result.finalStatus).toBe('merged');
     expect(result.rejectionReason).toBeUndefined();
 
-    // クリーンアップされているので signalRejection は false を返す
+    // クリーンアップされているので signalRejection はバッファリングされる（false を返す）
     const signaled = signalRejection(prUrl, '遅延シグナル');
     expect(signaled).toBe(false);
   });
@@ -389,18 +415,24 @@ describe('runMergePollingLoop', () => {
     const execGh = vi.fn().mockReturnValue(prStatusJson('OPEN'));
     const deps = createMockDeps({ execGh });
 
-    // sleep の1回目呼び出し時に空文字の rejection シグナルを送信
-    mockedSleep.mockImplementationOnce(async () => {
-      signalRejection(prUrl, '');
-    });
+    // sleep を手動 Promise で制御
+    const sleepDeferred = createDeferred();
+    mockedSleep.mockImplementation(() => sleepDeferred.promise);
 
-    const result = await runMergePollingLoop(prUrl, '/repo', deps, {
+    const resultPromise = runMergePollingLoop(prUrl, '/repo', deps, {
       pollingIntervalMs: 100,
       maxWaitMs: 60000,
     });
 
+    await Promise.resolve();
+    signalRejection(prUrl, '');
+
+    const result = await resultPromise;
+
     expect(result.finalStatus).toBe('rejected');
     expect(result.rejectionReason).toBe('');
+
+    sleepDeferred.resolve();
   });
 
   it('タイムアウト時も registry がクリーンアップされる', async () => {
@@ -409,15 +441,36 @@ describe('runMergePollingLoop', () => {
       execGh: vi.fn().mockReturnValue(prStatusJson('OPEN')),
     });
 
+    // maxWaitMs: 0 はループ先頭の elapsed >= maxWait チェックで即座にタイムアウトする
+    // （elapsed は必ず 0 以上なので、0 >= 0 が常に成立する）
     const result = await runMergePollingLoop(prUrl, '/repo', deps, {
       pollingIntervalMs: 100,
       maxWaitMs: 0,
     });
 
     expect(result.finalStatus).toBe('timeout');
+    // タイムアウトチェックが先に実行されるため execGh は呼ばれない
+    expect(deps.execGh).not.toHaveBeenCalled();
 
     // クリーンアップ確認
     const signaled = signalRejection(prUrl, '遅延シグナル');
     expect(signaled).toBe(false);
+  });
+
+  it('ポーリング開始前にシグナルが送信されていた場合でも rejected が返る', async () => {
+    const prUrl = 'https://github.com/org/repo/pull/105';
+    const execGh = vi.fn().mockReturnValue(prStatusJson('OPEN'));
+    const deps = createMockDeps({ execGh });
+
+    // ポーリング開始前にシグナルを送信（バッファリングされる）
+    signalRejection(prUrl, '先行 rejection');
+
+    const result = await runMergePollingLoop(prUrl, '/repo', deps, {
+      pollingIntervalMs: 100,
+      maxWaitMs: 60000,
+    });
+
+    expect(result.finalStatus).toBe('rejected');
+    expect(result.rejectionReason).toBe('先行 rejection');
   });
 });
