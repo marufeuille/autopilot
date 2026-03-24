@@ -674,8 +674,8 @@ describe('マージフロー E2E テスト', () => {
         const story = readStoryFile(vault.storyFilePath);
         await runStory(story, notifier, deps);
 
-        // runAgent が 2 回呼ばれたこと（初回 + やり直し）
-        expect(deps.runAgent).toHaveBeenCalledTimes(2);
+        // runAgent が 3 回呼ばれたこと（初回実装 + やり直し実装 + doc-update）
+        expect(deps.runAgent).toHaveBeenCalledTimes(3);
 
         // 2 回目の runAgent プロンプトに差し戻し理由が含まれること
         const secondCallArgs = (deps.runAgent as ReturnType<typeof vi.fn>).mock.calls[1];
@@ -740,8 +740,8 @@ describe('マージフロー E2E テスト', () => {
         const story = readStoryFile(vault.storyFilePath);
         await runStory(story, notifier, deps);
 
-        // runAgent が 2 回呼ばれたこと（初回 + やり直し）
-        expect(deps.runAgent).toHaveBeenCalledTimes(2);
+        // runAgent が 3 回呼ばれたこと（初回実装 + やり直し実装 + doc-update）
+        expect(deps.runAgent).toHaveBeenCalledTimes(3);
 
         // 差し戻し理由がプロンプトに含まれること
         const secondCallArgs = (deps.runAgent as ReturnType<typeof vi.fn>).mock.calls[1];
@@ -915,8 +915,8 @@ describe('マージフロー E2E テスト', () => {
         );
         expect(ciNotification).toBeDefined();
 
-        // 実装が再試行されたこと（runAgent が2回呼ばれた）
-        expect(deps.runAgent).toHaveBeenCalledTimes(2);
+        // 実装が再試行されたこと（runAgent が3回呼ばれた: 初回実装 + リトライ実装 + doc-update）
+        expect(deps.runAgent).toHaveBeenCalledTimes(3);
       }, {
         project: PROJECT,
         story: { slug: STORY_SLUG, status: 'Doing' },
@@ -972,8 +972,8 @@ describe('マージフロー E2E テスト', () => {
         );
         expect(escalationNotification).toBeDefined();
 
-        // 実装が再試行されたこと（runAgent が2回呼ばれた）
-        expect(deps.runAgent).toHaveBeenCalledTimes(2);
+        // 実装が再試行されたこと（runAgent が3回呼ばれた: 初回実装 + リトライ実装 + doc-update）
+        expect(deps.runAgent).toHaveBeenCalledTimes(3);
       }, {
         project: PROJECT,
         story: { slug: STORY_SLUG, status: 'Doing' },

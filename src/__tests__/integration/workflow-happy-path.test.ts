@@ -319,8 +319,8 @@ describe('正常系ワークフロー結合テスト', () => {
         const storyFm = readFrontmatter(vault.storyFilePath);
         expect(storyFm.status).toBe('Done');
 
-        // --- runAgent がタスク数分だけ呼ばれた ---
-        expect(deps.runAgent).toHaveBeenCalledTimes(2);
+        // --- runAgent がタスク数×2分だけ呼ばれた（implementation + doc-update） ---
+        expect(deps.runAgent).toHaveBeenCalledTimes(4);
       }, {
         project: PROJECT,
         story: { slug: STORY_SLUG, status: 'Doing' },
@@ -344,8 +344,8 @@ describe('正常系ワークフロー結合テスト', () => {
         const story = readStoryFile(vault.storyFilePath);
         await runStory(story, notifier, deps);
 
-        // runAgent は Todo のタスク (2つ目) だけ実行される
-        expect(deps.runAgent).toHaveBeenCalledTimes(1);
+        // runAgent は Todo のタスク (2つ目) だけ実行される（implementation + doc-update）
+        expect(deps.runAgent).toHaveBeenCalledTimes(2);
 
         // 全タスクが Done
         const finalTasks = await readTasksFromVault(vault.tasksDir, PROJECT, STORY_SLUG);
@@ -639,8 +639,8 @@ describe('正常系ワークフロー結合テスト', () => {
         // ストーリーが Done
         expect(readFrontmatter(vault.storyFilePath).status).toBe('Done');
 
-        // runAgent が 3 回呼ばれた
-        expect(deps.runAgent).toHaveBeenCalledTimes(3);
+        // runAgent が 6 回呼ばれた（タスク3つ × (implementation + doc-update)）
+        expect(deps.runAgent).toHaveBeenCalledTimes(6);
       }, {
         project: PROJECT,
         story: { slug: STORY_SLUG, status: 'Doing' },
