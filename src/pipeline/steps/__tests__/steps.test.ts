@@ -11,6 +11,14 @@ import { FakeNotifier } from '../../../__tests__/helpers/fake-notifier';
 import { createFakeDeps, defaultReviewLoopResult } from '../../../__tests__/helpers/fake-deps';
 import { GitSyncError } from '../../../git';
 import { MergeError } from '../../../merge';
+import { runMergePollingLoop } from '../../../merge';
+import type { MergePollingResult } from '../../../merge';
+
+// runMergePollingLoop をモック化
+vi.mock('../../../merge', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../merge')>();
+  return { ...actual, runMergePollingLoop: vi.fn().mockResolvedValue({ finalStatus: 'merged', elapsedMs: 1000 }) };
+});
 
 // detectNoRemote をモック化
 // NOTE: vi.mock はホイスティングされるため、外部ヘルパーからの import は使用不可。
@@ -65,6 +73,7 @@ function makeCtx(overrides: {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.mocked(detectNoRemote).mockReturnValue(false);
+  vi.mocked(runMergePollingLoop).mockResolvedValue({ finalStatus: 'merged', elapsedMs: 1000 });
 });
 
 // -------- handleStartApproval --------
@@ -384,9 +393,9 @@ describe('handleImplementation', () => {
 describe('handlePRLifecycle', () => {
   const baseCtxStore = { reviewResult: defaultReviewLoopResult() };
 
-  it('CI成功 → マージ承認 → マージ成功 → continue', async () => {
-    const { ctx } = makeCtx({ ctxStore: baseCtxStore });
-    // execCommand: push成功 + pr create成功
+  it('CI成功 → MERGED検知 → continue', async () => {
+    vi.mocked(runMergePollingLoop).mockResolvedValue({ finalStatus: 'merged', elapsedMs: 5000 });
+    const { ctx, notifier } = makeCtx({ ctxStore: baseCtxStore });
     vi.mocked(ctx.deps.execCommand)
       .mockReturnValueOnce('') // git push
       .mockReturnValueOnce('https://github.com/test/repo/pull/1'); // gh pr create
@@ -394,9 +403,16 @@ describe('handlePRLifecycle', () => {
     const signal = await handlePRLifecycle(ctx);
     expect(signal.kind).toBe('continue');
     expect(ctx.get('prUrl')).toBe('https://github.com/test/repo/pull/1');
+    // マージ準備完了通知が送られている
+    expect(notifier.notifications.some((n) => n.message.includes('マージ準備完了'))).toBe(true);
+    // マージ完了通知が送られている
+    expect(notifier.notifications.some((n) => n.message.includes('マージ完了'))).toBe(true);
+    // requestApproval は呼ばれない
+    expect(notifier.approvalRequests).toHaveLength(0);
   });
 
   it('CI失敗 → retry from: implementation', async () => {
+    vi.mocked(runMergePollingLoop).mockClear();
     const { ctx } = makeCtx({
       ctxStore: baseCtxStore,
       depsOverrides: {
@@ -417,15 +433,13 @@ describe('handlePRLifecycle', () => {
     if (signal.kind === 'retry') {
       expect(signal.from).toBe('implementation');
     }
+    // runMergePollingLoop は呼ばれない（CI失敗で早期リターン）
+    expect(runMergePollingLoop).not.toHaveBeenCalled();
   });
 
-  it('マージ承認が拒否された → retry from: implementation', async () => {
-    const { ctx } = makeCtx({
-      ctxStore: baseCtxStore,
-      notifierOptions: {
-        approvalResponses: [{ action: 'reject', reason: '実装を見直して' }],
-      },
-    });
+  it('PRがCLOSED（未マージクローズ） → retry from: implementation', async () => {
+    vi.mocked(runMergePollingLoop).mockResolvedValue({ finalStatus: 'closed', elapsedMs: 3000 });
+    const { ctx, notifier } = makeCtx({ ctxStore: baseCtxStore });
     vi.mocked(ctx.deps.execCommand)
       .mockReturnValueOnce('')
       .mockReturnValueOnce('https://github.com/test/repo/pull/1');
@@ -434,8 +448,42 @@ describe('handlePRLifecycle', () => {
     expect(signal.kind).toBe('retry');
     if (signal.kind === 'retry') {
       expect(signal.from).toBe('implementation');
-      expect(signal.reason).toBe('実装を見直して');
+      expect(signal.reason).toContain('クローズ');
     }
+    // エラー通知が送られている
+    expect(notifier.notifications.some((n) => n.message.includes('PRクローズ検知'))).toBe(true);
+  });
+
+  it('マージ待機タイムアウト → retry from: implementation', async () => {
+    vi.mocked(runMergePollingLoop).mockResolvedValue({ finalStatus: 'timeout', elapsedMs: 86400000 });
+    const { ctx, notifier } = makeCtx({ ctxStore: baseCtxStore });
+    vi.mocked(ctx.deps.execCommand)
+      .mockReturnValueOnce('')
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1');
+
+    const signal = await handlePRLifecycle(ctx);
+    expect(signal.kind).toBe('retry');
+    if (signal.kind === 'retry') {
+      expect(signal.from).toBe('implementation');
+      expect(signal.reason).toContain('タイムアウト');
+    }
+    expect(notifier.notifications.some((n) => n.message.includes('タイムアウト'))).toBe(true);
+  });
+
+  it('マージポーリングエラー → retry from: implementation', async () => {
+    vi.mocked(runMergePollingLoop).mockResolvedValue({ finalStatus: 'error', elapsedMs: 5000 });
+    const { ctx, notifier } = makeCtx({ ctxStore: baseCtxStore });
+    vi.mocked(ctx.deps.execCommand)
+      .mockReturnValueOnce('')
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1');
+
+    const signal = await handlePRLifecycle(ctx);
+    expect(signal.kind).toBe('retry');
+    if (signal.kind === 'retry') {
+      expect(signal.from).toBe('implementation');
+      expect(signal.reason).toContain('ポーリングエラー');
+    }
+    expect(notifier.notifications.some((n) => n.message.includes('ポーリングエラー'))).toBe(true);
   });
 
   it('no-remote 検出時はPR作成・push・CI・レビュー通知をスキップして continue を返す', async () => {
@@ -465,10 +513,10 @@ describe('handlePRLifecycle', () => {
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('PR作成・push・CI・レビュー通知をスキップ'),
     );
-
   });
 
-  it('リモートありの場合は従来通りPRライフサイクルが実行される', async () => {
+  it('リモートありの場合はPRライフサイクル+MERGEDポーリングが実行される', async () => {
+    vi.mocked(runMergePollingLoop).mockResolvedValue({ finalStatus: 'merged', elapsedMs: 1000 });
     const { ctx } = makeCtx({ ctxStore: baseCtxStore });
     vi.mocked(ctx.deps.execCommand)
       .mockReturnValueOnce('')
@@ -478,36 +526,66 @@ describe('handlePRLifecycle', () => {
     expect(signal.kind).toBe('continue');
     expect(ctx.get('prUrl')).toBe('https://github.com/test/repo/pull/1');
     expect(ctx.get('localOnly')).toBeUndefined();
+    // runMergePollingLoop が呼ばれている
+    expect(runMergePollingLoop).toHaveBeenCalledWith(
+      'https://github.com/test/repo/pull/1',
+      '/repo',
+      expect.anything(),
+    );
   });
 
-  it('マージ失敗(MergeError) → retry from: pr-lifecycle', async () => {
-    const mergeError = new MergeError('merge_conflict', 'conflict', 409);
+  it('CI通過後にマージ準備完了の Slack 通知が送られる', async () => {
+    vi.mocked(runMergePollingLoop).mockResolvedValue({ finalStatus: 'merged', elapsedMs: 1000 });
+    const { ctx, notifier } = makeCtx({ ctxStore: baseCtxStore });
+    vi.mocked(ctx.deps.execCommand)
+      .mockReturnValueOnce('')
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1');
+
+    await handlePRLifecycle(ctx);
+
+    const mergeReadyNotification = notifier.notifications.find((n) => n.message.includes('マージ準備完了'));
+    expect(mergeReadyNotification).toBeDefined();
+    expect(mergeReadyNotification!.message).toContain('GitHubから手動でマージしてください');
+    expect(mergeReadyNotification!.message).toContain('https://github.com/test/repo/pull/1');
+  });
+
+  it('worktreePathが設定されている場合、マージポーリング前にクリーンアップされる', async () => {
+    vi.mocked(runMergePollingLoop).mockResolvedValue({ finalStatus: 'merged', elapsedMs: 1000 });
+    const removeWorktreeMock = vi.fn();
     const { ctx } = makeCtx({
-      ctxStore: baseCtxStore,
-      depsOverrides: {
-        execGh: vi.fn().mockImplementation((args: string[]) => {
-          if (args.includes('merge')) throw mergeError;
-          if (args.includes('view') && args.includes('--json')) {
-            return JSON.stringify({
-              state: 'OPEN',
-              mergeable: 'CONFLICTING',
-              reviewDecision: 'APPROVED',
-              statusCheckRollup: [],
-            });
-          }
-          return '';
-        }),
-      },
+      ctxStore: { ...baseCtxStore, worktreePath: '/tmp/autopilot/test-task' },
+      depsOverrides: { removeWorktree: removeWorktreeMock },
+    });
+    vi.mocked(ctx.deps.execCommand)
+      .mockReturnValueOnce('')
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1');
+
+    await handlePRLifecycle(ctx);
+
+    expect(removeWorktreeMock).toHaveBeenCalledWith('/repo', '/tmp/autopilot/test-task');
+    // worktreePath がクリアされている
+    expect(ctx.get('worktreePath')).toBeUndefined();
+  });
+
+  it('worktreeクリーンアップが失敗してもポーリングは続行される', async () => {
+    vi.mocked(runMergePollingLoop).mockResolvedValue({ finalStatus: 'merged', elapsedMs: 1000 });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const removeWorktreeMock = vi.fn().mockRejectedValue(new Error('worktree removal failed'));
+    const { ctx } = makeCtx({
+      ctxStore: { ...baseCtxStore, worktreePath: '/tmp/autopilot/test-task' },
+      depsOverrides: { removeWorktree: removeWorktreeMock },
     });
     vi.mocked(ctx.deps.execCommand)
       .mockReturnValueOnce('')
       .mockReturnValueOnce('https://github.com/test/repo/pull/1');
 
     const signal = await handlePRLifecycle(ctx);
-    expect(signal.kind).toBe('retry');
-    if (signal.kind === 'retry') {
-      expect(signal.from).toBe('pr-lifecycle');
-    }
+
+    expect(signal.kind).toBe('continue');
+    expect(runMergePollingLoop).toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('worktreeの削除に失敗しましたが、ポーリングを続行します'),
+    );
   });
 });
 

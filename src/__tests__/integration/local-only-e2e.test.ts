@@ -24,6 +24,15 @@ vi.mock('../../git', async (importOriginal) => {
   return { ...actual, detectNoRemote: mockDetectNoRemote };
 });
 
+// runMergePollingLoop をモック（手動マージポーリングをスキップ）
+vi.mock('../../merge', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../merge')>();
+  return {
+    ...actual,
+    runMergePollingLoop: vi.fn().mockResolvedValue({ finalStatus: 'merged', elapsedMs: 1000 }),
+  };
+});
+
 // ---------------------------------------------------------------------------
 // Helper: fake vault のタスクディレクトリから TaskFile[] を読み取る
 // ---------------------------------------------------------------------------
@@ -433,7 +442,7 @@ describe('リモートありフロー E2E リグレッションテスト', () =>
   // -------------------------------------------------------------------------
   describe('通常フローの承認フロー', () => {
     it(
-      'タスク開始承認とマージ承認の両方が要求される',
+      'タスク開始承認のみが要求される（マージは手動）',
       withVault(async (vault) => {
         mockDetectNoRemote.mockReturnValue(false);
 
@@ -445,14 +454,11 @@ describe('リモートありフロー E2E リグレッションテスト', () =>
 
         const approvals = notifier.approvalRequests;
 
-        // タスク開始承認 + マージ承認 = 2 回
-        expect(approvals.length).toBe(2);
+        // タスク開始承認のみ（マージ承認は不要、手動マージ運用）
+        expect(approvals.length).toBe(1);
 
         // 1. タスク開始承認
         expect(approvals[0].message).toContain('タスク開始確認');
-
-        // 2. マージ承認
-        expect(approvals[1].message).toContain('マージ');
       }, {
         project: PROJECT,
         story: { slug: STORY_SLUG, status: 'Doing' },

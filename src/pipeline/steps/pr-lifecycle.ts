@@ -5,9 +5,7 @@ import { FlowSignal, TaskContext } from '../types';
 import { StoryFile, TaskFile } from '../../vault/reader';
 import { ReviewLoopResult, formatReviewLoopResult } from '../../review';
 import { formatCIPollingResult } from '../../ci';
-import { executeMerge, MergeError, formatMergeErrorMessage } from '../../merge';
-import { generateApprovalId } from '../../notification/approval-id';
-import { buildMergeApprovalMessage, buildMergeCompletedMessage } from '../../notification';
+import { runMergePollingLoop } from '../../merge';
 import { NotificationContext } from '../../notification';
 import { RunnerDeps } from '../../runner-deps';
 import { detectNoRemote } from '../../git';
@@ -61,15 +59,13 @@ function createPullRequest(
 }
 
 /**
- * PRライフサイクル step（PR作成 → CI → マージ承認 → マージ）
+ * PRライフサイクル step（PR作成 → CI → マージ待機）
  *
  * - PR作成
  * - CIポーリング: 失敗 → retry from: 'implementation'
- * - マージ承認: 拒否 → retry from: 'implementation'
- * - マージ実行: 失敗 → retry from: 'pr-lifecycle'
- * - 成功 → continue
- *
- * マージ条件の検証は executeMerge 内の1箇所のみで行う（二重バリデーション廃止）。
+ * - 「マージ準備完了」Slack通知
+ * - ワークツリークリーンアップ（手動マージ時の --delete-branch 問題回避）
+ * - MERGEDポーリング: merged → continue, closed → retry from: 'implementation'
  */
 export async function handlePRLifecycle(ctx: TaskContext): Promise<FlowSignal> {
   const { task, story, repoPath, notifier, deps } = ctx;
@@ -130,7 +126,7 @@ export async function handlePRLifecycle(ctx: TaskContext): Promise<FlowSignal> {
       ciSummary: ciMessage,
       ciRunUrl,
     };
-    // CIエスカレーション通知（buildCIEscalationMessageがあれば使う、なければシンプルに）
+    // CIエスカレーション通知
     await notifier.notify(
       `❌ *CI未通過*: \`${task.slug}\`\n*PR*: ${prUrl}\n${ciMessage}`,
       story.slug,
@@ -138,61 +134,55 @@ export async function handlePRLifecycle(ctx: TaskContext): Promise<FlowSignal> {
     return { kind: 'retry', from: 'implementation', reason: `CI未通過: ${ciResult.finalStatus}` };
   }
 
-  // マージ承認リクエスト
-  const mergeApprovalId = generateApprovalId(story.slug, `${task.slug}-merge`);
-  const mergeCtx: NotificationContext = {
-    eventType: 'merge_approval',
-    taskSlug: task.slug,
-    storySlug: story.slug,
-    prUrl,
-    ciSummary: ciMessage,
-    ciRunUrl,
-    mergeReady: true,
-  };
-  const mergeMessage = buildMergeApprovalMessage(mergeCtx);
-
-  const mergeApproval = await notifier.requestApproval(
-    mergeApprovalId,
-    mergeMessage,
-    { approve: 'マージ実行', reject: '差し戻し' },
+  // マージ準備完了通知（ユーザーに手動マージを促す）
+  await notifier.notify(
+    `✅ *マージ準備完了*: \`${task.slug}\`\n*PR*: ${prUrl}\nCIが通過しました。GitHubから手動でマージしてください。`,
     story.slug,
   );
 
-  if (mergeApproval.action === 'reject') {
-    return {
-      kind: 'retry',
-      from: 'implementation',
-      reason: mergeApproval.reason,
-    };
+  // ワークツリーのクリーンアップ（手動マージ時の --delete-branch 問題回避）
+  const worktreePath = ctx.get('worktreePath');
+  if (worktreePath) {
+    try {
+      await deps.removeWorktree(repoPath, worktreePath);
+      ctx.set('worktreePath', undefined);
+      console.log(`[pr-lifecycle] worktree cleaned up before merge polling: ${worktreePath}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[pr-lifecycle] worktreeの削除に失敗しましたが、ポーリングを続行します: ${message}`);
+    }
   }
 
-  // マージ実行（バリデーションは executeMerge 内のみ）
-  await notifier.notify(
-    `⏳ *マージ処理中*: \`${task.slug}\`\n*PR*: ${prUrl}\nマージを実行しています...`,
-    story.slug,
-  );
+  // MERGED ポーリング（ユーザーが手動マージするのを待機）
+  const pollingResult = await runMergePollingLoop(prUrl, repoPath, deps);
 
-  try {
-    executeMerge(prUrl, repoPath, deps, { skipValidation: false });
-    await notifier.notify(buildMergeCompletedMessage(task.slug, prUrl), story.slug);
-    return { kind: 'continue' };
-  } catch (mergeError) {
-    if (mergeError instanceof MergeError) {
+  switch (pollingResult.finalStatus) {
+    case 'merged':
       await notifier.notify(
-        `❌ *マージ失敗*: \`${task.slug}\`\n*PR*: ${prUrl}\n*エラーコード*: \`${mergeError.code}\`\n*原因*: ${formatMergeErrorMessage(mergeError)}`,
+        `🎉 *マージ完了*: \`${task.slug}\`\n*PR*: ${prUrl}\nマージが検知されました。次のステップへ進みます。`,
         story.slug,
       );
-    } else {
-      const msg = mergeError instanceof Error ? mergeError.message : String(mergeError);
+      return { kind: 'continue' };
+
+    case 'closed':
       await notifier.notify(
-        `❌ *マージ失敗*: \`${task.slug}\`\n*PR*: ${prUrl}\n*原因*: ${msg}`,
+        `❌ *PRクローズ検知*: \`${task.slug}\`\n*PR*: ${prUrl}\nPRがマージされずにクローズされました。実装からやり直します。`,
         story.slug,
       );
-    }
-    return {
-      kind: 'retry',
-      from: 'pr-lifecycle',
-      reason: `マージ失敗: ${mergeError instanceof Error ? mergeError.message : String(mergeError)}`,
-    };
+      return { kind: 'retry', from: 'implementation', reason: 'PRがマージされずにクローズされました' };
+
+    case 'timeout':
+      await notifier.notify(
+        `⏰ *マージ待機タイムアウト*: \`${task.slug}\`\n*PR*: ${prUrl}\nマージ待機がタイムアウトしました。実装からやり直します。`,
+        story.slug,
+      );
+      return { kind: 'retry', from: 'implementation', reason: 'マージ待機タイムアウト' };
+
+    case 'error':
+      await notifier.notify(
+        `❌ *マージポーリングエラー*: \`${task.slug}\`\n*PR*: ${prUrl}\nPRステータスの取得で連続エラーが発生しました。実装からやり直します。`,
+        story.slug,
+      );
+      return { kind: 'retry', from: 'implementation', reason: 'マージポーリングエラー' };
   }
 }
