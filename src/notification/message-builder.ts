@@ -228,6 +228,14 @@ export function sanitizePrUrl(prUrl: string, maxLength: number = SLACK_BUTTON_VA
       `PR URL が ${maxLength} 文字を超えています (${sanitized.length} 文字): URL を確認してください`,
     );
   }
+  // サニタイズ後の文字列が有効な URL であることを検証する
+  try {
+    new URL(sanitized);
+  } catch {
+    throw new Error(
+      `PR URL が不正な形式です: ${sanitized}`,
+    );
+  }
   return sanitized;
 }
 

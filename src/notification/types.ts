@@ -9,10 +9,12 @@ export type ApprovalResult =
   | { action: 'approve' }
   | { action: 'reject'; reason: string };
 
+import type { Block, KnownBlock } from '@slack/types';
+
 /** notify のオプション */
 export interface NotifyOptions {
   /** Block Kit ブロック配列（Slack バックエンドでのみ有効） */
-  blocks?: ReadonlyArray<Record<string, unknown>>;
+  blocks?: ReadonlyArray<KnownBlock | Block>;
 }
 
 /** 通知バックエンドが実装すべきインターフェース */

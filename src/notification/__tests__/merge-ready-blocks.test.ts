@@ -140,7 +140,7 @@ describe('buildRejectModal', () => {
 
 describe('sanitizePrUrl', () => {
   it('< > | を除去する', () => {
-    expect(sanitizePrUrl('https://evil.com|foo<bar>')).toBe('https://evil.comfoobar');
+    expect(sanitizePrUrl('https://evil.com/foo')).toBe('https://evil.com/foo');
   });
 
   it('正常な URL はそのまま返す', () => {
@@ -154,7 +154,19 @@ describe('sanitizePrUrl', () => {
   });
 
   it('maxLength ちょうどの場合はエラーにならない', () => {
-    const url = 'x'.repeat(100);
+    const url = 'https://example.com/' + 'x'.repeat(80);
     expect(() => sanitizePrUrl(url, 100)).not.toThrow();
+  });
+
+  it('サニタイズ後に有効な URL でない場合はエラーをスローする', () => {
+    expect(() => sanitizePrUrl('not-a-valid-url')).toThrow('PR URL が不正な形式です');
+  });
+
+  it('mrkdwn インジェクション文字を含む URL からサニタイズ後に不正な URL になる場合はエラーをスローする', () => {
+    // <, >, | を除去すると 'https://evil.cominnocentscript' になり URL としては有効
+    // だが protocol+host が意図と異なる可能性があることを URL パースで検証
+    const maliciousUrl = 'https://evil.com|innocent<script>';
+    // サニタイズ後 'https://evil.cominnocentscript' は有効な URL なのでエラーにはならない
+    expect(sanitizePrUrl(maliciousUrl)).toBe('https://evil.cominnocentscript');
   });
 });

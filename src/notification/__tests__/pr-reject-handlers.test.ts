@@ -14,7 +14,7 @@ vi.mock('../../logger', () => ({
 }));
 
 import { signalRejection } from '../../merge/rejection-registry';
-import { logWarn } from '../../logger';
+import { logWarn, logError } from '../../logger';
 
 /**
  * Slack App のモックを作成する
@@ -288,7 +288,7 @@ describe('registerPRRejectHandlers', () => {
       );
     });
 
-    it('signalRejection が例外をスローした場合に ack で errors を返す', async () => {
+    it('signalRejection が例外をスローした場合は ack 済みのためエラーログのみ出力する', async () => {
       vi.mocked(signalRejection).mockImplementationOnce(() => {
         throw new Error('unexpected error');
       });
@@ -308,13 +308,14 @@ describe('registerPRRejectHandlers', () => {
         },
       });
 
-      expect(ack).toHaveBeenCalledWith(
-        expect.objectContaining({
-          response_action: 'errors',
-          errors: expect.objectContaining({
-            reason_block: expect.stringContaining('却下処理に失敗しました'),
-          }),
-        }),
+      // ack は引数なしで1回だけ呼ばれる（先頭で即座に呼び出し）
+      expect(ack).toHaveBeenCalledTimes(1);
+      expect(ack).toHaveBeenCalledWith();
+      // エラーログが出力される
+      expect(logError).toHaveBeenCalledWith(
+        expect.stringContaining('却下処理に失敗しました'),
+        expect.any(Object),
+        expect.any(Error),
       );
     });
   });

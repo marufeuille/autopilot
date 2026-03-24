@@ -165,7 +165,7 @@ export function registerPRRejectHandlers(app: App): void {
     await ack();
     try {
       const action = body.actions[0];
-      if (!action?.value) {
+      if (typeof action?.value !== 'string' || action.value.length === 0) {
         logWarn('pr_reject_ng: actions が空または value がありません', { phase: 'pr_reject_ng' });
         return;
       }
@@ -192,6 +192,8 @@ export function registerPRRejectHandlers(app: App): void {
 
   // モーダル送信: 却下理由を取得して RejectionRegistry にシグナル
   app.view('pr_reject_modal', async ({ ack, view }) => {
+    // Slack は view_submission に対し 3 秒以内の ack を要求するため、先に ack する
+    await ack();
     try {
       const prUrl = view.private_metadata;
       const reason = view.state?.values?.['reason_block']?.['reason_input']?.value ?? '';
@@ -202,15 +204,10 @@ export function registerPRRejectHandlers(app: App): void {
           prUrl,
         });
       }
-      await ack();
     } catch (err) {
+      // 既に ack 済みのため、ack({response_action:'errors'}) は使えない。
+      // エラーログのみ出力する（必要に応じて chat.postMessage で通知を追加可能）。
       logError('pr_reject_modal: 却下処理に失敗しました', { phase: 'pr_reject_modal' }, err);
-      await ack({
-        response_action: 'errors',
-        errors: {
-          reason_block: '却下処理に失敗しました。もう一度お試しください。',
-        },
-      });
     }
   });
 }
