@@ -88,3 +88,23 @@ export interface MergeResult {
   /** マージ出力メッセージ */
   output?: string;
 }
+
+/**
+ * マージポーリングの設定オプション
+ */
+export interface MergePollingOptions {
+  /** ポーリング間隔（ミリ秒、デフォルト: 30000 = 30秒） */
+  pollingIntervalMs?: number;
+  /** 最大待機時間（ミリ秒、デフォルト: 86400000 = 24時間） */
+  maxWaitMs?: number;
+}
+
+/**
+ * マージポーリングの最終結果
+ */
+export interface MergePollingResult {
+  /** 最終ステータス */
+  finalStatus: 'merged' | 'closed' | 'timeout';
+  /** 経過時間（ミリ秒） */
+  elapsedMs: number;
+}

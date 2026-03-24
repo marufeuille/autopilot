@@ -12,6 +12,8 @@ export {
   type MergeValidationError,
   type PullRequestStatus,
   type StatusCheck,
+  type MergePollingOptions,
+  type MergePollingResult,
 } from './types';
 
 export {
@@ -22,3 +24,5 @@ export {
   executeMerge,
   formatMergeErrorMessage,
 } from './merge-service';
+
+export { runMergePollingLoop } from './polling';
