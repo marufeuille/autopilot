@@ -5,6 +5,8 @@
  * Slack mrkdwn 形式で出力し、ローカル通知ではストリップして使用する。
  */
 
+import type { KnownBlock } from '@slack/types';
+import type { ModalView } from '@slack/types';
 import { NotificationContext } from './types';
 import type { TaskFile } from '../vault/reader';
 
@@ -201,6 +203,110 @@ export function buildCIEscalationMessage(ctx: NotificationContext): string {
   }
 
   return lines.join('\n');
+}
+
+/** Slack Button value の最大文字数 */
+const SLACK_BUTTON_VALUE_MAX = 2000;
+/** Slack private_metadata の最大文字数 */
+const SLACK_PRIVATE_METADATA_MAX = 3000;
+
+/**
+ * PR URL をサニタイズする
+ *
+ * Slack mrkdwn インジェクションを防ぐために `<`, `>`, `|` を除去し、
+ * Slack API の文字数制限内に収まるようバリデーションを行う。
+ *
+ * @param prUrl 生の PR URL
+ * @param maxLength 許容する最大文字数（デフォルト: SLACK_BUTTON_VALUE_MAX）
+ * @returns サニタイズ済み URL
+ * @throws maxLength を超過した場合
+ */
+export function sanitizePrUrl(prUrl: string, maxLength: number = SLACK_BUTTON_VALUE_MAX): string {
+  const sanitized = prUrl.replace(/[<>|]/g, '');
+  if (sanitized.length > maxLength) {
+    throw new Error(
+      `PR URL が ${maxLength} 文字を超えています (${sanitized.length} 文字): URL を確認してください`,
+    );
+  }
+  // サニタイズ後の文字列が有効な URL であることを検証する
+  try {
+    new URL(sanitized);
+  } catch {
+    throw new Error(
+      `PR URL が不正な形式です: ${sanitized}`,
+    );
+  }
+  return sanitized;
+}
+
+/**
+ * 「マージ準備完了」通知の Block Kit ブロックを生成する
+ *
+ * CI 通過後にユーザーへ手動マージを促す通知。
+ * NG ボタン（action_id: 'pr_reject_ng'）を含み、
+ * クリックすると却下理由入力モーダルが開く。
+ *
+ * @param prUrl PR の URL（NG ボタンの value に埋め込む）
+ * @param taskSlug タスクの識別子
+ */
+export function buildMergeReadyBlocks(prUrl: string, taskSlug: string): KnownBlock[] {
+  // Slack mrkdwn のリンク構文を防ぐため <url|label> 形式でリンク化する
+  const safeUrl = sanitizePrUrl(prUrl);
+  const linkedUrl = `<${safeUrl}|${safeUrl}>`;
+  return [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `✅ *マージ準備完了*: \`${taskSlug}\`\n*PR*: ${linkedUrl}\nCIが通過しました。GitHubから手動でマージしてください。`,
+      },
+    },
+    {
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: '❌ NG（却下）' },
+          style: 'danger',
+          action_id: 'pr_reject_ng',
+          value: safeUrl,
+        },
+      ],
+    },
+  ];
+}
+
+/**
+ * PR 却下理由入力モーダルの view 定義を生成する
+ *
+ * @param prUrl PR の URL（private_metadata に埋め込む）
+ */
+export function buildRejectModal(prUrl: string): ModalView {
+  const safeUrl = sanitizePrUrl(prUrl, SLACK_PRIVATE_METADATA_MAX);
+  return {
+    type: 'modal',
+    callback_id: 'pr_reject_modal',
+    private_metadata: safeUrl,
+    title: { type: 'plain_text', text: '却下理由' },
+    submit: { type: 'plain_text', text: '送信' },
+    close: { type: 'plain_text', text: 'キャンセル' },
+    blocks: [
+      {
+        type: 'input',
+        block_id: 'reason_block',
+        element: {
+          type: 'plain_text_input',
+          action_id: 'reason_input',
+          multiline: true,
+          placeholder: {
+            type: 'plain_text',
+            text: '却下理由を入力してください',
+          },
+        },
+        label: { type: 'plain_text', text: '理由' },
+      },
+    ],
+  };
 }
 
 /**

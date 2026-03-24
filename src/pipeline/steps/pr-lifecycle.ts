@@ -6,7 +6,7 @@ import { StoryFile, TaskFile } from '../../vault/reader';
 import { ReviewLoopResult, formatReviewLoopResult } from '../../review';
 import { formatCIPollingResult } from '../../ci';
 import { runMergePollingLoop } from '../../merge';
-import { NotificationContext } from '../../notification';
+import { NotificationContext, buildMergeReadyBlocks } from '../../notification';
 import { RunnerDeps } from '../../runner-deps';
 import { detectNoRemote } from '../../git';
 
@@ -134,11 +134,10 @@ export async function handlePRLifecycle(ctx: TaskContext): Promise<FlowSignal> {
     return { kind: 'retry', from: 'implementation', reason: `CI未通過: ${ciResult.finalStatus}` };
   }
 
-  // マージ準備完了通知（ユーザーに手動マージを促す）
-  await notifier.notify(
-    `✅ *マージ準備完了*: \`${task.slug}\`\n*PR*: ${prUrl}\nCIが通過しました。GitHubから手動でマージしてください。`,
-    story.slug,
-  );
+  // マージ準備完了通知（ユーザーに手動マージを促す + NG ボタン付き）
+  const mergeReadyText = `✅ *マージ準備完了*: \`${task.slug}\`\n*PR*: ${prUrl}\nCIが通過しました。GitHubから手動でマージしてください。`;
+  const mergeReadyBlocks = buildMergeReadyBlocks(prUrl, task.slug);
+  await notifier.notify(mergeReadyText, story.slug, { blocks: mergeReadyBlocks });
 
   // ワークツリーのクリーンアップ（手動マージ時の --delete-branch 問題回避）
   const worktreePath = ctx.get('worktreePath');

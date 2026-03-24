@@ -34,7 +34,7 @@ describe('ResilientNotificationBackend', () => {
 
       await resilient.notify('テストメッセージ');
 
-      expect(primary.notify).toHaveBeenCalledWith('テストメッセージ', undefined);
+      expect(primary.notify).toHaveBeenCalledWith('テストメッセージ', undefined, undefined);
       expect(fallback.notify).not.toHaveBeenCalled();
     });
 

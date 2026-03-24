@@ -5,7 +5,7 @@
  * リトライおよびフォールバック（ローカル通知）を提供する。
  */
 
-import { NotificationBackend, ApprovalResult } from './types';
+import { NotificationBackend, ApprovalResult, NotifyOptions } from './types';
 import { LocalNotificationBackend } from './local';
 
 /** リトライ設定 */
@@ -40,9 +40,9 @@ export class ResilientNotificationBackend implements NotificationBackend {
     this.retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
   }
 
-  async notify(message: string, storySlug?: string): Promise<void> {
+  async notify(message: string, storySlug?: string, options?: NotifyOptions): Promise<void> {
     try {
-      await this.withRetry(() => this.primary.notify(message, storySlug));
+      await this.withRetry(() => this.primary.notify(message, storySlug, options));
     } catch (error) {
       console.warn(
         `[resilient-notify] primary notify failed after ${this.maxRetries + 1} attempts, falling back to local:`,
