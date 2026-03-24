@@ -1334,8 +1334,8 @@ describe('runTask - マージ後ステータス更新フロー', () => {
     // executeMerge が1回だけ呼ばれること
     expect(mockExecuteMerge).toHaveBeenCalledTimes(1);
 
-    // runAgent も1回だけ呼ばれること（ループが回らない）
-    expect(mockQuery).toHaveBeenCalledTimes(1);
+    // runAgent は2回呼ばれる（implementation + doc-update、ループは回らない）
+    expect(mockQuery).toHaveBeenCalledTimes(2);
   });
 
   it('CI失敗時にCI未通過通知が送信され、implementationからretryされる', async () => {
