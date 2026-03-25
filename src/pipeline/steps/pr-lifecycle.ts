@@ -176,6 +176,12 @@ export async function handlePRLifecycle(ctx: TaskContext): Promise<FlowSignal> {
     return { kind: 'retry', from: 'implementation', reason: `CI未通過: ${ciResult.finalStatus}` };
   }
 
+  // 二重防御: CI の lastCIResult が pending の場合はマージ準備完了通知を送信しない
+  if (ciResult.lastCIResult?.status === 'pending') {
+    console.warn(`[pr-lifecycle] CI status is still pending, skipping merge-ready notification: ${task.slug}`);
+    return { kind: 'retry', from: 'implementation', reason: 'CI status still pending (notification guard)' };
+  }
+
   // マージ準備完了通知（ユーザーに手動マージを促す + NG ボタン付き）
   const mergeReadyText = `✅ *マージ準備完了*: \`${task.slug}\`\n*PR*: ${prUrl}\nCIが通過しました。GitHubから手動でマージしてください。`;
   const mergeReadyBlocks = buildMergeReadyBlocks(prUrl, task.slug);

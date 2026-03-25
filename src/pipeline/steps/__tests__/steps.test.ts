@@ -687,6 +687,68 @@ describe('handlePRLifecycle', () => {
     expect(ctx.get('rejectionReason')).toBe('理由なし');
   });
 
+  it('CI finalStatus が success でも lastCIResult.status が pending の場合はマージ準備完了通知を送信せず retry を返す', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { ctx, notifier } = makeCtx({
+      ctxStore: baseCtxStore,
+      depsOverrides: {
+        runCIPollingLoop: vi.fn().mockResolvedValue({
+          finalStatus: 'success',
+          attempts: 1,
+          attemptResults: [],
+          lastCIResult: { status: 'pending', summary: 'No CI runs found (pending)' },
+        }),
+      },
+    });
+    vi.mocked(ctx.deps.execCommand)
+      .mockReturnValueOnce('')
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1');
+
+    const signal = await handlePRLifecycle(ctx);
+
+    expect(signal.kind).toBe('retry');
+    if (signal.kind === 'retry') {
+      expect(signal.from).toBe('implementation');
+      expect(signal.reason).toContain('pending');
+    }
+    // マージ準備完了通知は送信されていない
+    expect(notifier.notifications.some((n) => n.message.includes('マージ準備完了'))).toBe(false);
+    // 警告ログが出力されている
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('CI status is still pending, skipping merge-ready notification'),
+    );
+    // runMergePollingLoop は呼ばれない
+    expect(runMergePollingLoop).not.toHaveBeenCalled();
+  });
+
+  it('CI finalStatus が success かつ lastCIResult.status が success の場合はマージ準備完了通知が送信される', async () => {
+    vi.mocked(runMergePollingLoop).mockResolvedValue({ finalStatus: 'merged', elapsedMs: 5000 });
+    const { ctx, notifier } = makeCtx({
+      ctxStore: baseCtxStore,
+      depsOverrides: {
+        runCIPollingLoop: vi.fn().mockResolvedValue({
+          finalStatus: 'success',
+          attempts: 1,
+          attemptResults: [{
+            attempt: 1,
+            ciResult: { status: 'success', summary: 'All CI checks passed' },
+            timestamp: new Date(),
+          }],
+          lastCIResult: { status: 'success', summary: 'All CI checks passed' },
+        }),
+      },
+    });
+    vi.mocked(ctx.deps.execCommand)
+      .mockReturnValueOnce('')
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1');
+
+    const signal = await handlePRLifecycle(ctx);
+
+    expect(signal.kind).toBe('continue');
+    // マージ準備完了通知が送信されている
+    expect(notifier.notifications.some((n) => n.message.includes('マージ準備完了'))).toBe(true);
+  });
+
   it('worktreeクリーンアップが失敗してもポーリングは続行される', async () => {
     vi.mocked(runMergePollingLoop).mockResolvedValue({ finalStatus: 'merged', elapsedMs: 1000 });
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
