@@ -76,6 +76,21 @@ describe('vault/reader', () => {
       const story = readStoryFile(vault.storyFilePath);
       expect(story.project).toBe('another-proj');
     });
+
+    it('パスに Projects/ が含まれない場合は空文字を返す', () => {
+      // 一時ファイルを Projects/ を含まないパスに直接作成
+      const fs = require('fs');
+      const os = require('os');
+      const tmpFile = path.join(os.tmpdir(), 'no-projects-dir-story.md');
+      fs.writeFileSync(tmpFile, '---\nstatus: Doing\n---\n\n# Test\n');
+
+      try {
+        const story = readStoryFile(tmpFile);
+        expect(story.project).toBe('');
+      } finally {
+        fs.unlinkSync(tmpFile);
+      }
+    });
   });
 
   // ─── getStoryTasks ──────────────────────────────────
@@ -127,6 +142,25 @@ describe('vault/reader', () => {
       expect(task.frontmatter.priority).toBe('high');
       expect(task.frontmatter.effort).toBe('low');
       expect(task.content).toContain('テストタスク');
+    });
+
+    it('タスクの status が未設定の場合はデフォルトで Todo を返す', async () => {
+      vault = createFakeVault({
+        project: 'test-project',
+        story: { slug: 'no-status-story' },
+        tasks: [{ slug: '01-no-status', status: 'Todo' }],
+      });
+      (globalThis as Record<string, unknown>).__TEST_VAULT_PATH__ = vault.vaultPath;
+
+      // タスクファイルから status 行を手動で削除
+      const fs = require('fs');
+      const raw = fs.readFileSync(vault.taskFilePaths[0], 'utf-8');
+      const rewritten = raw.replace(/^status:.*\n/m, '');
+      fs.writeFileSync(vault.taskFilePaths[0], rewritten);
+
+      const tasks = await getStoryTasks('test-project', 'no-status-story');
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].status).toBe('Todo');
     });
 
     it('タスクが0件の場合は空配列を返す', async () => {
