@@ -14,7 +14,10 @@ function required(key: string): string {
 export const notifyBackend = (process.env.NOTIFY_BACKEND ?? 'local') as 'local' | 'slack' | 'ntfy';
 
 export const config = {
-  vaultPath: required('VAULT_PATH'),
+  /** Vault パス（遅延評価: 実際にアクセスされたときのみ環境変数を検証する） */
+  get vaultPath(): string {
+    return required('VAULT_PATH');
+  },
   /** Slack 設定は notifyBackend === 'slack' のときだけ必須 */
   slack: notifyBackend === 'slack'
     ? {
@@ -40,7 +43,7 @@ export const config = {
         callbackBaseUrl: process.env.NTFY_CALLBACK_BASE_URL ?? '',
       },
   watchProject: process.env.WATCH_PROJECT ?? 'claude-workflow-kit',
-} as const;
+};
 
 /**
  * repoPath の解決。
