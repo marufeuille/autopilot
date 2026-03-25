@@ -8,6 +8,8 @@ export interface CIPollingOptions {
   maxWaitMs?: number;
   /** CI失敗時の最大リトライ回数（デフォルト: 3） */
   maxRetries?: number;
+  /** runs 空時の最大リトライ回数（デフォルト: 10、環境変数 CI_EMPTY_RUNS_MAX_RETRIES で上書き可能） */
+  emptyRunsMaxRetries?: number;
 }
 
 /**
