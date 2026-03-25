@@ -251,8 +251,8 @@ describe('異常系ワークフロー結合テスト', () => {
         const story = readStoryFile(vault.storyFilePath);
         await runStory(story, notifier, deps);
 
-        // runAgent が 3 回呼ばれる（初回実装 + リトライ実装 + doc-update）
-        expect(deps.runAgent).toHaveBeenCalledTimes(3);
+        // runAgent が 4 回呼ばれる（初回実装 + リトライ実装 + doc-update + story-doc-update）
+        expect(deps.runAgent).toHaveBeenCalledTimes(4);
 
         // リトライ時のプロンプトにクローズ理由が含まれる
         const secondCallArgs = (deps.runAgent as ReturnType<typeof vi.fn>).mock.calls[1];
@@ -349,8 +349,8 @@ describe('異常系ワークフロー結合テスト', () => {
         );
         expect(timeoutNotification).toBeDefined();
 
-        // runAgent が 3 回呼ばれる（初回実装 + リトライ実装 + doc-update）
-        expect(deps.runAgent).toHaveBeenCalledTimes(3);
+        // runAgent が 4 回呼ばれる（初回実装 + リトライ実装 + doc-update + story-doc-update）
+        expect(deps.runAgent).toHaveBeenCalledTimes(4);
 
         // タスクが最終的に Done
         const taskFm = readFrontmatter(vault.taskFilePaths[0]);
@@ -590,8 +590,8 @@ describe('異常系ワークフロー結合テスト', () => {
         const story = readStoryFile(vault.storyFilePath);
         await runStory(story, notifier, deps);
 
-        // runAgent が 3 回呼ばれる（初回実装 + リトライ実装 + doc-update）
-        expect(deps.runAgent).toHaveBeenCalledTimes(3);
+        // runAgent が 4 回呼ばれる（初回実装 + リトライ実装 + doc-update + story-doc-update）
+        expect(deps.runAgent).toHaveBeenCalledTimes(4);
 
         // runCIPollingLoop が 2 回呼ばれる
         expect(deps.runCIPollingLoop).toHaveBeenCalledTimes(2);
