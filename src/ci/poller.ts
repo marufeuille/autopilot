@@ -9,6 +9,7 @@ import {
 
 const DEFAULT_POLLING_INTERVAL_MS = 30_000; // 30秒
 const DEFAULT_MAX_WAIT_MS = 900_000; // 15分
+const DEFAULT_EMPTY_RUNS_MAX_RETRIES = 10;
 
 /**
  * sleep ユーティリティ
@@ -30,8 +31,14 @@ export async function pollCIStatus(
 ): Promise<CIRunResult> {
   const pollingInterval = options.pollingIntervalMs ?? DEFAULT_POLLING_INTERVAL_MS;
   const maxWait = options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
+  const emptyRunsMaxRetries =
+    options.emptyRunsMaxRetries ??
+    (process.env.CI_EMPTY_RUNS_MAX_RETRIES
+      ? parseInt(process.env.CI_EMPTY_RUNS_MAX_RETRIES, 10)
+      : DEFAULT_EMPTY_RUNS_MAX_RETRIES);
 
   const startTime = Date.now();
+  let emptyRunsCount = 0;
 
   while (true) {
     const elapsed = Date.now() - startTime;
@@ -40,10 +47,26 @@ export async function pollCIStatus(
     }
 
     const status = getCIStatus(repoPath, branch);
-    console.log(`[ci-poller] status=${status.status}, elapsed=${elapsed}ms`);
+    console.log(`[ci-poller] status=${status.status}, reason=${status.reason ?? 'none'}, elapsed=${elapsed}ms`);
 
     if (status.status !== 'pending') {
       return status;
+    }
+
+    // runs が空の pending をカウントし、上限超過で CI 未設定とみなす
+    if (status.reason === 'no_runs_yet') {
+      emptyRunsCount++;
+      console.log(`[ci-poller] empty runs count: ${emptyRunsCount}/${emptyRunsMaxRetries}`);
+      if (emptyRunsCount >= emptyRunsMaxRetries) {
+        console.log(`[ci-poller] empty runs max retries reached, treating as CI not configured`);
+        return {
+          status: 'success',
+          summary: 'No CI runs found after max retries (CI may not be configured)',
+        };
+      }
+    } else {
+      // runs が出現したらカウントをリセット
+      emptyRunsCount = 0;
     }
 
     // 残り時間よりポーリング間隔が長い場合は残り時間だけ待機

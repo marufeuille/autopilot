@@ -264,6 +264,90 @@ describe('pollCIStatus', () => {
       }),
     ).rejects.toThrow(CIPollingTimeoutError);
   });
+
+  it('runs 空が emptyRunsMaxRetries 回続くと CI 未設定として success を返す', async () => {
+    // 常に空配列を返す
+    mockExecSync.mockReturnValue('[]');
+
+    const result = await pollCIStatus('/repo', 'feature/task-01', {
+      pollingIntervalMs: 1,
+      maxWaitMs: 10000,
+      emptyRunsMaxRetries: 3,
+    });
+
+    expect(result.status).toBe('success');
+    expect(result.summary).toContain('No CI runs found after max retries');
+    // getCIStatus が3回呼ばれる（3回目で上限到達）
+    expect(mockExecSync).toHaveBeenCalledTimes(3);
+  });
+
+  it('runs 空 → CI 開始 → success で正常終了する', async () => {
+    mockExecSync
+      .mockReturnValueOnce('[]') // 1回目: 空
+      .mockReturnValueOnce('[]') // 2回目: 空
+      .mockReturnValueOnce(
+        JSON.stringify([
+          { databaseId: 1, status: 'in_progress', conclusion: null, name: 'CI' },
+        ]),
+      ) // 3回目: CI 開始
+      .mockReturnValueOnce(
+        JSON.stringify([
+          { databaseId: 1, status: 'completed', conclusion: 'success', name: 'CI', url: 'https://example.com' },
+        ]),
+      ); // 4回目: CI 完了
+
+    const result = await pollCIStatus('/repo', 'feature/task-01', {
+      pollingIntervalMs: 1,
+      maxWaitMs: 10000,
+      emptyRunsMaxRetries: 10,
+    });
+
+    expect(result.status).toBe('success');
+    expect(result.runUrl).toBe('https://example.com');
+    expect(mockExecSync).toHaveBeenCalledTimes(4);
+  });
+
+  it('runs 空 → CI 開始で emptyRunsCount がリセットされる', async () => {
+    mockExecSync
+      .mockReturnValueOnce('[]') // 1回目: 空 (count=1)
+      .mockReturnValueOnce('[]') // 2回目: 空 (count=2)
+      .mockReturnValueOnce(
+        JSON.stringify([
+          { databaseId: 1, status: 'in_progress', conclusion: null, name: 'CI' },
+        ]),
+      ) // 3回目: CI 開始 (count リセット)
+      .mockReturnValueOnce(
+        JSON.stringify([
+          { databaseId: 1, status: 'completed', conclusion: 'success', name: 'CI' },
+        ]),
+      );
+
+    const result = await pollCIStatus('/repo', 'feature/task-01', {
+      pollingIntervalMs: 1,
+      maxWaitMs: 10000,
+      emptyRunsMaxRetries: 3, // 3回でCI未設定判定だが、途中でCI開始→リセット
+    });
+
+    expect(result.status).toBe('success');
+    // CI の URL がない（runUrl未指定）ので通常の success
+    expect(mockExecSync).toHaveBeenCalledTimes(4);
+  });
+
+  it('環境変数 CI_EMPTY_RUNS_MAX_RETRIES でリトライ上限を設定できる', async () => {
+    process.env.CI_EMPTY_RUNS_MAX_RETRIES = '2';
+    mockExecSync.mockReturnValue('[]');
+
+    const result = await pollCIStatus('/repo', 'feature/task-01', {
+      pollingIntervalMs: 1,
+      maxWaitMs: 10000,
+    });
+
+    expect(result.status).toBe('success');
+    expect(result.summary).toContain('No CI runs found after max retries');
+    expect(mockExecSync).toHaveBeenCalledTimes(2);
+
+    delete process.env.CI_EMPTY_RUNS_MAX_RETRIES;
+  });
 });
 
 describe('sleep', () => {
