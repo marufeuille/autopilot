@@ -103,6 +103,22 @@ describe("syncMainBranch", () => {
     }
   });
 
+  it("checkout 失敗時にエラーに stderr プロパティがない場合でも GitSyncError がスローされる", async () => {
+    const error = new Error("generic checkout error");
+    mockedExecSync.mockImplementationOnce(() => {
+      throw error;
+    });
+
+    try {
+      await syncMainBranch("/tmp/repo");
+      expect.fail("GitSyncError がスローされるべき");
+    } catch (e) {
+      expect(e).toBeInstanceOf(GitSyncError);
+      expect((e as GitSyncError).message).toContain("Failed to checkout main");
+      expect((e as GitSyncError).message).toContain("generic checkout error");
+    }
+  });
+
   it("pull 失敗時に GitSyncError がスローされ、stderr の内容が含まれる", async () => {
     // checkout は成功
     mockedExecSync.mockReturnValueOnce(Buffer.from(""));
@@ -205,6 +221,21 @@ describe("detectNoRemote", () => {
     expect(mockedExecSync).toHaveBeenCalledTimes(1);
   });
 
+  it("エラーに stderr プロパティがない場合でも true を返す", () => {
+    mockedExecSync.mockImplementationOnce(() => {
+      throw "unexpected string error";
+    });
+    const warnSpy = vi.spyOn(console, "warn");
+
+    const result = detectNoRemote("/tmp/repo");
+
+    expect(result).toBe(true);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("ローカルオンリーモード")
+    );
+    warnSpy.mockRestore();
+  });
+
   it("異なる repoPath ではキャッシュが分離され、それぞれ git コマンドが実行される", () => {
     // /tmp/repo-a はリモートあり
     mockedExecSync.mockReturnValueOnce(Buffer.from("https://github.com/user/repo-a.git"));
@@ -244,6 +275,21 @@ describe("createWorktree", () => {
     createWorktree("/tmp/repo", "/tmp/autopilot/my-task", "feature/my-task");
 
     expect(mockedExecFileSync).toHaveBeenCalledTimes(1);
+    expect(mockedExecFileSync).toHaveBeenCalledWith(
+      "git",
+      ["worktree", "add", "/tmp/autopilot/my-task", "-b", "feature/my-task"],
+      {
+        cwd: "/tmp/repo",
+        stdio: "pipe",
+      }
+    );
+  });
+
+  it("正常系: createBranch: true を明示的に渡した場合も -b フラグ付きで実行される", () => {
+    mockedExecFileSync.mockReturnValue(Buffer.from(""));
+
+    createWorktree("/tmp/repo", "/tmp/autopilot/my-task", "feature/my-task", { createBranch: true });
+
     expect(mockedExecFileSync).toHaveBeenCalledWith(
       "git",
       ["worktree", "add", "/tmp/autopilot/my-task", "-b", "feature/my-task"],
@@ -299,6 +345,22 @@ describe("createWorktree", () => {
       expect(e).toBeInstanceOf(GitSyncError);
       expect((e as GitSyncError).message).toContain("Failed to create worktree");
       expect((e as GitSyncError).message).toContain("already exists");
+    }
+  });
+
+  it("失敗時にエラーに stderr プロパティがない場合でも GitSyncError がスローされる", () => {
+    const error = new Error("generic worktree error");
+    mockedExecFileSync.mockImplementationOnce(() => {
+      throw error;
+    });
+
+    try {
+      createWorktree("/tmp/repo", "/tmp/autopilot/my-task", "feature/my-task");
+      expect.fail("GitSyncError がスローされるべき");
+    } catch (e) {
+      expect(e).toBeInstanceOf(GitSyncError);
+      expect((e as GitSyncError).message).toContain("Failed to create worktree");
+      expect((e as GitSyncError).message).toContain("generic worktree error");
     }
   });
 
@@ -378,6 +440,22 @@ describe("removeWorktree", () => {
       expect(e).toBeInstanceOf(GitSyncError);
       expect((e as GitSyncError).message).toContain("Failed to remove worktree");
       expect((e as GitSyncError).message).toContain("is not a valid worktree");
+    }
+  });
+
+  it("失敗時にエラーに stderr プロパティがない場合でも GitSyncError がスローされる", () => {
+    const error = new Error("generic remove error");
+    mockedExecFileSync.mockImplementationOnce(() => {
+      throw error;
+    });
+
+    try {
+      removeWorktree("/tmp/repo", "/tmp/autopilot/my-task");
+      expect.fail("GitSyncError がスローされるべき");
+    } catch (e) {
+      expect(e).toBeInstanceOf(GitSyncError);
+      expect((e as GitSyncError).message).toContain("Failed to remove worktree");
+      expect((e as GitSyncError).message).toContain("generic remove error");
     }
   });
 
