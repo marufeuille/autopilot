@@ -117,24 +117,22 @@ export async function runStory(
     : allCurrentTasks;
   const allTerminal = allTasks.length > 0 && allTasks.every((t) => terminalStatuses.includes(t.status));
   const allDone = allTasks.length > 0 && allTasks.every((t) => t.status === 'Done');
-  if (allDone || allTerminal) {
-    // Story 完了時の README ドキュメント更新（リモートありの場合のみ）
+
+  if (allDone) {
+    // 全タスク Done → README 更新を試みてからストーリーを Done にする
     if (!detectNoRemote(repoPath)) {
       try {
-        const doneTasks = allTasks.filter((t) => t.status === 'Done');
-        if (doneTasks.length > 0) {
-          const docResult = await runStoryDocUpdate(story, doneTasks, repoPath, notifier, d);
-          if (docResult.skipped) {
-            await notifier.notify(
-              `ℹ️ README 更新不要と判断しました: \`${story.slug}\``,
-              story.slug,
-            );
-          } else {
-            await notifier.notify(
-              `📝 *README 更新 PR 作成*: \`${story.slug}\`\n*PR*: ${docResult.prUrl}\nレビューをお願いします。`,
-              story.slug,
-            );
-          }
+        const docResult = await runStoryDocUpdate(story, allTasks, repoPath, notifier, d);
+        if (docResult.skipped) {
+          await notifier.notify(
+            `ℹ️ README 更新不要と判断しました: \`${story.slug}\``,
+            story.slug,
+          );
+        } else {
+          await notifier.notify(
+            `📝 *README 更新 PR 作成*: \`${story.slug}\`\n*PR*: ${docResult.prUrl}\nレビューをお願いします。`,
+            story.slug,
+          );
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -147,12 +145,39 @@ export async function runStory(
     }
 
     d.updateFileStatus(story.filePath, 'Done');
-  }
-
-  if (allDone) {
     await notifier.notify(`✅ ストーリー完了: ${story.slug}`, story.slug);
     console.log(`[runner] story done: ${story.slug}`);
   } else if (allTerminal) {
+    // 一部 Skipped/Failed あり → README 更新は行わず、Done タスクがあればステータスを記録
+    const doneTasks = allTasks.filter((t) => t.status === 'Done');
+    if (doneTasks.length > 0) {
+      // Done タスクがある場合のみ README 更新を試みる
+      if (!detectNoRemote(repoPath)) {
+        try {
+          const docResult = await runStoryDocUpdate(story, doneTasks, repoPath, notifier, d);
+          if (docResult.skipped) {
+            await notifier.notify(
+              `ℹ️ README 更新不要と判断しました: \`${story.slug}\``,
+              story.slug,
+            );
+          } else {
+            await notifier.notify(
+              `📝 *README 更新 PR 作成*: \`${story.slug}\`\n*PR*: ${docResult.prUrl}\nレビューをお願いします。`,
+              story.slug,
+            );
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.error(`[runner] story doc update failed: ${message}`);
+          await notifier.notify(
+            `⚠️ *README 更新失敗* (${story.slug}): ${message}\nストーリー完了処理は続行します。`,
+            story.slug,
+          ).catch(() => {});
+        }
+      }
+    }
+
+    d.updateFileStatus(story.filePath, 'Done');
     const summary = allTasks.map((t) => `${t.slug}(${t.status})`).join(', ');
     await notifier.notify(`✅ ストーリー完了 (一部スキップ/失敗あり): ${story.slug}\n${summary}`, story.slug);
     console.log(`[runner] story done with skipped/failed tasks: ${story.slug}, ${summary}`);
