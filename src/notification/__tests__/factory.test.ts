@@ -26,6 +26,8 @@ vi.mock('@slack/bolt', () => {
 
 describe('createNotificationBackend (factory)', () => {
   const originalEnv = process.env.NOTIFY_BACKEND;
+  const slackEnvKeys = ['SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'SLACK_CHANNEL_ID'] as const;
+  const originalSlackEnv = Object.fromEntries(slackEnvKeys.map(k => [k, process.env[k]]));
 
   beforeEach(() => {
     // モジュールキャッシュをリセットして環境変数の変更を反映させる
@@ -38,6 +40,14 @@ describe('createNotificationBackend (factory)', () => {
       delete process.env.NOTIFY_BACKEND;
     } else {
       process.env.NOTIFY_BACKEND = originalEnv;
+    }
+    // Slack 環境変数を元に戻す
+    for (const key of slackEnvKeys) {
+      if (originalSlackEnv[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = originalSlackEnv[key];
+      }
     }
   });
 
@@ -79,6 +89,9 @@ describe('createNotificationBackend (factory)', () => {
 
   it('NOTIFY_BACKEND=slack で ResilientNotificationBackend が生成される（Slackをラップ）', async () => {
     process.env.NOTIFY_BACKEND = 'slack';
+    process.env.SLACK_BOT_TOKEN = 'xoxb-test-token';
+    process.env.SLACK_APP_TOKEN = 'xapp-test-token';
+    process.env.SLACK_CHANNEL_ID = 'C0000000000';
     const { createNotificationBackend, ResilientNotificationBackend } = await import('../index');
 
     const backend = await createNotificationBackend();
