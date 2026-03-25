@@ -3,6 +3,12 @@ import type { StoryFile, TaskFile } from '../vault/reader';
 import type { NotificationBackend } from '../notification/types';
 
 // モック定義
+vi.mock('../config', () => ({
+  resolveRepoPath: vi.fn((project: string) => `/Users/test/dev/${project}`),
+  config: { vaultPath: '/vault' },
+  notifyBackend: 'local',
+}));
+
 vi.mock('../vault/reader', () => ({
   getStoryTasks: vi.fn(),
 }));
@@ -45,6 +51,12 @@ vi.mock('../git', () => ({
       this.name = 'GitSyncError';
     }
   },
+}));
+
+// story-doc-update をモック（README 更新 PR 作成）
+const mockRunStoryDocUpdate = vi.fn().mockResolvedValue({ skipped: true });
+vi.mock('../story-doc-update', () => ({
+  runStoryDocUpdate: (...args: unknown[]) => mockRunStoryDocUpdate(...args),
 }));
 
 // マージモジュールをモック
@@ -388,6 +400,135 @@ describe('runStory', () => {
     expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Done');
 
     consoleErrorSpy.mockRestore();
+  });
+
+  describe('Story完了時のREADME更新', () => {
+    beforeEach(() => {
+      mockRunStoryDocUpdate.mockReset();
+      mockRunMergePollingLoop.mockReset();
+    });
+
+    it('全タスクDone後にrunStoryDocUpdateが呼ばれる', async () => {
+      const story = createStory();
+      const notifier = createMockNotifier();
+      const doneTasks = [
+        createTask('task-01', 'Done'),
+        createTask('task-02', 'Done'),
+      ];
+      mockedGetStoryTasks.mockResolvedValue(doneTasks);
+      mockRunStoryDocUpdate.mockResolvedValue({ skipped: true });
+
+      await runStory(story, notifier);
+
+      expect(mockRunStoryDocUpdate).toHaveBeenCalledWith(
+        story,
+        doneTasks,
+        expect.any(String),
+        notifier,
+        expect.any(Object),
+      );
+    });
+
+    it('runStoryDocUpdateのエラーがストーリー完了通知をブロックしない', async () => {
+      const story = createStory();
+      const notifier = createMockNotifier();
+      const doneTasks = [
+        createTask('task-01', 'Done'),
+      ];
+      mockedGetStoryTasks.mockResolvedValue(doneTasks);
+      mockRunStoryDocUpdate.mockRejectedValue(new Error('doc update failed'));
+
+      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      await runStory(story, notifier);
+
+      // ストーリーは Done に更新される（エラーでブロックされない）
+      expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Done');
+      // 完了通知も送信される
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.stringContaining('ストーリー完了'),
+        'my-story',
+      );
+      // エラー通知も送信される
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.stringContaining('README 更新失敗'),
+        'my-story',
+      );
+
+      consoleErrorSpy.mockRestore();
+    });
+
+    it('PR作成後にマージポーリングで待機する', async () => {
+      const story = createStory();
+      const notifier = createMockNotifier();
+      const doneTasks = [
+        createTask('task-01', 'Done'),
+      ];
+      mockedGetStoryTasks.mockResolvedValue(doneTasks);
+      mockRunStoryDocUpdate.mockResolvedValue({
+        skipped: false,
+        prUrl: 'https://github.com/test/repo/pull/99',
+      });
+      mockRunMergePollingLoop.mockResolvedValue({ finalStatus: 'merged', elapsedMs: 5000 });
+
+      await runStory(story, notifier);
+
+      // マージポーリングが呼ばれること
+      expect(mockRunMergePollingLoop).toHaveBeenCalledWith(
+        'https://github.com/test/repo/pull/99',
+        expect.any(String),
+        expect.objectContaining({ execGh: expect.any(Function) }),
+      );
+      // マージ完了通知が送信されること
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.stringContaining('README 更新 PR マージ完了'),
+        'my-story',
+      );
+    });
+
+    it('更新不要の場合はマージポーリングが呼ばれない', async () => {
+      const story = createStory();
+      const notifier = createMockNotifier();
+      const doneTasks = [
+        createTask('task-01', 'Done'),
+      ];
+      mockedGetStoryTasks.mockResolvedValue(doneTasks);
+      mockRunStoryDocUpdate.mockResolvedValue({ skipped: true });
+
+      await runStory(story, notifier);
+
+      // マージポーリングは呼ばれない
+      expect(mockRunMergePollingLoop).not.toHaveBeenCalled();
+      // スキップ通知が送信される
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.stringContaining('README 更新不要'),
+        'my-story',
+      );
+    });
+
+    it('PR未マージ（closed等）でもストーリー完了通知は送信される', async () => {
+      const story = createStory();
+      const notifier = createMockNotifier();
+      const doneTasks = [
+        createTask('task-01', 'Done'),
+      ];
+      mockedGetStoryTasks.mockResolvedValue(doneTasks);
+      mockRunStoryDocUpdate.mockResolvedValue({
+        skipped: false,
+        prUrl: 'https://github.com/test/repo/pull/99',
+      });
+      mockRunMergePollingLoop.mockResolvedValue({ finalStatus: 'closed', elapsedMs: 3000 });
+
+      await runStory(story, notifier);
+
+      // 未マージ通知が送信される
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.stringContaining('README 更新 PR 未マージ'),
+        'my-story',
+      );
+      // ストーリーは Done に更新される
+      expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Done');
+    });
   });
 });
 
