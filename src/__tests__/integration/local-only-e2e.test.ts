@@ -373,11 +373,11 @@ describe('リモートありフロー E2E リグレッションテスト', () =>
         const storyFm = readFrontmatter(vault.storyFilePath);
         expect(storyFm.status).toBe('Done');
 
-        // syncMainBranch が呼ばれた（通常フロー）
-        expect(deps.syncMainBranch).toHaveBeenCalledTimes(1);
+        // syncMainBranch が呼ばれた（通常フロー + story-doc-update）
+        expect(deps.syncMainBranch).toHaveBeenCalledTimes(2);
 
-        // runAgent が呼ばれた（implementation + doc-update）
-        expect(deps.runAgent).toHaveBeenCalledTimes(2);
+        // runAgent が呼ばれた（implementation + doc-update + story-doc-update）
+        expect(deps.runAgent).toHaveBeenCalledTimes(3);
 
         // runCIPollingLoop が呼ばれた（CI ポーリング）
         expect(deps.runCIPollingLoop).toHaveBeenCalledTimes(1);
@@ -546,11 +546,11 @@ describe('リモートありフロー E2E リグレッションテスト', () =>
         const storyFm = readFrontmatter(vault.storyFilePath);
         expect(storyFm.status).toBe('Done');
 
-        // runAgent が 4 回呼ばれた（タスク2つ × (implementation + doc-update)）
-        expect(deps.runAgent).toHaveBeenCalledTimes(4);
+        // runAgent が 5 回呼ばれた（タスク2つ × (implementation + doc-update) + story-doc-update）
+        expect(deps.runAgent).toHaveBeenCalledTimes(5);
 
-        // syncMainBranch が 2 回呼ばれた
-        expect(deps.syncMainBranch).toHaveBeenCalledTimes(2);
+        // syncMainBranch が 3 回呼ばれた（タスク2つ + story-doc-update）
+        expect(deps.syncMainBranch).toHaveBeenCalledTimes(3);
 
         // recordTaskCompletion が 2 回呼ばれた
         expect(deps.recordTaskCompletion).toHaveBeenCalledTimes(2);

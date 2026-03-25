@@ -5,11 +5,12 @@ import {
   generateApprovalId,
   buildThreadOriginMessage,
 } from './notification';
-import { GitSyncError } from './git';
+import { GitSyncError, detectNoRemote } from './git';
 import { resolveRepoPath } from './config';
 import { RunnerDeps, createDefaultRunnerDeps } from './runner-deps';
 import { createTaskContext } from './pipeline/runner';
 import { taskPipeline } from './pipeline/task-pipeline';
+import { runStoryDocUpdate } from './story-doc-update';
 
 export { RunnerDeps, createDefaultRunnerDeps } from './runner-deps';
 
@@ -116,12 +117,42 @@ export async function runStory(
     : allCurrentTasks;
   const allTerminal = allTasks.length > 0 && allTasks.every((t) => terminalStatuses.includes(t.status));
   const allDone = allTasks.length > 0 && allTasks.every((t) => t.status === 'Done');
-  if (allDone) {
+  if (allDone || allTerminal) {
+    // Story 完了時の README ドキュメント更新（リモートありの場合のみ）
+    if (!detectNoRemote(repoPath)) {
+      try {
+        const doneTasks = allTasks.filter((t) => t.status === 'Done');
+        if (doneTasks.length > 0) {
+          const docResult = await runStoryDocUpdate(story, doneTasks, repoPath, notifier, d);
+          if (docResult.skipped) {
+            await notifier.notify(
+              `ℹ️ README 更新不要と判断しました: \`${story.slug}\``,
+              story.slug,
+            );
+          } else {
+            await notifier.notify(
+              `📝 *README 更新 PR 作成*: \`${story.slug}\`\n*PR*: ${docResult.prUrl}\nレビューをお願いします。`,
+              story.slug,
+            );
+          }
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`[runner] story doc update failed: ${message}`);
+        await notifier.notify(
+          `⚠️ *README 更新失敗* (${story.slug}): ${message}\nストーリー完了処理は続行します。`,
+          story.slug,
+        ).catch(() => {});
+      }
+    }
+
     d.updateFileStatus(story.filePath, 'Done');
+  }
+
+  if (allDone) {
     await notifier.notify(`✅ ストーリー完了: ${story.slug}`, story.slug);
     console.log(`[runner] story done: ${story.slug}`);
   } else if (allTerminal) {
-    d.updateFileStatus(story.filePath, 'Done');
     const summary = allTasks.map((t) => `${t.slug}(${t.status})`).join(', ');
     await notifier.notify(`✅ ストーリー完了 (一部スキップ/失敗あり): ${story.slug}\n${summary}`, story.slug);
     console.log(`[runner] story done with skipped/failed tasks: ${story.slug}, ${summary}`);
