@@ -102,30 +102,33 @@ describe('SlackNotificationBackend', () => {
       });
 
       // postMessage が呼ばれたことを確認
-      expect(mockApp.client.chat.postMessage).toHaveBeenCalledWith({
-        channel: expect.any(String),
-        blocks: expect.arrayContaining([
-          expect.objectContaining({
-            type: 'section',
-            text: { type: 'mrkdwn', text: 'テストメッセージ' },
-          }),
-          expect.objectContaining({
-            type: 'actions',
-            elements: expect.arrayContaining([
-              expect.objectContaining({
-                action_id: 'cwk_approve',
-                text: { type: 'plain_text', text: '開始' },
-                value: 'test-id',
-              }),
-              expect.objectContaining({
-                action_id: 'cwk_reject',
-                text: { type: 'plain_text', text: 'スキップ' },
-                value: 'test-id',
-              }),
-            ]),
-          }),
-        ]),
-      });
+      expect(mockApp.client.chat.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: expect.any(String),
+          text: 'テストメッセージ',
+          blocks: expect.arrayContaining([
+            expect.objectContaining({
+              type: 'section',
+              text: { type: 'mrkdwn', text: 'テストメッセージ' },
+            }),
+            expect.objectContaining({
+              type: 'actions',
+              elements: expect.arrayContaining([
+                expect.objectContaining({
+                  action_id: 'cwk_approve',
+                  text: { type: 'plain_text', text: '開始' },
+                  value: 'test-id',
+                }),
+                expect.objectContaining({
+                  action_id: 'cwk_reject',
+                  text: { type: 'plain_text', text: 'スキップ' },
+                  value: 'test-id',
+                }),
+              ]),
+            }),
+          ]),
+        }),
+      );
 
       // Promise は pending なのでクリーンアップ（テストがハングしないように）
       void promise;

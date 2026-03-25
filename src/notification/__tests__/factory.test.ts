@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+// dotenv をモックして .env ファイルが process.env を上書きしないようにする
+vi.mock('dotenv', () => ({
+  config: vi.fn(),
+}));
+
 // @slack/bolt をモックして Slack バックエンド生成時にネットワーク接続しない
 vi.mock('@slack/bolt', () => {
   class MockApp {
@@ -9,6 +14,7 @@ vi.mock('@slack/bolt', () => {
         update: vi.fn().mockResolvedValue({}),
       },
     };
+    receiver = { client: {} };
     action = vi.fn();
     event = vi.fn();
     view = vi.fn();
