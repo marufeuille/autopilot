@@ -27,6 +27,8 @@ export interface CIRunResult {
   failureLogs?: string;
   /** GitHub Actions の Run URL */
   runUrl?: string;
+  /** pending の理由（'no_runs_yet': CI実行がまだ存在しない） */
+  reason?: 'no_runs_yet';
 }
 
 /**
