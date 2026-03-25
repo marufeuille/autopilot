@@ -203,4 +203,61 @@ describe('CI race condition 統合テスト: runCIPollingLoop → pollCIStatus �
     expect(result.lastCIResult?.summary).toContain('No CI runs found after max retries');
     expect(mockExecSync).toHaveBeenCalledTimes(1);
   });
+
+  it('maxWaitMs を超過してタイムアウトした場合 finalStatus=timeout を返す', async () => {
+    // CI が pending のまま maxWaitMs=0 でタイムアウトさせる
+    mockExecSync.mockReturnValue(ghRunJson('in_progress', null));
+
+    const result = await runCIPollingLoop('/repo', 'feature/branch', 'task desc', {
+      pollingIntervalMs: 1,
+      maxWaitMs: 0, // 即タイムアウト
+    });
+
+    expect(result.finalStatus).toBe('timeout');
+    expect(result.attemptResults[0].ciResult.summary).toContain('timed out');
+  });
+
+  it('execSync が例外をスロー（gh CLI 未インストール等）した場合 finalStatus=failure を返す', async () => {
+    mockExecSync.mockImplementation(() => {
+      throw new Error('command not found: gh');
+    });
+
+    const result = await runCIPollingLoop('/repo', 'feature/branch', 'task desc', {
+      pollingIntervalMs: 1,
+      maxWaitMs: 30000,
+    });
+
+    expect(result.finalStatus).toBe('failure');
+    expect(result.attemptResults[0].ciResult.status).toBe('failure');
+    expect(result.attemptResults[0].ciResult.summary).toContain('command not found: gh');
+  });
+
+  it('execSync が不正な JSON を返した場合 finalStatus=failure を返す', async () => {
+    mockExecSync.mockReturnValue('not valid json {{{');
+
+    const result = await runCIPollingLoop('/repo', 'feature/branch', 'task desc', {
+      pollingIntervalMs: 1,
+      maxWaitMs: 30000,
+    });
+
+    expect(result.finalStatus).toBe('failure');
+    expect(result.attemptResults[0].ciResult.status).toBe('failure');
+    expect(result.attemptResults[0].ciResult.summary).toContain('CI polling error');
+  });
+
+  it('ネットワーク障害（execSync ENOTFOUND）でも finalStatus=failure を返す', async () => {
+    mockExecSync.mockImplementation(() => {
+      const error = new Error('getaddrinfo ENOTFOUND api.github.com');
+      error.name = 'Error';
+      throw error;
+    });
+
+    const result = await runCIPollingLoop('/repo', 'feature/branch', 'task desc', {
+      pollingIntervalMs: 1,
+      maxWaitMs: 30000,
+    });
+
+    expect(result.finalStatus).toBe('failure');
+    expect(result.attemptResults[0].ciResult.summary).toContain('ENOTFOUND');
+  });
 });
