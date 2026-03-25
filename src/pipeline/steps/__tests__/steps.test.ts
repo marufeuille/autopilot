@@ -688,6 +688,7 @@ describe('handlePRLifecycle', () => {
   });
 
   it('CI finalStatus が success でも lastCIResult.status が pending の場合はマージ準備完了通知を送信せず retry を返す', async () => {
+    vi.mocked(runMergePollingLoop).mockClear();
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { ctx, notifier } = makeCtx({
       ctxStore: baseCtxStore,
