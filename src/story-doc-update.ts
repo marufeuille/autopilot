@@ -24,10 +24,11 @@ export interface StoryDocUpdateResult {
 
 /**
  * slug をブランチ名・コマンド引数に安全に使える形式にサニタイズする。
- * 英数字、ハイフン、アンダースコア、スラッシュ、ドットのみ許可。
+ * 英数字、ハイフン、アンダースコア、ドットのみ許可。
+ * スラッシュはパストラバーサル防止のため除外。
  */
 export function sanitizeSlug(slug: string): string {
-  return slug.replace(/[^a-zA-Z0-9\-_./]/g, '');
+  return slug.replace(/[^a-zA-Z0-9\-_.]/g, '');
 }
 
 /**
@@ -127,48 +128,51 @@ export async function runStoryDocUpdate(
       return { skipped: true };
     }
 
-    // README.md 以外の変更がある場合は元に戻す
-    const changedFiles = diff.split('\n').map((line) => line.trim().split(/\s+/).pop() ?? '');
-    const nonReadmeFiles = changedFiles.filter((f) => f !== 'README.md');
-    if (nonReadmeFiles.length > 0) {
-      // README.md 以外の変更をリセット
-      for (const file of nonReadmeFiles) {
-        try {
-          deps.execCommand(`git checkout -- ${file}`, repoPath);
-        } catch { /* 新規ファイルの場合は checkout できない */ }
-        try {
-          deps.execCommand(`git clean -f -- ${file}`, repoPath);
-        } catch { /* ignore */ }
-      }
-    }
+    // README.md をまずステージングする（Agent が変更していれば）
+    try {
+      deps.execCommand('git add README.md', repoPath);
+    } catch { /* README.md が変更されていなければ失敗してもよい */ }
 
-    // README.md のみをステージング
-    deps.execCommand('git add README.md', repoPath);
+    // README.md 以外の変更をすべてリセットする。
+    // コマンドインジェクション防止のため、個別ファイル名をシェルコマンドに渡さず、
+    // git checkout -- . と git clean -fd で一括リセットする。
+    // README.md は既にステージング済みなので checkout -- . の影響を受けない。
+    try {
+      deps.execCommand('git checkout -- .', repoPath);
+    } catch { /* ignore */ }
+    try {
+      deps.execCommand('git clean -fd', repoPath);
+    } catch { /* ignore */ }
 
     // README.md に実際の変更があるか再確認
     const stagedDiff = deps.execCommand('git diff --cached --name-only', repoPath).trim();
     if (!stagedDiff) {
+      // README 以外の変更のみだった → すべての変更をリセットしてからブランチ削除
       deps.execCommand('git checkout main', repoPath);
       deps.execCommand(`git branch -D ${branch}`, repoPath);
       console.log(`[story-doc-update] README 更新不要と判断（README以外の変更のみ）: ${story.slug}`);
       return { skipped: true };
     }
 
-    deps.execCommand(
-      `git commit -m "docs: update README for story ${safeSlug}"`,
-      repoPath,
-    );
+    // commit メッセージはシェルインジェクション防止のため一時ファイル経由で渡す
+    const commitMsg = `docs: update README for story ${safeSlug}`;
+    const tmpCommitMsgFile = join(tmpdir(), `autopilot-doc-commit-msg-${Date.now()}.txt`);
+    try {
+      writeFileSync(tmpCommitMsgFile, commitMsg, 'utf-8');
+      deps.execCommand(`git commit -F "${tmpCommitMsgFile}"`, repoPath);
+    } finally {
+      try { unlinkSync(tmpCommitMsgFile); } catch { /* ignore */ }
+    }
+
     deps.execCommand(`git push -u origin ${branch}`, repoPath);
 
-    // PR 作成（タイトル・本文とも一時ファイル経由でシェルインジェクションを防ぐ）
+    // PR 作成（本文は一時ファイル経由でシェルインジェクションを防ぐ）
     const title = `docs: README更新 - ${safeSlug}`;
     const body = buildPRBody(story, tasks);
     const tmpBodyFile = join(tmpdir(), `autopilot-doc-pr-body-${Date.now()}.md`);
-    const tmpTitleFile = join(tmpdir(), `autopilot-doc-pr-title-${Date.now()}.txt`);
 
     try {
       writeFileSync(tmpBodyFile, body, 'utf-8');
-      writeFileSync(tmpTitleFile, title, 'utf-8');
       const prUrl = deps.execGh(
         ['pr', 'create', '--base', 'main', '--head', branch, '--title', title, '--body-file', tmpBodyFile],
         repoPath,
@@ -177,10 +181,15 @@ export async function runStoryDocUpdate(
       return { skipped: false, prUrl };
     } finally {
       try { unlinkSync(tmpBodyFile); } catch { /* ignore */ }
-      try { unlinkSync(tmpTitleFile); } catch { /* ignore */ }
     }
   } catch (error) {
-    // エラー時は main に戻す（ベストエフォート）
+    // エラー時は全変更をリセットしてから main に戻す（ベストエフォート）
+    try {
+      deps.execCommand('git checkout -- .', repoPath);
+    } catch { /* ignore */ }
+    try {
+      deps.execCommand('git clean -fd', repoPath);
+    } catch { /* ignore */ }
     try {
       deps.execCommand('git checkout main', repoPath);
     } catch { /* ignore */ }

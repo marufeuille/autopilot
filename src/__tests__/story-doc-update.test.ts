@@ -36,7 +36,7 @@ describe('sanitizeSlug', () => {
   });
 
   it('特殊文字を除去する', () => {
-    expect(sanitizeSlug('; rm -rf /')).toBe('rm-rf/');
+    expect(sanitizeSlug('; rm -rf /')).toBe('rm-rf');
   });
 
   it('シェルインジェクション文字を除去する', () => {
@@ -190,7 +190,7 @@ describe('runStoryDocUpdate', () => {
       expect(calls.some((c: string) => c.includes('git checkout -b docs/story-test-story'))).toBe(true);
     });
 
-    it('commit メッセージにストーリー slug が含まれる', async () => {
+    it('commit メッセージにストーリー slug が含まれる（一時ファイル経由）', async () => {
       const execCommand = vi.fn().mockImplementation((cmd: string) => {
         if (cmd === 'git status --porcelain') return ' M README.md\n';
         if (cmd === 'git diff --cached --name-only') return 'README.md\n';
@@ -207,7 +207,8 @@ describe('runStoryDocUpdate', () => {
 
       const calls = execCommand.mock.calls.map((c: string[]) => c[0]);
       const commitCall = calls.find((c: string) => c.includes('git commit'));
-      expect(commitCall).toContain('test-story');
+      // commit は -F フラグで一時ファイル経由で実行される
+      expect(commitCall).toContain('git commit -F');
     });
 
     it('PR タイトル・本文にストーリー情報が含まれる（execGh 経由）', async () => {
@@ -283,9 +284,9 @@ describe('runStoryDocUpdate', () => {
 
       expect(result.skipped).toBe(false);
       const calls = execCommand.mock.calls.map((c: string[]) => c[0]);
-      // README 以外のファイルがリセットされる
-      expect(calls.some((c: string) => c.includes('git checkout -- src/temp.ts') || c.includes('git clean -f -- src/temp.ts'))).toBe(true);
-      expect(calls.some((c: string) => c.includes('git checkout -- .env') || c.includes('git clean -f -- .env'))).toBe(true);
+      // git checkout -- . で一括リセットされる（コマンドインジェクション防止）
+      expect(calls.some((c: string) => c === 'git checkout -- .')).toBe(true);
+      expect(calls.some((c: string) => c === 'git clean -fd')).toBe(true);
     });
 
     it('README 以外のファイルのみ変更された場合は skipped を返す', async () => {
