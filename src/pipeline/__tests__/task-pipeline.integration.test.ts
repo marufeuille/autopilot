@@ -86,7 +86,7 @@ describe('taskPipeline integration', () => {
         // implementation と doc-update で呼ばれる
         if (prompt.includes('実装してください')) {
           executionOrder.push('implementation:runAgent');
-        } else if (prompt.includes('ドキュメント更新担当')) {
+        } else if (prompt.includes('ドキュメント更新担当') || prompt.includes('Vault のストーリーノートに設計判断')) {
           executionOrder.push('doc-update:runAgent');
         }
       });
@@ -116,13 +116,13 @@ describe('taskPipeline integration', () => {
       const messages = notifier.notifications.map((n) => n.message);
 
       // doc-update の完了通知が存在する
-      expect(messages.some((m) => m.includes('ドキュメント更新完了'))).toBe(true);
+      expect(messages.some((m) => m.includes('Vault記録完了'))).toBe(true);
 
       // done の完了通知が存在する
       expect(messages.some((m) => m.includes('タスク完了'))).toBe(true);
 
       // doc-update の通知が done の通知より前に来ている
-      const docNotifIdx = messages.findIndex((m) => m.includes('ドキュメント更新完了'));
+      const docNotifIdx = messages.findIndex((m) => m.includes('Vault記録完了'));
       const doneNotifIdx = messages.findIndex((m) => m.includes('タスク完了'));
       expect(docNotifIdx).toBeLessThan(doneNotifIdx);
     });
@@ -181,7 +181,7 @@ describe('taskPipeline integration', () => {
       const runAgent = vi.fn().mockImplementation(async (prompt: string) => {
         callCount++;
         // doc-update のプロンプトの場合のみエラーを投げる
-        if (prompt.includes('ドキュメント更新担当')) {
+        if (prompt.includes('Vault のストーリーノートに設計判断')) {
           throw new Error('doc agent crashed');
         }
       });
@@ -202,7 +202,7 @@ describe('taskPipeline integration', () => {
       expect(result).toBe('done');
 
       // doc-update エラー通知が出力される
-      expect(notifier.notifications.some((n) => n.message.includes('ドキュメント更新失敗'))).toBe(true);
+      expect(notifier.notifications.some((n) => n.message.includes('Vault記録失敗'))).toBe(true);
 
       // done の完了通知も出力される（パイプラインが止まっていないことの証拠）
       expect(notifier.notifications.some((n) => n.message.includes('タスク完了'))).toBe(true);
@@ -230,12 +230,12 @@ describe('taskPipeline integration', () => {
       // localOnly がセットされている
       expect(ctx.get('localOnly')).toBe(true);
 
-      // doc-update のプロンプトに「README のみ」が含まれる（localOnly が伝播している）
+      // localOnly モードでは doc-update は Vault がないためスキップされる
+      // runAgent は implementation でのみ呼ばれ、doc-update では呼ばれない
       const docPrompt = runAgent.mock.calls.find(
-        (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('ドキュメント更新担当'),
+        (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('Vault のストーリーノートに設計判断'),
       );
-      expect(docPrompt).toBeDefined();
-      expect(docPrompt![0]).toContain('README のみを対象');
+      expect(docPrompt).toBeUndefined();
 
       // done の通知にローカルオンリーが含まれる
       expect(notifier.notifications.some((n) => n.message.includes('ローカルオンリー'))).toBe(true);
@@ -278,7 +278,7 @@ describe('taskPipeline integration', () => {
       expect(result).toBe('done');
 
       // doc-update が実行された
-      expect(notifier.notifications.some((n) => n.message.includes('ドキュメント更新完了'))).toBe(true);
+      expect(notifier.notifications.some((n) => n.message.includes('Vault記録完了'))).toBe(true);
 
       // done が実行された
       expect(notifier.notifications.some((n) => n.message.includes('タスク完了'))).toBe(true);
