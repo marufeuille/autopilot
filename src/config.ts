@@ -14,19 +14,22 @@ function required(key: string): string {
 export const notifyBackend = (process.env.NOTIFY_BACKEND ?? 'local') as 'local' | 'slack' | 'ntfy';
 
 export const config = {
-  vaultPath: required('VAULT_PATH'),
-  /** Slack 設定は notifyBackend === 'slack' のときだけ必須 */
-  slack: notifyBackend === 'slack'
-    ? {
-        botToken: required('SLACK_BOT_TOKEN'),
-        appToken: required('SLACK_APP_TOKEN'),
-        channelId: required('SLACK_CHANNEL_ID'),
-      }
-    : {
-        botToken: process.env.SLACK_BOT_TOKEN ?? '',
-        appToken: process.env.SLACK_APP_TOKEN ?? '',
-        channelId: process.env.SLACK_CHANNEL_ID ?? '',
-      },
+  /** Vault パス（遅延評価: 実際にアクセスされたときのみ環境変数を検証する） */
+  get vaultPath(): string {
+    return required('VAULT_PATH');
+  },
+  /** Slack 設定は notifyBackend === 'slack' のときだけ必須（遅延評価） */
+  slack: {
+    get botToken(): string {
+      return notifyBackend === 'slack' ? required('SLACK_BOT_TOKEN') : (process.env.SLACK_BOT_TOKEN ?? '');
+    },
+    get appToken(): string {
+      return notifyBackend === 'slack' ? required('SLACK_APP_TOKEN') : (process.env.SLACK_APP_TOKEN ?? '');
+    },
+    get channelId(): string {
+      return notifyBackend === 'slack' ? required('SLACK_CHANNEL_ID') : (process.env.SLACK_CHANNEL_ID ?? '');
+    },
+  },
   /** ntfy 設定は notifyBackend === 'ntfy' のときだけ必須 */
   ntfy: notifyBackend === 'ntfy'
     ? {
@@ -40,7 +43,7 @@ export const config = {
         callbackBaseUrl: process.env.NTFY_CALLBACK_BASE_URL ?? '',
       },
   watchProject: process.env.WATCH_PROJECT ?? 'claude-workflow-kit',
-} as const;
+};
 
 /**
  * repoPath の解決。
