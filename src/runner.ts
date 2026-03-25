@@ -11,6 +11,7 @@ import { RunnerDeps, createDefaultRunnerDeps } from './runner-deps';
 import { createTaskContext } from './pipeline/runner';
 import { taskPipeline } from './pipeline/task-pipeline';
 import { runStoryDocUpdate } from './story-doc-update';
+import { runMergePollingLoop } from './merge';
 
 export { RunnerDeps, createDefaultRunnerDeps } from './runner-deps';
 
@@ -80,6 +81,7 @@ async function runDecomposition(
 /**
  * README 更新を試行し、結果に応じて通知を送る共通ヘルパー。
  * リモートがない場合は何もしない。
+ * PR が作成された場合はマージされるまでポーリングで待機する。
  */
 async function tryDocUpdateAndNotify(
   story: StoryFile,
@@ -97,9 +99,33 @@ async function tryDocUpdateAndNotify(
         `ℹ️ README 更新不要と判断しました: \`${story.slug}\``,
         story.slug,
       );
-    } else {
+      return;
+    }
+
+    // PR 作成成功 → レビュー通知を送信し、マージを待機する
+    await notifier.notify(
+      `📝 *README 更新 PR 作成*: \`${story.slug}\`\n*PR*: ${docResult.prUrl}\nレビュー・マージをお願いします。`,
+      story.slug,
+    );
+
+    // マージポーリングで待機（pr-lifecycle と同じ仕組み）
+    const mergeResult = await runMergePollingLoop(
+      docResult.prUrl!,
+      repoPath,
+      { execGh: deps.execGh },
+    );
+
+    if (mergeResult.finalStatus === 'merged') {
+      console.log(`[runner] doc PR merged: ${docResult.prUrl}`);
       await notifier.notify(
-        `📝 *README 更新 PR 作成*: \`${story.slug}\`\n*PR*: ${docResult.prUrl}\nレビューをお願いします。`,
+        `✅ *README 更新 PR マージ完了*: \`${story.slug}\`\n*PR*: ${docResult.prUrl}`,
+        story.slug,
+      );
+    } else {
+      // closed / timeout / error / rejected — いずれも致命的ではないのでログ＋通知のみ
+      console.warn(`[runner] doc PR not merged (${mergeResult.finalStatus}): ${docResult.prUrl}`);
+      await notifier.notify(
+        `⚠️ *README 更新 PR 未マージ* (${mergeResult.finalStatus}): \`${story.slug}\`\n*PR*: ${docResult.prUrl}`,
         story.slug,
       );
     }
