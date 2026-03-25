@@ -72,10 +72,11 @@ export function getCIStatus(repoPath: string, branch: string): CIRunResult {
     const runs = JSON.parse(output);
 
     if (!runs || runs.length === 0) {
-      // CI 実行がない場合は成功扱い（CI未設定のリポジトリ対応）
+      // CI 実行がまだ存在しない（PR作成直後でキュー前の可能性あり）
       return {
-        status: 'success',
-        summary: 'No CI runs found for this branch (CI may not be configured)',
+        status: 'pending',
+        summary: 'No CI runs found for this branch (CI may not have started yet)',
+        reason: 'no_runs_yet',
       };
     }
 

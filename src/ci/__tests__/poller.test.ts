@@ -92,7 +92,7 @@ describe('getCIStatus', () => {
     expect(result.failureLogs).toBe('Error: test failed at line 42');
   });
 
-  it('CI 実行が進行中の場合に pending を返す', () => {
+  it('CI 実行が進行中の場合に pending を返す（reason は no_runs_yet でない）', () => {
     mockExecSync.mockReturnValue(
       JSON.stringify([
         {
@@ -108,14 +108,16 @@ describe('getCIStatus', () => {
     const result = getCIStatus('/repo', 'feature/task-01');
 
     expect(result.status).toBe('pending');
+    expect(result.reason).toBeUndefined();
   });
 
-  it('CI 実行がない場合は success を返す（CI未設定リポジトリ）', () => {
+  it('CI 実行がない場合は pending（reason: no_runs_yet）を返す', () => {
     mockExecSync.mockReturnValue('[]');
 
     const result = getCIStatus('/repo', 'feature/task-01');
 
-    expect(result.status).toBe('success');
+    expect(result.status).toBe('pending');
+    expect(result.reason).toBe('no_runs_yet');
     expect(result.summary).toContain('No CI runs found');
   });
 
