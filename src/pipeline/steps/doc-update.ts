@@ -1,30 +1,15 @@
 import { FlowSignal, TaskContext } from '../types';
 
 /**
- * ドキュメント更新プロンプトを生成する
- *
- * localOnly モードの場合は Vault 更新をスキップし README のみ対象とする。
+ * Vault ストーリーノートへの why 記録プロンプトを生成する
  */
-function buildDocUpdatePrompt(
+function buildVaultWhyPrompt(
   taskSlug: string,
   taskContent: string,
   storySlug: string,
   storyContent: string,
-  cwd: string,
-  localOnly: boolean,
 ): string {
-  const vaultSection = localOnly
-    ? ''
-    : `
-2. **Vault のストーリーノートに「なぜその設計か（why）」を追記する**
-   - 対象ストーリー: ${storySlug}
-   - 設計判断の背景・理由・トレードオフなど「why」を簡潔に記述する`;
-
-  const targetSummary = localOnly
-    ? 'Repository README のみを対象とします（Vault 更新はスキップ）。'
-    : 'Repository README と Vault のストーリーノートを対象とします。';
-
-  return `あなたはドキュメント更新担当です。以下のタスク完了に伴い、ドキュメントを更新してください。
+  return `あなたはドキュメント更新担当です。以下のタスク完了に伴い、Vault のストーリーノートに設計判断の記録を追記してください。
 
 ## 対象タスク
 - ストーリー: ${storySlug}
@@ -36,21 +21,15 @@ ${taskContent}
 ## ストーリー内容
 ${storyContent}
 
-## 作業ディレクトリ
-${cwd}
+## 作業内容
 
-## 更新対象
-${targetSummary}
-
-## 更新ルール
-
-1. **Repository README に「何をするか（what）」を追記する**
-   - このタスクで追加・変更された機能や振る舞いを、ユーザー・開発者向けに簡潔に記述する
-${vaultSection}
+**Vault のストーリーノートに「なぜその設計か（why）」を追記する**
+- 対象ストーリー: ${storySlug}
+- 設計判断の背景・理由・トレードオフなど「why」を簡潔に記述する
 
 ## 重要な制約
 - **実装の詳細（how）は書かない**: コードの具体的な実装方法、内部構造、アルゴリズムの詳細などは記述しない。これらは陳腐化しやすいため、ソースコードを正とする
-- what（何をするか）と why（なぜその設計か）のみを記述すること
+- why（なぜその設計か）のみを記述すること
 - 既存のドキュメント構造・フォーマットに合わせること
 - 変更が不要と判断した場合は、無理に追記しなくてよい`;
 }
@@ -58,36 +37,38 @@ ${vaultSection}
 /**
  * doc-update step
  *
- * タスク完了後にドキュメント（README / Vault ストーリーノート）を更新する。
+ * タスク完了後に Vault ストーリーノートへ why を記録する。
+ * README の更新は Story 単位で別途行うため、ここでは行わない。
+ * localOnly モードでは Vault がないためスキップする。
  * エラーが発生してもパイプライン全体を止めず continue を返す。
  */
 export async function handleDocUpdate(ctx: TaskContext): Promise<FlowSignal> {
-  const { task, story, repoPath, notifier, deps } = ctx;
-  const worktreePath = ctx.get('worktreePath');
-  const cwd = worktreePath ?? repoPath;
+  const { task, story, notifier, deps } = ctx;
   const localOnly = ctx.get('localOnly') ?? false;
 
+  if (localOnly) {
+    return { kind: 'continue' };
+  }
+
   try {
-    const prompt = buildDocUpdatePrompt(
+    const prompt = buildVaultWhyPrompt(
       task.slug,
       task.content,
       story.slug,
       story.content,
-      cwd,
-      localOnly,
     );
 
-    await deps.runAgent(prompt, cwd);
+    await deps.runAgent(prompt, ctx.get('worktreePath') ?? ctx.repoPath);
 
     await notifier.notify(
-      `📝 *ドキュメント更新完了* (${task.slug})`,
+      `📝 *Vault記録完了* (${task.slug})`,
       story.slug,
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn(`ドキュメント更新に失敗しました: ${message}`);
+    console.warn(`Vault記録に失敗しました: ${message}`);
     await notifier.notify(
-      `⚠️ *ドキュメント更新失敗* (${task.slug}): ${message}`,
+      `⚠️ *Vault記録失敗* (${task.slug}): ${message}`,
       story.slug,
     ).catch(() => {});
   }
