@@ -114,7 +114,10 @@ export class LocalNotificationBackend implements NotificationBackend {
         message,
         { approve: 'Story を Done にする', reject: 'キャンセル' },
       );
-      return result.action === 'approve' ? { action: 'done' } : { action: 'done' };
+      if (result.action === 'approve') {
+        return { action: 'done' };
+      }
+      throw new Error('受け入れゲートがキャンセルされました');
     }
 
     const result = await this.requestApproval(

@@ -351,18 +351,25 @@ export function registerAcceptanceGateHandlers(app: App): void {
     resolveAcceptanceGate(id, { action: 'comment', text: comment });
   });
 
-  // コメントモーダルキャンセル → 元のボタンを復元
+  // コメントモーダルキャンセル → 元のボタンを復元し、pending を解放しない（ボタン再押下を許可）
   app.view({ callback_id: 'cwk_acceptance_comment_modal', type: 'view_closed' }, async ({ ack, view }) => {
     await ack();
     const { id } = JSON.parse(view.private_metadata);
     const entry = pendingAcceptanceGate.get(id);
     if (!entry) return;
-    await app.client.chat.update({
-      channel: entry.channel,
-      ts: entry.ts,
-      blocks: entry.originalBlocks,
-      text: '',
-    });
+    // originalBlocks を復元してボタンを再表示する
+    // ユーザーは再度ボタンを押して別のアクションを選択できる
+    try {
+      await app.client.chat.update({
+        channel: entry.channel,
+        ts: entry.ts,
+        blocks: entry.originalBlocks,
+        text: '',
+      });
+    } catch {
+      // メッセージ更新に失敗した場合は pending を解放して処理を終了する
+      resolveAcceptanceGate(id, { action: 'comment', text: '' });
+    }
   });
 }
 
