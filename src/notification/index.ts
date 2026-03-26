@@ -64,10 +64,18 @@ export async function createNotificationBackend(): Promise<NotificationBackend> 
       const { registerThreadHandler } = await import('../slack/thread-handler');
       const { registerStoryApprovalHandlers } = await import('../slack/actions/story-approval');
       const { registerFixApprovalHandlers } = await import('../slack/actions/fix-approval');
+      const { createQueueHandler } = await import('../slack/commands/queue');
+      const { StoryQueueManager } = await import('../queue/queue-manager');
+      const { readStoryBySlug } = await import('../vault/reader');
+      const { updateFileStatus } = await import('../vault/writer');
 
       registerSubcommand('status', handleStatus);
       registerSubcommand('retry', handleRetry);
       registerSubcommand('help', handleHelp);
+
+      // キューマネージャーを生成し、queue サブコマンドを登録
+      const queueManager = new StoryQueueManager({ readStoryBySlug, updateFileStatus });
+      registerSubcommand('queue', createQueueHandler(queueManager));
 
       const slackApp = createSlackApp();
       registerSubcommand('story', createStoryHandler(slackApp));
