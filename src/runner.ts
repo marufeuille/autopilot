@@ -55,6 +55,9 @@ export async function requestTaskFailureAction(
       return 'skip';
     case 'cancel':
       return 'cancel';
+    default:
+      throw new Error(`Unexpected approval action: ${String((result as { action: unknown }).action)}`);
+
   }
 }
 
@@ -268,15 +271,11 @@ export async function runStory(
             console.log(`[runner] retrying task: ${task.slug} (retry #${retryCount})`);
             d.updateFileStatus(task.filePath, 'Todo');
             continue;
-          }
-
-          if (action === 'skip') {
+          } else if (action === 'skip') {
             console.log(`[runner] skipping task: ${task.slug}`);
             d.updateFileStatus(task.filePath, 'Skipped');
             succeeded = true; // inner loop を抜けて次のタスクへ
-          }
-
-          if (action === 'cancel') {
+          } else if (action === 'cancel') {
             console.log(`[runner] cancelling story: ${story.slug}`);
             d.updateFileStatus(story.filePath, 'Cancelled');
             await notifier.notify(
@@ -285,6 +284,9 @@ export async function runStory(
             );
             cancelled = true;
             succeeded = true; // inner loop を抜ける
+          } else {
+            const _exhaustive: never = action;
+            throw new Error(`Unexpected task failure action: ${_exhaustive}`);
           }
         }
       }
