@@ -124,7 +124,7 @@ describe('SlackNotificationBackend.requestAcceptanceGateAction', () => {
     });
 
     const result = await promise;
-    expect(result).toEqual({ action: 'done' });
+    expect(result).toMatchObject({ action: 'done' });
   });
 
   it('cwk_acceptance_done で done を返す', async () => {
@@ -144,7 +144,8 @@ describe('SlackNotificationBackend.requestAcceptanceGateAction', () => {
     });
 
     const result = await promise;
-    expect(result).toEqual({ action: 'done' });
+    expect(result).toMatchObject({ action: 'done' });
+    expect(result.messageTs).toBe('1234567890.123456');
   });
 
   it('cwk_acceptance_done がメッセージを「⏳ Story を Done にしています...」に更新する', async () => {
@@ -192,7 +193,8 @@ describe('SlackNotificationBackend.requestAcceptanceGateAction', () => {
     });
 
     const result = await promise;
-    expect(result).toEqual({ action: 'force_done' });
+    expect(result).toMatchObject({ action: 'force_done' });
+    expect(result.messageTs).toBe('1234567890.123456');
   });
 
   it('cwk_acceptance_force_done がメッセージを「⏳ Story を Done にしています...」に更新する', async () => {
