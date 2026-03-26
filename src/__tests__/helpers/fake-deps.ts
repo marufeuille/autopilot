@@ -34,6 +34,7 @@ export function defaultReviewLoopResult(): ReviewLoopResult {
       summary: 'All checks passed',
       findings: [],
     },
+    warnings: [],
   };
 }
 

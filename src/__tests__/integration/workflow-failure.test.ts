@@ -175,6 +175,7 @@ function createReviewNGResult(escalation: boolean): ReviewLoopResult {
         { severity: 'error', message: 'Missing error handling', file: 'src/main.ts', line: 10 },
       ],
     },
+    warnings: [],
   };
 }
 
