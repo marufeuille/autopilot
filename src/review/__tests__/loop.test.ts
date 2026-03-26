@@ -291,7 +291,7 @@ describe('buildFixPrompt', () => {
     expect(prompt).toContain('src/foo.ts:10');
   });
 
-  it('info レベルの指摘はプロンプトに含まれない', () => {
+  it('info レベルの指摘もプロンプトに含まれる', () => {
     const review: ReviewResult = {
       verdict: 'NG',
       summary: 'Issues',
@@ -302,8 +302,45 @@ describe('buildFixPrompt', () => {
     };
     const prompt = buildFixPrompt(review, 'task', '/repo');
 
-    expect(prompt).not.toContain('Just FYI');
+    expect(prompt).toContain('Just FYI');
+    expect(prompt).toContain('[INFO]');
     expect(prompt).toContain('Must fix');
+    expect(prompt).toContain('[ERROR]');
+  });
+
+  it('全severity（error・warning・info）の指摘がプロンプトに含まれる', () => {
+    const review: ReviewResult = {
+      verdict: 'NG',
+      summary: 'Multiple issues',
+      findings: [
+        { file: 'src/a.ts', line: 1, severity: 'error', message: 'Critical bug' },
+        { file: 'src/b.ts', line: 20, severity: 'warning', message: 'Potential issue' },
+        { severity: 'info', message: 'Style suggestion' },
+      ],
+    };
+    const prompt = buildFixPrompt(review, 'task', '/repo');
+
+    expect(prompt).toContain('[ERROR] [src/a.ts:1] Critical bug');
+    expect(prompt).toContain('[WARNING] [src/b.ts:20] Potential issue');
+    expect(prompt).toContain('[INFO] Style suggestion');
+  });
+
+  it('各指摘のseverityラベルがプロンプト内で識別可能', () => {
+    const review: ReviewResult = {
+      verdict: 'NG',
+      summary: 'Issues',
+      findings: [
+        { severity: 'error', message: 'Error msg' },
+        { severity: 'warning', message: 'Warning msg' },
+        { severity: 'info', message: 'Info msg' },
+      ],
+    };
+    const prompt = buildFixPrompt(review, 'task', '/repo');
+
+    // severity ラベルが大文字で含まれていること
+    expect(prompt).toMatch(/\[ERROR\].*Error msg/);
+    expect(prompt).toMatch(/\[WARNING\].*Warning msg/);
+    expect(prompt).toMatch(/\[INFO\].*Info msg/);
   });
 });
 
