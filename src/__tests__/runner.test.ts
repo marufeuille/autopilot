@@ -493,15 +493,19 @@ describe('runStory', () => {
         createTask('task-01', 'Done'),
       ];
       mockedGetStoryTasks.mockResolvedValue(doneTasks);
-      mockRunStoryDocUpdate.mockResolvedValue({ skipped: true });
+      mockRunStoryDocUpdate.mockResolvedValue({ skipped: true, skipReason: 'Agentが更新不要と判断（変更なし）' });
 
       await runStory(story, notifier);
 
       // マージポーリングは呼ばれない
       expect(mockRunMergePollingLoop).not.toHaveBeenCalled();
-      // スキップ通知が送信される
+      // スキップ通知が送信される（理由付き）
       expect(notifier.notify).toHaveBeenCalledWith(
-        expect.stringContaining('README 更新不要'),
+        expect.stringContaining('README 更新スキップ'),
+        'my-story',
+      );
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.stringContaining('Agentが更新不要と判断'),
         'my-story',
       );
     });

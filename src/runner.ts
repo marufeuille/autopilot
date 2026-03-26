@@ -95,8 +95,9 @@ async function tryDocUpdateAndNotify(
   try {
     const docResult = await runStoryDocUpdate(story, tasks, repoPath, notifier, deps);
     if (docResult.skipped) {
+      const reason = docResult.skipReason ?? '更新不要';
       await notifier.notify(
-        `ℹ️ README 更新不要と判断しました: \`${story.slug}\``,
+        `ℹ️ *README 更新スキップ*: \`${story.slug}\`\n*理由*: ${reason}`,
         story.slug,
       );
       return;
