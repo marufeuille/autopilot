@@ -537,7 +537,7 @@ describe('runStory - Done 通知の順序と notifyUpdate', () => {
     deps = createFakeDeps();
   });
 
-  it('Done ボタン押下後、ストーリー完了通知が notifyUpdate で送信される', async () => {
+  it('Done ボタン押下直後に「⏳ 処理中...」を示す messageTs が返され、後で上書きされる', async () => {
     const story = createStory();
     const doneTasks = [createTask('task-01', 'Done')];
 
@@ -552,10 +552,18 @@ describe('runStory - Done 通知の順序と notifyUpdate', () => {
 
     await runStory(story, notifier, deps);
 
-    // notifyUpdate でストーリー完了メッセージが送信されている
+    // ボタン押下直後: FakeNotifier が done 応答に messageTs を付与（Slack では「⏳ 処理中...」メッセージを示す）
+    expect(notifier.acceptanceGateRequests).toHaveLength(1);
+    const gateResponse = notifier.acceptanceGateRequests[0].response;
+    expect(gateResponse.action).toBe('done');
+    expect('messageTs' in gateResponse && gateResponse.messageTs).toBeTruthy();
+
+    // その messageTs を使って notifyUpdate でストーリー完了メッセージに上書きされる
     expect(notifier.updatedMessages).toHaveLength(1);
+    expect(notifier.updatedMessages[0].messageTs).toBe(
+      'messageTs' in gateResponse ? gateResponse.messageTs : undefined,
+    );
     expect(notifier.updatedMessages[0].message).toContain('ストーリー完了');
-    expect(notifier.updatedMessages[0].messageTs).toBeTruthy();
   });
 
   it('force_done でも notifyUpdate でストーリー完了通知が送信される', async () => {
