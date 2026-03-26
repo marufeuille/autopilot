@@ -1391,4 +1391,19 @@ describe('deriveStoryStatus', () => {
     const tasks = [createTask('t1', 'Failed'), createTask('t2', 'Failed')];
     expect(deriveStoryStatus(tasks)).toBe('Failed');
   });
+
+  it('非終端ステータス Todo が含まれる場合はエラー', () => {
+    const tasks = [createTask('t1', 'Done'), createTask('t2', 'Todo')];
+    expect(() => deriveStoryStatus(tasks)).toThrow('non-terminal tasks found: t2(Todo)');
+  });
+
+  it('非終端ステータス Doing が含まれる場合はエラー', () => {
+    const tasks = [createTask('t1', 'Doing'), createTask('t2', 'Done')];
+    expect(() => deriveStoryStatus(tasks)).toThrow('non-terminal tasks found: t1(Doing)');
+  });
+
+  it('Todo と Doing が混在する場合はエラー', () => {
+    const tasks = [createTask('t1', 'Todo'), createTask('t2', 'Doing'), createTask('t3', 'Done')];
+    expect(() => deriveStoryStatus(tasks)).toThrow('non-terminal tasks found');
+  });
 });

@@ -154,10 +154,22 @@ async function tryDocUpdateAndNotify(
  * - Failed タスクが1つ以上 → Failed
  * - 全タスクが Done or Skipped → Done
  *
- * @param tasks 空でないタスク配列。空配列の場合は 'Done' を返す。
+ * 前提条件: 全タスクが終端ステータス（Done/Skipped/Failed/Cancelled）であること。
+ * 非終端ステータス（Todo/Doing）のタスクが含まれている場合は Error をスローする。
+ *
+ * @param tasks タスク配列。空配列の場合は 'Done' を返す。
+ * @throws {Error} 非終端ステータスのタスクが含まれている場合
  */
 export function deriveStoryStatus(tasks: TaskFile[]): StoryStatus {
   if (tasks.length === 0) return 'Done';
+
+  const terminalStatuses: TaskStatus[] = ['Done', 'Skipped', 'Failed', 'Cancelled'];
+  const nonTerminal = tasks.filter((t) => !terminalStatuses.includes(t.status));
+  if (nonTerminal.length > 0) {
+    const details = nonTerminal.map((t) => `${t.slug}(${t.status})`).join(', ');
+    throw new Error(`deriveStoryStatus: non-terminal tasks found: ${details}`);
+  }
+
   if (tasks.some((t) => t.status === 'Cancelled')) return 'Cancelled';
   if (tasks.some((t) => t.status === 'Failed')) return 'Failed';
   return 'Done';
