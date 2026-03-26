@@ -147,6 +147,33 @@ describe('SlackNotificationBackend.requestAcceptanceGateAction', () => {
     expect(result).toEqual({ action: 'done' });
   });
 
+  it('cwk_acceptance_done がメッセージを「⏳ Story を Done にしています...」に更新する', async () => {
+    const promise = backend.requestAcceptanceGateAction('my-story', allPassResult);
+
+    await vi.waitFor(() => {
+      expect(mockApp.client.chat.postMessage).toHaveBeenCalledTimes(1);
+    });
+
+    const call = mockApp.client.chat.postMessage.mock.calls[0][0];
+    const metadata = JSON.parse(call.blocks[1].elements[0].value);
+    const handler = mockApp._actionHandlers.get('cwk_acceptance_done');
+
+    await handler({
+      body: { actions: [{ value: JSON.stringify(metadata) }] },
+      ack: vi.fn(),
+    });
+
+    await promise;
+
+    // chat.update が呼ばれ、処理中メッセージが表示される
+    expect(mockApp.client.chat.update).toHaveBeenCalledTimes(1);
+    const updateCall = mockApp.client.chat.update.mock.calls[0][0];
+    expect(updateCall.text).toBe('⏳ Story を Done にしています...');
+    // ボタンが削除されている（blocks にアクションブロックがない）
+    const hasActions = updateCall.blocks.some((b: any) => b.type === 'actions');
+    expect(hasActions).toBe(false);
+  });
+
   it('cwk_acceptance_force_done で force_done を返す', async () => {
     const promise = backend.requestAcceptanceGateAction('my-story', partialFailResult);
 
@@ -166,6 +193,34 @@ describe('SlackNotificationBackend.requestAcceptanceGateAction', () => {
 
     const result = await promise;
     expect(result).toEqual({ action: 'force_done' });
+  });
+
+  it('cwk_acceptance_force_done がメッセージを「⏳ Story を Done にしています...」に更新する', async () => {
+    const promise = backend.requestAcceptanceGateAction('my-story', partialFailResult);
+
+    await vi.waitFor(() => {
+      expect(mockApp.client.chat.postMessage).toHaveBeenCalledTimes(1);
+    });
+
+    const call = mockApp.client.chat.postMessage.mock.calls[0][0];
+    const forceDoneBtn = call.blocks[1].elements.find((e: any) => e.action_id === 'cwk_acceptance_force_done');
+    const metadata = JSON.parse(forceDoneBtn.value);
+    const handler = mockApp._actionHandlers.get('cwk_acceptance_force_done');
+
+    await handler({
+      body: { actions: [{ value: JSON.stringify(metadata) }] },
+      ack: vi.fn(),
+    });
+
+    await promise;
+
+    // chat.update が呼ばれ、処理中メッセージが表示される
+    expect(mockApp.client.chat.update).toHaveBeenCalledTimes(1);
+    const updateCall = mockApp.client.chat.update.mock.calls[0][0];
+    expect(updateCall.text).toBe('⏳ Story を Done にしています...');
+    // ボタンが削除されている（blocks にアクションブロックがない）
+    const hasActions = updateCall.blocks.some((b: any) => b.type === 'actions');
+    expect(hasActions).toBe(false);
   });
 
   it('cwk_acceptance_comment → モーダル送信で comment を返す', async () => {

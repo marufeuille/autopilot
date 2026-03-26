@@ -362,7 +362,7 @@ export function registerAcceptanceGateHandlers(app: App): void {
     const metadata = JSON.parse(body.actions[0].value as string);
     const id = metadata.id;
     const entry = pendingAcceptanceGate.get(id);
-    if (entry) await updateMessageWithResult(app, entry, '✅ Story を Done にしました');
+    if (entry) await updateMessageWithResult(app, entry, '⏳ Story を Done にしています...');
     resolveAcceptanceGate(id, { action: 'done' });
   });
 
@@ -372,7 +372,7 @@ export function registerAcceptanceGateHandlers(app: App): void {
     const metadata = JSON.parse(body.actions[0].value as string);
     const id = metadata.id;
     const entry = pendingAcceptanceGate.get(id);
-    if (entry) await updateMessageWithResult(app, entry, '⚠️ FAIL を無視して Done にしました');
+    if (entry) await updateMessageWithResult(app, entry, '⏳ Story を Done にしています...');
     resolveAcceptanceGate(id, { action: 'force_done' });
   });
 
