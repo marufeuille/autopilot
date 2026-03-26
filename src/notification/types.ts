@@ -7,7 +7,8 @@
 /** 承認リクエストの結果 */
 export type ApprovalResult =
   | { action: 'approve' }
-  | { action: 'reject'; reason: string };
+  | { action: 'reject'; reason: string }
+  | { action: 'cancel' };
 
 import type { Block, KnownBlock } from '@slack/types';
 
@@ -38,7 +39,7 @@ export interface NotificationBackend {
   requestApproval(
     id: string,
     message: string,
-    buttons: { approve: string; reject: string },
+    buttons: { approve: string; reject: string; cancel?: string },
     storySlug?: string,
   ): Promise<ApprovalResult>;
 
