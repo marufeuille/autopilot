@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import matter from 'gray-matter';
 import { glob } from 'glob';
-import { vaultProjectPath, vaultTasksPath } from '../config';
+import { config, vaultProjectPath, vaultStoriesPath, vaultTasksPath } from '../config';
 
 export type TaskStatus = 'Todo' | 'Doing' | 'Done' | 'Failed' | 'Skipped' | 'Cancelled';
 export type StoryStatus = 'Draft' | 'Todo' | 'Queued' | 'Doing' | 'Done' | 'Failed' | 'Cancelled';
@@ -74,6 +74,21 @@ export async function getStoryTasks(project: string, storySlug: string): Promise
     });
   }
   return tasks.sort((a, b) => a.slug.localeCompare(b.slug));
+}
+
+/**
+ * slug からストーリーファイルを読み込む。
+ *
+ * config.watchProject のストーリーディレクトリから `{slug}.md` を検索する。
+ * ファイルが存在しない場合はエラーを throw する。
+ */
+export function readStoryBySlug(storySlug: string): StoryFile {
+  const project = config.watchProject;
+  const filePath = path.join(vaultStoriesPath(project), `${storySlug}.md`);
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Story "${storySlug}" が見つかりません: ${filePath}`);
+  }
+  return readStoryFile(filePath);
 }
 
 export function getProjectReadmePath(project: string): string {
