@@ -8,6 +8,7 @@
 import type { KnownBlock } from '@slack/types';
 import type { ModalView } from '@slack/types';
 import { NotificationContext } from './types';
+import type { AcceptanceCheckResult } from './types';
 import type { TaskFile } from '../vault/reader';
 
 /**
@@ -428,4 +429,118 @@ function buildCIResultMessage(ctx: NotificationContext): string {
   }
 
   return lines.join('\n');
+}
+
+/**
+ * 受け入れ条件ゲートの Block Kit ブロックを生成する
+ *
+ * 全条件 PASS の場合は「Story を Done にする」ボタンを表示し、
+ * 一部 FAIL の場合は「このまま Done にする」「コメントして追加タスクを作る」ボタンを表示する。
+ *
+ * @param id ボタン value に埋め込む一意識別子（pending map のキー）
+ * @param storySlug ストーリーの識別子
+ * @param checkResult 受け入れ条件チェック結果
+ */
+export function buildAcceptanceGateBlocks(
+  id: string,
+  storySlug: string,
+  checkResult: AcceptanceCheckResult,
+): KnownBlock[] {
+  const metadata = JSON.stringify({ id, storySlug });
+
+  // チェック結果のテキスト
+  const conditionLines = checkResult.conditions.map((c) => {
+    const icon = c.passed ? '✅' : '❌';
+    return `${icon} ${c.condition}\n    _${c.reason}_`;
+  });
+
+  const headerIcon = checkResult.allPassed ? '✅' : '⚠️';
+  const headerText = checkResult.allPassed
+    ? '受け入れ条件チェック: 全条件 PASS'
+    : '受け入れ条件チェック: 一部 FAIL';
+
+  const sectionText =
+    `${headerIcon} *${headerText}*\n` +
+    `*ストーリー*: \`${storySlug}\`\n\n` +
+    conditionLines.join('\n');
+
+  const blocks: KnownBlock[] = [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: sectionText,
+      },
+    },
+  ];
+
+  if (checkResult.allPassed) {
+    blocks.push({
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: 'Story を Done にする' },
+          style: 'primary',
+          action_id: 'cwk_acceptance_done',
+          value: metadata,
+        },
+      ],
+    });
+  } else {
+    blocks.push({
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: 'このまま Done にする' },
+          action_id: 'cwk_acceptance_force_done',
+          value: metadata,
+        },
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: 'コメントして追加タスクを作る' },
+          style: 'primary',
+          action_id: 'cwk_acceptance_comment',
+          value: metadata,
+        },
+      ],
+    });
+  }
+
+  return blocks;
+}
+
+/**
+ * 受け入れ条件コメント入力モーダルの view 定義を生成する
+ *
+ * @param id 識別子（private_metadata に埋め込む）
+ * @param storySlug ストーリーの識別子
+ */
+export function buildAcceptanceCommentModal(id: string, storySlug: string): ModalView {
+  const privateMetadata = JSON.stringify({ id, storySlug });
+  return {
+    type: 'modal',
+    callback_id: 'cwk_acceptance_comment_modal',
+    private_metadata: privateMetadata,
+    title: { type: 'plain_text', text: '追加タスクのコメント' },
+    submit: { type: 'plain_text', text: '送信' },
+    close: { type: 'plain_text', text: 'キャンセル' },
+    blocks: [
+      {
+        type: 'input',
+        block_id: 'comment_block',
+        element: {
+          type: 'plain_text_input',
+          action_id: 'comment_input',
+          multiline: true,
+          placeholder: {
+            type: 'plain_text',
+            text: '追加で必要な作業や修正内容を入力してください',
+          },
+        },
+        label: { type: 'plain_text', text: 'コメント' },
+      },
+    ],
+  };
 }

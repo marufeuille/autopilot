@@ -13,6 +13,30 @@ export type ApprovalResult =
 /** Task失敗時のユーザー選択肢 */
 export type TaskFailureAction = 'retry' | 'skip' | 'cancel';
 
+/** 受け入れ条件チェックの個別結果 */
+export interface AcceptanceConditionResult {
+  /** 条件テキスト */
+  condition: string;
+  /** PASS / FAIL */
+  passed: boolean;
+  /** 理由 */
+  reason: string;
+}
+
+/** 受け入れ条件チェック全体の結果 */
+export interface AcceptanceCheckResult {
+  /** 全条件の結果 */
+  conditions: AcceptanceConditionResult[];
+  /** 全条件PASSかどうか */
+  allPassed: boolean;
+}
+
+/** 受け入れ条件ゲートのユーザー選択結果 */
+export type AcceptanceGateAction =
+  | { action: 'done' }
+  | { action: 'force_done' }
+  | { action: 'comment'; text: string };
+
 import type { Block, KnownBlock } from '@slack/types';
 
 /** notify のオプション */
@@ -90,6 +114,22 @@ export interface NotificationBackend {
     storySlug: string,
     errorSummary: string,
   ): Promise<TaskFailureAction>;
+
+  /**
+   * 受け入れ条件ゲートの結果を通知し、ユーザーの判断を待つ
+   *
+   * ストーリースレッドにチェック結果（各条件の PASS/FAIL と理由）を投稿し、
+   * 全条件PASSの場合は「Story を Done にする」ボタンを、
+   * 一部FAILの場合は「このまま Done にする」「コメントして追加タスクを作る」ボタンを表示する。
+   *
+   * @param storySlug ストーリーの識別子
+   * @param checkResult 受け入れ条件チェック結果
+   * @returns ユーザーが選択したアクション
+   */
+  requestAcceptanceGateAction(
+    storySlug: string,
+    checkResult: AcceptanceCheckResult,
+  ): Promise<AcceptanceGateAction>;
 }
 
 /**

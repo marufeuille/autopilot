@@ -186,4 +186,72 @@ describe('FakeNotifier', () => {
 
     expect(notifier.notifications[0].timestamp).toBeInstanceOf(Date);
   });
+
+  it('requestAcceptanceGateAction でデフォルトは done を返す', async () => {
+    const notifier = new FakeNotifier();
+    const result = await notifier.requestAcceptanceGateAction('story-01', {
+      allPassed: true,
+      conditions: [{ condition: 'テスト通過', passed: true, reason: 'OK' }],
+    });
+    expect(result).toEqual({ action: 'done' });
+  });
+
+  it('requestAcceptanceGateAction の呼び出しが記録される', async () => {
+    const notifier = new FakeNotifier();
+    const checkResult = {
+      allPassed: false,
+      conditions: [{ condition: 'テスト', passed: false, reason: '失敗' }],
+    };
+    await notifier.requestAcceptanceGateAction('story-01', checkResult);
+
+    expect(notifier.acceptanceGateRequests).toHaveLength(1);
+    expect(notifier.acceptanceGateRequests[0].storySlug).toBe('story-01');
+    expect(notifier.acceptanceGateRequests[0].checkResult).toBe(checkResult);
+    expect(notifier.acceptanceGateRequests[0].response).toEqual({ action: 'done' });
+  });
+
+  it('acceptanceGateResponses キューから順に応答を返す', async () => {
+    const notifier = new FakeNotifier({
+      acceptanceGateResponses: [
+        { action: 'force_done' },
+        { action: 'comment', text: '修正が必要' },
+      ],
+    });
+
+    const result1 = await notifier.requestAcceptanceGateAction('s1', { allPassed: false, conditions: [] });
+    const result2 = await notifier.requestAcceptanceGateAction('s1', { allPassed: false, conditions: [] });
+    const result3 = await notifier.requestAcceptanceGateAction('s1', { allPassed: true, conditions: [] });
+
+    expect(result1).toEqual({ action: 'force_done' });
+    expect(result2).toEqual({ action: 'comment', text: '修正が必要' });
+    expect(result3).toEqual({ action: 'done' }); // default
+  });
+
+  it('enqueueAcceptanceGateResponse でキューに追加できる', async () => {
+    const notifier = new FakeNotifier();
+    notifier.enqueueAcceptanceGateResponse(
+      { action: 'comment', text: 'テスト' },
+      { action: 'force_done' },
+    );
+
+    const result1 = await notifier.requestAcceptanceGateAction('s1', { allPassed: false, conditions: [] });
+    const result2 = await notifier.requestAcceptanceGateAction('s1', { allPassed: false, conditions: [] });
+
+    expect(result1).toEqual({ action: 'comment', text: 'テスト' });
+    expect(result2).toEqual({ action: 'force_done' });
+  });
+
+  it('reset で acceptanceGateRequests もクリアされる', async () => {
+    const notifier = new FakeNotifier({
+      acceptanceGateResponses: [{ action: 'force_done' }],
+    });
+    await notifier.requestAcceptanceGateAction('s1', { allPassed: false, conditions: [] });
+
+    notifier.reset();
+
+    expect(notifier.acceptanceGateRequests).toHaveLength(0);
+    // キューもリセットされるのでデフォルト done
+    const result = await notifier.requestAcceptanceGateAction('s1', { allPassed: true, conditions: [] });
+    expect(result).toEqual({ action: 'done' });
+  });
 });

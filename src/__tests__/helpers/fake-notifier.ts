@@ -2,6 +2,8 @@ import {
   NotificationBackend,
   ApprovalResult,
   TaskFailureAction,
+  AcceptanceCheckResult,
+  AcceptanceGateAction,
 } from '../../notification/types';
 
 /**
@@ -39,7 +41,18 @@ export interface RecordedTaskFailureRequest {
   timestamp: Date;
 }
 
-export type RecordedEvent = RecordedNotification | RecordedApprovalRequest | RecordedTaskFailureRequest;
+/**
+ * 記録された受け入れ条件ゲートリクエスト
+ */
+export interface RecordedAcceptanceGateRequest {
+  type: 'requestAcceptanceGateAction';
+  storySlug: string;
+  checkResult: AcceptanceCheckResult;
+  response: AcceptanceGateAction;
+  timestamp: Date;
+}
+
+export type RecordedEvent = RecordedNotification | RecordedApprovalRequest | RecordedTaskFailureRequest | RecordedAcceptanceGateRequest;
 
 /**
  * FakeNotifier のオプション
@@ -55,6 +68,11 @@ export interface FakeNotifierOptions {
    * 先頭から順に消費される。キューが空になった場合はデフォルト動作（retry）を返す。
    */
   taskFailureResponses?: TaskFailureAction[];
+  /**
+   * 受け入れ条件ゲートリクエストに対する応答キュー。
+   * 先頭から順に消費される。キューが空になった場合はデフォルト動作（done）を返す。
+   */
+  acceptanceGateResponses?: AcceptanceGateAction[];
 }
 
 /**
@@ -77,6 +95,9 @@ export class FakeNotifier implements NotificationBackend {
   /** 記録されたTask失敗アクションリクエストのみ */
   public readonly taskFailureRequests: RecordedTaskFailureRequest[] = [];
 
+  /** 記録された受け入れ条件ゲートリクエストのみ */
+  public readonly acceptanceGateRequests: RecordedAcceptanceGateRequest[] = [];
+
   /** 記録されたスレッド開始呼び出し */
   public readonly threadStarts: Array<{ storySlug: string; message: string }> = [];
 
@@ -85,10 +106,12 @@ export class FakeNotifier implements NotificationBackend {
 
   private approvalQueue: ApprovalResult[];
   private taskFailureQueue: TaskFailureAction[];
+  private acceptanceGateQueue: AcceptanceGateAction[];
 
   constructor(options?: FakeNotifierOptions) {
     this.approvalQueue = [...(options?.approvalResponses ?? [])];
     this.taskFailureQueue = [...(options?.taskFailureResponses ?? [])];
+    this.acceptanceGateQueue = [...(options?.acceptanceGateResponses ?? [])];
   }
 
   async notify(message: string, storySlug?: string): Promise<void> {
@@ -161,6 +184,36 @@ export class FakeNotifier implements NotificationBackend {
     this.taskFailureQueue.push(...responses);
   }
 
+  async requestAcceptanceGateAction(
+    storySlug: string,
+    checkResult: AcceptanceCheckResult,
+  ): Promise<AcceptanceGateAction> {
+    // キューから応答を取得。空ならデフォルト done
+    const response: AcceptanceGateAction =
+      this.acceptanceGateQueue.length > 0
+        ? this.acceptanceGateQueue.shift()!
+        : { action: 'done' };
+
+    const record: RecordedAcceptanceGateRequest = {
+      type: 'requestAcceptanceGateAction',
+      storySlug,
+      checkResult,
+      response,
+      timestamp: new Date(),
+    };
+    this.events.push(record);
+    this.acceptanceGateRequests.push(record);
+
+    return response;
+  }
+
+  /**
+   * 受け入れ条件ゲート応答キューに応答を追加する
+   */
+  enqueueAcceptanceGateResponse(...responses: AcceptanceGateAction[]): void {
+    this.acceptanceGateQueue.push(...responses);
+  }
+
   async startThread(storySlug: string, message: string): Promise<void> {
     this.threadStarts.push({ storySlug, message });
     // 既にセッションが存在する場合は上書きしない（ThreadSessionManager と同じガード）
@@ -195,8 +248,10 @@ export class FakeNotifier implements NotificationBackend {
     this.notifications.length = 0;
     this.approvalRequests.length = 0;
     this.taskFailureRequests.length = 0;
+    this.acceptanceGateRequests.length = 0;
     this.approvalQueue.length = 0;
     this.taskFailureQueue.length = 0;
+    this.acceptanceGateQueue.length = 0;
     this.threadStarts.length = 0;
     this.threadSessions.clear();
   }
