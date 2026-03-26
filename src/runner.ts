@@ -12,6 +12,8 @@ import { createTaskContext } from './pipeline/runner';
 import { taskPipeline } from './pipeline/task-pipeline';
 import { runStoryDocUpdate } from './story-doc-update';
 import { runMergePollingLoop } from './merge';
+import type { AcceptanceCheckResult as GateCheckResult, CriterionResult } from './story-acceptance-gate';
+import type { AcceptanceCheckResult as NotificationCheckResult } from './notification/types';
 
 export { RunnerDeps, createDefaultRunnerDeps } from './runner-deps';
 
@@ -63,6 +65,179 @@ function formatDecompositionMessage(story: StoryFile, drafts: TaskDraft[]): stri
     .map((d, i) => `${i + 1}. *${d.title}* (\`${d.slug}\`)\n   ${d.purpose}`)
     .join('\n');
   return `*タスク分解案*\n\n*ストーリー*: ${story.slug}\n\n${list}\n\n承認するとタスクファイルを作成して実行を開始します。`;
+}
+
+/**
+ * story-acceptance-gate の AcceptanceCheckResult を
+ * notification/types の AcceptanceCheckResult にマッピングする。
+ */
+export function toNotificationCheckResult(gate: GateCheckResult): NotificationCheckResult {
+  return {
+    allPassed: gate.allPassed,
+    conditions: gate.results.map((r) => ({
+      condition: r.criterion,
+      passed: r.result === 'PASS',
+      reason: r.reason,
+    })),
+  };
+}
+
+function formatAdditionalTasksMessage(story: StoryFile, drafts: TaskDraft[]): string {
+  const list = drafts
+    .map((d, i) => `${i + 1}. *${d.title}* (\`${d.slug}\`)\n   ${d.purpose}`)
+    .join('\n');
+  return `*追加タスク案*\n\n*ストーリー*: ${story.slug}\n\n${list}\n\n承認するとタスクファイルを作成して実行を開始します。`;
+}
+
+/**
+ * 受け入れ条件ゲートを実行する。
+ *
+ * 全タスクが Done/Skipped になった後に呼び出し、
+ * ストーリーの受け入れ条件を Claude がチェックして結果を Slack に通知する。
+ * ユーザーの選択に応じて Done / force_done / 追加タスク生成を行う。
+ *
+ * @returns 'done' — ストーリーを Done にする（通常 Done または force_done）
+ * @returns 'continue' — 追加タスクが生成されたのでタスクループを再開する
+ */
+async function runAcceptanceGate(
+  story: StoryFile,
+  allTasks: TaskFile[],
+  repoPath: string,
+  notifier: NotificationBackend,
+  deps: RunnerDeps,
+): Promise<'done' | 'continue'> {
+  // 1. 受け入れ条件チェック
+  console.log(`[runner] checking acceptance criteria: ${story.slug}`);
+  const checkResult = await deps.checkAcceptanceCriteria(story, allTasks, repoPath);
+
+  // 2. 受け入れ条件セクションがない場合はスキップ
+  if (checkResult.skipped) {
+    console.warn(`[runner] acceptance criteria skipped (no section): ${story.slug}`);
+    return 'done';
+  }
+
+  // 3. 結果を通知形式に変換してユーザーに提示
+  const notificationResult = toNotificationCheckResult(checkResult);
+  const gateAction = await notifier.requestAcceptanceGateAction(story.slug, notificationResult);
+
+  // 4. ユーザーの選択に応じて処理
+  if (gateAction.action === 'done') {
+    console.log(`[runner] acceptance gate: user approved Done: ${story.slug}`);
+    return 'done';
+  }
+
+  if (gateAction.action === 'force_done') {
+    console.log(`[runner] acceptance gate: user force-done: ${story.slug}`);
+    return 'done';
+  }
+
+  // 5. コメント入力 → 追加タスク生成
+  const comment = gateAction.text;
+  console.log(`[runner] acceptance gate: user commented: ${story.slug}, comment="${comment}"`);
+
+  const failedCriteria = checkResult.results.filter((r) => r.result === 'FAIL');
+  const additionalDrafts = await deps.generateAdditionalTasks(story, allTasks, comment, failedCriteria);
+
+  // 「追加タスク不要」と判断された場合
+  if (additionalDrafts.length === 0) {
+    console.log(`[runner] acceptance gate: no additional tasks generated, marking done: ${story.slug}`);
+    return 'done';
+  }
+
+  // 6. 追加タスク案の承認ゲート（タスク分解と同様）
+  let retryReason: string | undefined;
+  while (true) {
+    const draftsToApprove = retryReason
+      ? await deps.generateAdditionalTasks(story, allTasks, `${comment}\n\nやり直し理由: ${retryReason}`, failedCriteria)
+      : additionalDrafts;
+
+    if (draftsToApprove.length === 0) {
+      console.log(`[runner] acceptance gate: regeneration produced no tasks, marking done: ${story.slug}`);
+      return 'done';
+    }
+
+    const id = generateApprovalId(story.slug, 'additional-tasks');
+    const approvalResult = await notifier.requestApproval(
+      id,
+      formatAdditionalTasksMessage(story, draftsToApprove),
+      { approve: '承認', reject: 'やり直し', cancel: 'キャンセル（Doneにする）' },
+      story.slug,
+    );
+
+    if (approvalResult.action === 'approve') {
+      for (const draft of draftsToApprove) {
+        deps.createTaskFile(story.project, story.slug, draft);
+        console.log(`[runner] additional task file created: ${draft.slug}`);
+      }
+      return 'continue';
+    }
+
+    if (approvalResult.action === 'cancel') {
+      console.log(`[runner] acceptance gate: additional tasks cancelled, marking done: ${story.slug}`);
+      return 'done';
+    }
+
+    retryReason = approvalResult.reason;
+    console.log(`[runner] acceptance gate: additional tasks rejected, retrying: ${retryReason}`);
+  }
+}
+
+/**
+ * Todo タスクを順番に実行し、失敗時のリトライ/スキップ/キャンセルを処理する。
+ *
+ * @returns 'completed' — 全タスク実行完了（Done/Skipped）
+ * @returns 'cancelled' — ユーザーがキャンセルを選択
+ */
+async function runTodoTasks(
+  todoTasks: TaskFile[],
+  story: StoryFile,
+  repoPath: string,
+  notifier: NotificationBackend,
+  deps: RunnerDeps,
+): Promise<'completed' | 'cancelled'> {
+  let i = 0;
+  while (i < todoTasks.length) {
+    const task = todoTasks[i];
+    let retryCount = 0;
+    let succeeded = false;
+
+    while (!succeeded) {
+      try {
+        await runTask(task, story, notifier, repoPath, deps);
+        succeeded = true;
+      } catch (error) {
+        console.error(`[runner] task failed: ${task.slug}`, error);
+
+        const action = await requestTaskFailureAction(task, story, notifier, error);
+
+        if (action === 'retry') {
+          retryCount++;
+          console.log(`[runner] retrying task: ${task.slug} (retry #${retryCount})`);
+          await deps.updateFileStatus(task.filePath, 'Todo');
+          continue;
+        } else if (action === 'skip') {
+          console.log(`[runner] skipping task: ${task.slug}`);
+          await deps.updateFileStatus(task.filePath, 'Skipped');
+          succeeded = true;
+        } else if (action === 'cancel') {
+          console.log(`[runner] cancelling story: ${story.slug}`);
+          await deps.updateFileStatus(story.filePath, 'Cancelled');
+          await notifier.notify(
+            `🚫 ストーリーがキャンセルされました: ${story.slug}`,
+            story.slug,
+          );
+          return 'cancelled';
+        } else {
+          const _exhaustive: never = action;
+          throw new Error(`Unexpected task failure action: ${_exhaustive}`);
+        }
+      }
+    }
+
+    i++;
+  }
+
+  return 'completed';
 }
 
 async function runDecomposition(
@@ -219,98 +394,72 @@ export async function runStory(
     }
   }
 
-  const allCurrentTasks = await d.getStoryTasks(story.project, story.slug);
-  const todoTasks = allCurrentTasks.filter((t) => t.status === 'Todo');
+  // タスク実行 → 受け入れ条件チェック → 追加タスクのループ
+  let acceptanceGatePassed = false;
+  while (!acceptanceGatePassed) {
+    const allCurrentTasks = await d.getStoryTasks(story.project, story.slug);
+    const todoTasks = allCurrentTasks.filter((t) => t.status === 'Todo');
 
-  if (todoTasks.length > 0) {
-    let cancelled = false;
-    let i = 0;
-    while (i < todoTasks.length) {
-      const task = todoTasks[i];
-      let retryCount = 0;
-      let succeeded = false;
-
-      while (!succeeded) {
-        try {
-          await runTask(task, story, notifier, repoPath, d);
-          succeeded = true;
-        } catch (error) {
-          console.error(`[runner] task failed: ${task.slug}`, error);
-
-          const action = await requestTaskFailureAction(task, story, notifier, error);
-
-          if (action === 'retry') {
-            retryCount++;
-            console.log(`[runner] retrying task: ${task.slug} (retry #${retryCount})`);
-            await d.updateFileStatus(task.filePath, 'Todo');
-            continue;
-          } else if (action === 'skip') {
-            console.log(`[runner] skipping task: ${task.slug}`);
-            await d.updateFileStatus(task.filePath, 'Skipped');
-            succeeded = true; // inner loop を抜けて次のタスクへ
-          } else if (action === 'cancel') {
-            console.log(`[runner] cancelling story: ${story.slug}`);
-            await d.updateFileStatus(story.filePath, 'Cancelled');
-            await notifier.notify(
-              `🚫 ストーリーがキャンセルされました: ${story.slug}`,
-              story.slug,
-            );
-            cancelled = true;
-            succeeded = true; // inner loop を抜ける
-          } else {
-            const _exhaustive: never = action;
-            throw new Error(`Unexpected task failure action: ${_exhaustive}`);
-          }
-        }
+    if (todoTasks.length > 0) {
+      const taskResult = await runTodoTasks(todoTasks, story, repoPath, notifier, d);
+      if (taskResult === 'cancelled') {
+        notifier.endSession(story.slug);
+        console.log(`[runner] thread session ended for story: ${story.slug}`);
+        return;
       }
-
-      if (cancelled) break;
-      i++;
     }
 
-    if (cancelled) {
-      notifier.endSession(story.slug);
-      console.log(`[runner] thread session ended for story: ${story.slug}`);
-      return;
+    // 全タスクの最新状態を取得してストーリー完了判定
+    const terminalStatuses: TaskStatus[] = ['Done', 'Skipped', 'Failed', 'Cancelled'];
+    const allTasks = todoTasks.length > 0
+      ? await d.getStoryTasks(story.project, story.slug)
+      : allCurrentTasks;
+    const allTerminal = allTasks.length > 0 && allTasks.every((t) => terminalStatuses.includes(t.status));
+
+    if (!allTerminal) {
+      // 非終端タスクが残っている場合はログを出してループを抜ける
+      if (todoTasks.length === 0) {
+        const remaining = allTasks.filter((t) => !terminalStatuses.includes(t.status));
+        console.log(
+          `[runner] no todo tasks but story not complete: ${story.slug}, ` +
+          `remaining: ${remaining.map((t) => `${t.slug}(${t.status})`).join(', ')}`,
+        );
+      } else {
+        const remaining = allTasks.filter((t) => !terminalStatuses.includes(t.status));
+        console.log(`[runner] story not done, remaining tasks: ${remaining.map((t) => t.slug).join(', ')}`);
+      }
+      break;
     }
-  }
 
-  // 全タスクの最新状態を取得してストーリー完了判定
-  const terminalStatuses: TaskStatus[] = ['Done', 'Skipped', 'Failed', 'Cancelled'];
-  const allTasks = todoTasks.length > 0
-    ? await d.getStoryTasks(story.project, story.slug)
-    : allCurrentTasks;
-  const allTerminal = allTasks.length > 0 && allTasks.every((t) => terminalStatuses.includes(t.status));
-
-  if (allTerminal) {
-    // Done タスクがあれば README 更新を試みる
-    const doneTasks = allTasks.filter((t) => t.status === 'Done');
-    if (doneTasks.length > 0) {
-      await tryDocUpdateAndNotify(story, doneTasks, repoPath, notifier, d);
-    }
-
-    // ストーリーの最終ステータスを算出（優先度: Cancelled > Failed > Done）
+    // 全タスク終端かつ Failed/Cancelled がある場合はゲートをスキップ
     const storyStatus = deriveStoryStatus(allTasks);
-    d.updateFileStatus(story.filePath, storyStatus);
-
-    if (storyStatus === 'Done') {
-      await notifier.notify(`✅ ストーリー完了: ${story.slug}`, story.slug);
-      console.log(`[runner] story done: ${story.slug}`);
-    } else {
+    if (storyStatus !== 'Done') {
+      // Failed/Cancelled の場合は受け入れ条件ゲートを通さない
+      d.updateFileStatus(story.filePath, storyStatus);
       const summary = allTasks.map((t) => `${t.slug}(${t.status})`).join(', ');
       const icon = storyStatus === 'Cancelled' ? '🚫' : '❌';
       await notifier.notify(`${icon} ストーリー${storyStatus}: ${story.slug}\n${summary}`, story.slug);
       console.log(`[runner] story ${storyStatus}: ${story.slug}, ${summary}`);
+      acceptanceGatePassed = true;
+      break;
     }
-  } else if (todoTasks.length === 0) {
-    const remaining = allTasks.filter((t) => !terminalStatuses.includes(t.status));
-    console.log(
-      `[runner] no todo tasks but story not complete: ${story.slug}, ` +
-      `remaining: ${remaining.map((t) => `${t.slug}(${t.status})`).join(', ')}`,
-    );
-  } else {
-    const remaining = allTasks.filter((t) => !terminalStatuses.includes(t.status));
-    console.log(`[runner] story not done, remaining tasks: ${remaining.map((t) => t.slug).join(', ')}`);
+
+    // 全タスク Done/Skipped → 受け入れ条件ゲートを実行
+    const gateResult = await runAcceptanceGate(story, allTasks, repoPath, notifier, d);
+
+    if (gateResult === 'done') {
+      // Done タスクがあれば README 更新を試みる
+      const doneTasks = allTasks.filter((t) => t.status === 'Done');
+      if (doneTasks.length > 0) {
+        await tryDocUpdateAndNotify(story, doneTasks, repoPath, notifier, d);
+      }
+
+      d.updateFileStatus(story.filePath, 'Done');
+      await notifier.notify(`✅ ストーリー完了: ${story.slug}`, story.slug);
+      console.log(`[runner] story done: ${story.slug}`);
+      acceptanceGatePassed = true;
+    }
+    // gateResult === 'continue' の場合、ループの先頭に戻って追加タスクを実行
   }
 
   // スレッドセッション終了: メモリを解放

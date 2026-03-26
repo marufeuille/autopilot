@@ -89,6 +89,13 @@ vi.mock('../review', () => ({
   formatReviewLoopResult: (...args: unknown[]) => mockFormatReviewLoopResult(...args),
 }));
 
+// story-acceptance-gate をモック
+vi.mock('../story-acceptance-gate', () => ({
+  checkAcceptanceCriteria: vi.fn().mockResolvedValue({ allPassed: true, skipped: false, results: [] }),
+  generateAdditionalTasks: vi.fn().mockResolvedValue([]),
+  defaultQueryAI: vi.fn(),
+}));
+
 // Claude agent SDK をモック（runTask 内で使われる）
 const mockQuery = vi.fn(() => ({
   [Symbol.asyncIterator]: () => ({
@@ -180,6 +187,7 @@ function createMockNotifier(
         : { action: 'reject', reason: 'テスト拒否' },
     ),
     requestTaskFailureAction: vi.fn().mockResolvedValue('retry'),
+    requestAcceptanceGateAction: vi.fn().mockResolvedValue({ action: 'done' }),
     startThread: vi.fn().mockResolvedValue(undefined),
     getThreadTs: vi.fn().mockReturnValue(undefined),
     endSession: vi.fn(),
