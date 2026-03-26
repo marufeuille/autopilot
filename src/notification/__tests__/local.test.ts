@@ -233,6 +233,41 @@ describe('LocalNotificationBackend', () => {
     });
   });
 
+  describe('requestQueueFailedAction', () => {
+    it('y 入力（approve）で resume を返す', async () => {
+      const mockRl = createMockReadline(['y']);
+      backend._createReadlineInterface = () => mockRl;
+
+      const result = await backend.requestQueueFailedAction(
+        'story-01',
+        '🚨 キューが停止しました\nStory: story-01 が Failed になりました',
+      );
+      expect(result).toBe('resume');
+    });
+
+    it('c 入力（cancel）で retry を返す', async () => {
+      const mockRl = createMockReadline(['c']);
+      backend._createReadlineInterface = () => mockRl;
+
+      const result = await backend.requestQueueFailedAction(
+        'story-01',
+        '🚨 キューが停止しました\nStory: story-01 が Failed になりました',
+      );
+      expect(result).toBe('retry');
+    });
+
+    it('reject 入力で clear を返す', async () => {
+      const mockRl = createMockReadline(['n', '']);
+      backend._createReadlineInterface = () => mockRl;
+
+      const result = await backend.requestQueueFailedAction(
+        'story-01',
+        '🚨 キューが停止しました\nStory: story-01 が Failed になりました',
+      );
+      expect(result).toBe('clear');
+    });
+  });
+
   describe('notify', () => {
     it('notify が正常に呼べる（モック無しの場合のコンソール出力確認）', async () => {
       const realBackend = new LocalNotificationBackend();

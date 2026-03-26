@@ -1,6 +1,6 @@
 import { execFile } from 'child_process';
 import * as readline from 'readline';
-import { NotificationBackend, ApprovalResult, TaskFailureAction, AcceptanceCheckResult, AcceptanceGateAction } from './types';
+import { NotificationBackend, ApprovalResult, TaskFailureAction, QueueFailedAction, AcceptanceCheckResult, AcceptanceGateAction } from './types';
 
 /**
  * ローカル通知バックエンド
@@ -81,6 +81,31 @@ export class LocalNotificationBackend implements NotificationBackend {
         return 'skip';
       case 'cancel':
         return 'cancel';
+    }
+  }
+
+  /**
+   * キュー停止時にターミナルで判断を受け付ける
+   *
+   * requestApproval を再利用し、ApprovalResult → QueueFailedAction にマッピングする。
+   */
+  async requestQueueFailedAction(
+    storySlug: string,
+    message: string,
+  ): Promise<QueueFailedAction> {
+    const result = await this.requestApproval(
+      `queue-failed-${storySlug}`,
+      message,
+      { approve: 'スキップして次へ', reject: 'キューをすべてクリア', cancel: 'このStoryをリトライ' },
+    );
+
+    switch (result.action) {
+      case 'approve':
+        return 'resume';
+      case 'cancel':
+        return 'retry';
+      case 'reject':
+        return 'clear';
     }
   }
 

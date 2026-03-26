@@ -2,8 +2,8 @@ import { App } from '@slack/bolt';
 import type { BlockAction, ButtonAction } from '@slack/bolt';
 import type { Block, KnownBlock, Button, ActionsBlock } from '@slack/types';
 import { config } from '../config';
-import type { NotificationBackend, ApprovalResult, NotifyOptions, TaskFailureAction, AcceptanceCheckResult, AcceptanceGateAction } from './types';
-import { buildRejectModal, buildTaskFailureBlocks, buildAcceptanceGateBlocks, buildAcceptanceCommentModal } from './message-builder';
+import type { NotificationBackend, ApprovalResult, NotifyOptions, TaskFailureAction, QueueFailedAction, AcceptanceCheckResult, AcceptanceGateAction } from './types';
+import { buildRejectModal, buildTaskFailureBlocks, buildQueueFailedBlocks, buildAcceptanceGateBlocks, buildAcceptanceCommentModal } from './message-builder';
 import { generateApprovalId } from './approval-id';
 import { signalRejection } from '../merge/rejection-registry';
 import { logError, logWarn } from '../logger';
@@ -31,9 +31,15 @@ interface PendingAcceptanceGate extends PendingMessage {
   originalBlocks: (Block | KnownBlock)[];
 }
 
+interface PendingQueueFailed extends PendingMessage {
+  resolve: (action: QueueFailedAction) => void;
+  originalBlocks: (Block | KnownBlock)[];
+}
+
 const pending = new Map<string, PendingApproval>();
 const pendingTaskFailure = new Map<string, PendingTaskFailure>();
 const pendingAcceptanceGate = new Map<string, PendingAcceptanceGate>();
+const pendingQueueFailed = new Map<string, PendingQueueFailed>();
 
 function buildApprovalBlocks(
   id: string,
@@ -300,6 +306,49 @@ function resolveAcceptanceGate(id: string, action: AcceptanceGateAction): void {
   pendingAcceptanceGate.delete(id);
 }
 
+function resolveQueueFailed(id: string, action: QueueFailedAction): void {
+  pendingQueueFailed.get(id)?.resolve(action);
+  pendingQueueFailed.delete(id);
+}
+
+/**
+ * キュー停止時の Slack アクションハンドラーを登録する
+ *
+ * cwk_queue_resume / cwk_queue_retry / cwk_queue_clear の3つのボタンに対応し、
+ * 各ボタン押下時に Promise を resolve して結果を返す。
+ */
+export function registerQueueFailedHandlers(app: App): void {
+  // スキップして次へボタン
+  app.action<BlockAction<ButtonAction>>('cwk_queue_resume', async ({ body, ack }) => {
+    await ack();
+    const metadata = JSON.parse(body.actions[0].value as string);
+    const id = metadata.id;
+    const entry = pendingQueueFailed.get(id);
+    if (entry) await updateMessageWithResult(app, entry, '⏭️ スキップして次へ');
+    resolveQueueFailed(id, 'resume');
+  });
+
+  // このStoryをリトライボタン
+  app.action<BlockAction<ButtonAction>>('cwk_queue_retry', async ({ body, ack }) => {
+    await ack();
+    const metadata = JSON.parse(body.actions[0].value as string);
+    const id = metadata.id;
+    const entry = pendingQueueFailed.get(id);
+    if (entry) await updateMessageWithResult(app, entry, '🔄 このStoryをリトライ');
+    resolveQueueFailed(id, 'retry');
+  });
+
+  // キューをすべてクリアボタン
+  app.action<BlockAction<ButtonAction>>('cwk_queue_clear', async ({ body, ack }) => {
+    await ack();
+    const metadata = JSON.parse(body.actions[0].value as string);
+    const id = metadata.id;
+    const entry = pendingQueueFailed.get(id);
+    if (entry) await updateMessageWithResult(app, entry, '🗑️ キューをすべてクリア');
+    resolveQueueFailed(id, 'clear');
+  });
+}
+
 /**
  * 受け入れ条件ゲートの Slack アクションハンドラーを登録する
  *
@@ -444,6 +493,32 @@ export class SlackNotificationBackend implements NotificationBackend {
 
     return new Promise((resolve) =>
       pendingTaskFailure.set(id, {
+        resolve,
+        channel: config.slack.channelId,
+        ts: res.ts as string,
+        message,
+        originalBlocks: blocks,
+      }),
+    );
+  }
+
+  async requestQueueFailedAction(
+    storySlug: string,
+    message: string,
+  ): Promise<QueueFailedAction> {
+    const id = generateApprovalId(storySlug, 'queue-failed');
+    const threadTs = this.threadSession.getThreadTs(storySlug);
+    const blocks = buildQueueFailedBlocks(id, storySlug, message);
+
+    const res = await this.app.client.chat.postMessage({
+      channel: config.slack.channelId,
+      text: message,
+      blocks,
+      ...(threadTs ? { thread_ts: threadTs } : {}),
+    });
+
+    return new Promise((resolve) =>
+      pendingQueueFailed.set(id, {
         resolve,
         channel: config.slack.channelId,
         ts: res.ts as string,

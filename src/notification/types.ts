@@ -119,6 +119,21 @@ export interface NotificationBackend {
   ): Promise<TaskFailureAction>;
 
   /**
+   * Story失敗によるキュー停止時にユーザーへ判断を委ね、選択結果を返す
+   *
+   * ストーリースレッドにボタン付き通知を送信し、
+   * 「スキップして次へ / このStoryをリトライ / キューをすべてクリア」の選択を待つ。
+   *
+   * @param storySlug 失敗したストーリーの識別子
+   * @param message 通知メッセージ
+   * @returns ユーザーが選択したアクション
+   */
+  requestQueueFailedAction(
+    storySlug: string,
+    message: string,
+  ): Promise<QueueFailedAction>;
+
+  /**
    * 受け入れ条件ゲートの結果を通知し、ユーザーの判断を待つ
    *
    * ストーリースレッドにチェック結果（各条件の PASS/FAIL と理由）を投稿し、

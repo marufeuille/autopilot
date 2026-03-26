@@ -8,7 +8,7 @@
  */
 export { NotificationBackend, ApprovalResult, NotificationEventType, NotificationContext, NotifyOptions, TaskFailureAction, QueueFailedAction, AcceptanceCheckResult, AcceptanceConditionResult, AcceptanceGateAction } from './types';
 export { LocalNotificationBackend } from './local';
-export { SlackNotificationBackend, registerPRRejectHandlers, registerTaskFailureHandlers, registerAcceptanceGateHandlers } from './slack';
+export { SlackNotificationBackend, registerPRRejectHandlers, registerTaskFailureHandlers, registerQueueFailedHandlers, registerAcceptanceGateHandlers } from './slack';
 export { NtfyNotificationBackend } from './ntfy';
 export { generateApprovalId } from './approval-id';
 export { ThreadSessionManager } from './thread-session';
@@ -24,6 +24,7 @@ export {
   buildMergeReadyBlocks,
   buildRejectModal,
   buildTaskFailureBlocks,
+  buildQueueFailedBlocks,
   buildAcceptanceGateBlocks,
   buildAcceptanceCommentModal,
 } from './message-builder';
@@ -52,7 +53,7 @@ export async function createNotificationBackend(): Promise<NotificationBackend> 
     case 'slack': {
       // Slack 依存を動的インポート（local 使用時は不要な依存を読み込まない）
       const { createSlackApp } = await import('../slack/bot');
-      const { registerApprovalHandlers, registerPRRejectHandlers, registerTaskFailureHandlers, registerAcceptanceGateHandlers, SlackNotificationBackend } = await import('./slack');
+      const { registerApprovalHandlers, registerPRRejectHandlers, registerTaskFailureHandlers, registerQueueFailedHandlers, registerAcceptanceGateHandlers, SlackNotificationBackend } = await import('./slack');
 
       const { registerSlashCommands, registerSubcommand } = await import('../slack/slash-commands');
       const { handleStatus } = await import('../slack/commands/status');
@@ -74,6 +75,7 @@ export async function createNotificationBackend(): Promise<NotificationBackend> 
       registerApprovalHandlers(slackApp);
       registerPRRejectHandlers(slackApp);
       registerTaskFailureHandlers(slackApp);
+      registerQueueFailedHandlers(slackApp);
       registerAcceptanceGateHandlers(slackApp);
       registerStoryApprovalHandlers(slackApp);
       registerFixApprovalHandlers(slackApp);

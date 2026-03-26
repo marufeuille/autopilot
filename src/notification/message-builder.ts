@@ -369,6 +369,58 @@ export function buildTaskFailureBlocks(
 }
 
 /**
+ * キュー停止時の Block Kit ブロックを生成する
+ *
+ * Story Failed によるキュー停止時にストーリースレッドに投稿するボタン付きメッセージ。
+ * 3つのボタン（スキップして次へ / このStoryをリトライ / キューをすべてクリア）を含む。
+ *
+ * @param id ボタン value に埋め込む一意識別子（pending map のキー）
+ * @param storySlug 失敗したストーリーの識別子
+ * @param message 通知メッセージ
+ */
+export function buildQueueFailedBlocks(
+  id: string,
+  storySlug: string,
+  message: string,
+): KnownBlock[] {
+  const metadata = JSON.stringify({ id, storySlug });
+  return [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: message,
+      },
+    },
+    {
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: 'スキップして次へ' },
+          action_id: 'cwk_queue_resume',
+          value: metadata,
+        },
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: 'このStoryをリトライ' },
+          style: 'primary',
+          action_id: 'cwk_queue_retry',
+          value: metadata,
+        },
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: 'キューをすべてクリア' },
+          style: 'danger',
+          action_id: 'cwk_queue_clear',
+          value: metadata,
+        },
+      ],
+    },
+  ];
+}
+
+/**
  * 通知コンテキストからイベント種別に応じたメッセージを生成する
  */
 export function buildNotificationMessage(ctx: NotificationContext): string {

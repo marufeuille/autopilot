@@ -7,6 +7,7 @@ import {
   buildCIEscalationMessage,
   buildNotificationMessage,
   buildTaskFailureBlocks,
+  buildQueueFailedBlocks,
   buildAcceptanceGateBlocks,
   buildAcceptanceCommentModal,
 } from '../message-builder';
@@ -445,5 +446,62 @@ describe('buildAcceptanceCommentModal', () => {
     const modal = buildAcceptanceCommentModal('test-id', 'test-story');
     expect(modal.submit?.text).toBe('送信');
     expect(modal.close?.text).toBe('キャンセル');
+  });
+});
+
+describe('buildQueueFailedBlocks', () => {
+  const id = 'test-story--queue-failed--123';
+  const storySlug = 'test-story';
+  const message = '🚨 キューが停止しました\nStory: test-story が Failed になりました';
+
+  it('section ブロックに通知メッセージが含まれる', () => {
+    const blocks = buildQueueFailedBlocks(id, storySlug, message);
+    const section = blocks.find((b) => b.type === 'section') as any;
+    expect(section).toBeDefined();
+    expect(section.text.text).toContain('キューが停止しました');
+    expect(section.text.text).toContain(storySlug);
+  });
+
+  it('actions ブロックに3つのボタンが含まれる', () => {
+    const blocks = buildQueueFailedBlocks(id, storySlug, message);
+    const actions = blocks.find((b) => b.type === 'actions') as any;
+    expect(actions).toBeDefined();
+    expect(actions.elements).toHaveLength(3);
+  });
+
+  it('スキップして次へボタンの action_id が cwk_queue_resume である', () => {
+    const blocks = buildQueueFailedBlocks(id, storySlug, message);
+    const actions = blocks.find((b) => b.type === 'actions') as any;
+    const btn = actions.elements.find((e: any) => e.action_id === 'cwk_queue_resume');
+    expect(btn).toBeDefined();
+    expect(btn.text.text).toBe('スキップして次へ');
+  });
+
+  it('このStoryをリトライボタンの action_id が cwk_queue_retry である', () => {
+    const blocks = buildQueueFailedBlocks(id, storySlug, message);
+    const actions = blocks.find((b) => b.type === 'actions') as any;
+    const btn = actions.elements.find((e: any) => e.action_id === 'cwk_queue_retry');
+    expect(btn).toBeDefined();
+    expect(btn.text.text).toBe('このStoryをリトライ');
+    expect(btn.style).toBe('primary');
+  });
+
+  it('キューをすべてクリアボタンの action_id が cwk_queue_clear である', () => {
+    const blocks = buildQueueFailedBlocks(id, storySlug, message);
+    const actions = blocks.find((b) => b.type === 'actions') as any;
+    const btn = actions.elements.find((e: any) => e.action_id === 'cwk_queue_clear');
+    expect(btn).toBeDefined();
+    expect(btn.text.text).toBe('キューをすべてクリア');
+    expect(btn.style).toBe('danger');
+  });
+
+  it('ボタンの value に id と storySlug が JSON で埋め込まれる', () => {
+    const blocks = buildQueueFailedBlocks(id, storySlug, message);
+    const actions = blocks.find((b) => b.type === 'actions') as any;
+    for (const element of actions.elements) {
+      const parsed = JSON.parse(element.value);
+      expect(parsed.id).toBe(id);
+      expect(parsed.storySlug).toBe(storySlug);
+    }
   });
 });
