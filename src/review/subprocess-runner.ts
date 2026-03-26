@@ -1,6 +1,6 @@
 import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
-import { ReviewResult, ReviewError, ReviewTimeoutError } from './types';
+import { ReviewResult, ReviewError, ReviewTimeoutError, determineVerdict } from './types';
 
 /**
  * サブプロセスレビューランナーの設定
@@ -137,6 +137,8 @@ export class SubprocessReviewRunner {
             reject(new ReviewError(`Invalid verdict in result: ${result.verdict}`));
             return;
           }
+          // findings に基づいて verdict を再判定（LLM の判定ミスを防止）
+          result.verdict = determineVerdict(result.findings ?? []);
           resolve(result);
         } catch (err) {
           reject(
