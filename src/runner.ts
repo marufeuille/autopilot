@@ -57,7 +57,6 @@ export async function requestTaskFailureAction(
       return 'cancel';
     default:
       throw new Error(`Unexpected approval action: ${String((result as { action: unknown }).action)}`);
-
   }
 }
 
@@ -269,15 +268,15 @@ export async function runStory(
           if (action === 'retry') {
             retryCount++;
             console.log(`[runner] retrying task: ${task.slug} (retry #${retryCount})`);
-            d.updateFileStatus(task.filePath, 'Todo');
+            await d.updateFileStatus(task.filePath, 'Todo');
             continue;
           } else if (action === 'skip') {
             console.log(`[runner] skipping task: ${task.slug}`);
-            d.updateFileStatus(task.filePath, 'Skipped');
+            await d.updateFileStatus(task.filePath, 'Skipped');
             succeeded = true; // inner loop を抜けて次のタスクへ
           } else if (action === 'cancel') {
             console.log(`[runner] cancelling story: ${story.slug}`);
-            d.updateFileStatus(story.filePath, 'Cancelled');
+            await d.updateFileStatus(story.filePath, 'Cancelled');
             await notifier.notify(
               `🚫 ストーリーがキャンセルされました: ${story.slug}`,
               story.slug,
