@@ -1,6 +1,7 @@
 import {
   NotificationBackend,
   ApprovalResult,
+  TaskFailureAction,
 } from '../../notification/types';
 
 /**
@@ -26,7 +27,19 @@ export interface RecordedApprovalRequest {
   timestamp: Date;
 }
 
-export type RecordedEvent = RecordedNotification | RecordedApprovalRequest;
+/**
+ * 記録されたTask失敗アクションリクエスト
+ */
+export interface RecordedTaskFailureRequest {
+  type: 'requestTaskFailureAction';
+  taskSlug: string;
+  storySlug: string;
+  errorSummary: string;
+  response: TaskFailureAction;
+  timestamp: Date;
+}
+
+export type RecordedEvent = RecordedNotification | RecordedApprovalRequest | RecordedTaskFailureRequest;
 
 /**
  * FakeNotifier のオプション
@@ -37,6 +50,11 @@ export interface FakeNotifierOptions {
    * 先頭から順に消費される。キューが空になった場合はデフォルト動作（approve）を返す。
    */
   approvalResponses?: ApprovalResult[];
+  /**
+   * Task失敗アクションリクエストに対する応答キュー。
+   * 先頭から順に消費される。キューが空になった場合はデフォルト動作（retry）を返す。
+   */
+  taskFailureResponses?: TaskFailureAction[];
 }
 
 /**
@@ -56,6 +74,9 @@ export class FakeNotifier implements NotificationBackend {
   /** 記録された承認リクエストのみ */
   public readonly approvalRequests: RecordedApprovalRequest[] = [];
 
+  /** 記録されたTask失敗アクションリクエストのみ */
+  public readonly taskFailureRequests: RecordedTaskFailureRequest[] = [];
+
   /** 記録されたスレッド開始呼び出し */
   public readonly threadStarts: Array<{ storySlug: string; message: string }> = [];
 
@@ -63,9 +84,11 @@ export class FakeNotifier implements NotificationBackend {
   private readonly threadSessions = new Map<string, string>();
 
   private approvalQueue: ApprovalResult[];
+  private taskFailureQueue: TaskFailureAction[];
 
   constructor(options?: FakeNotifierOptions) {
     this.approvalQueue = [...(options?.approvalResponses ?? [])];
+    this.taskFailureQueue = [...(options?.taskFailureResponses ?? [])];
   }
 
   async notify(message: string, storySlug?: string): Promise<void> {
@@ -106,6 +129,38 @@ export class FakeNotifier implements NotificationBackend {
     return response;
   }
 
+  async requestTaskFailureAction(
+    taskSlug: string,
+    storySlug: string,
+    errorSummary: string,
+  ): Promise<TaskFailureAction> {
+    // キューから応答を取得。空ならデフォルト retry
+    const response: TaskFailureAction =
+      this.taskFailureQueue.length > 0
+        ? this.taskFailureQueue.shift()!
+        : 'retry';
+
+    const record: RecordedTaskFailureRequest = {
+      type: 'requestTaskFailureAction',
+      taskSlug,
+      storySlug,
+      errorSummary,
+      response,
+      timestamp: new Date(),
+    };
+    this.events.push(record);
+    this.taskFailureRequests.push(record);
+
+    return response;
+  }
+
+  /**
+   * Task失敗応答キューに応答を追加する
+   */
+  enqueueTaskFailureResponse(...responses: TaskFailureAction[]): void {
+    this.taskFailureQueue.push(...responses);
+  }
+
   async startThread(storySlug: string, message: string): Promise<void> {
     this.threadStarts.push({ storySlug, message });
     // 既にセッションが存在する場合は上書きしない（ThreadSessionManager と同じガード）
@@ -139,7 +194,9 @@ export class FakeNotifier implements NotificationBackend {
     this.events.length = 0;
     this.notifications.length = 0;
     this.approvalRequests.length = 0;
+    this.taskFailureRequests.length = 0;
     this.approvalQueue.length = 0;
+    this.taskFailureQueue.length = 0;
     this.threadStarts.length = 0;
     this.threadSessions.clear();
   }

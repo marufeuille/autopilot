@@ -207,6 +207,32 @@ describe('LocalNotificationBackend', () => {
     });
   });
 
+  describe('requestTaskFailureAction', () => {
+    it('y 入力（approve）で retry を返す', async () => {
+      const mockRl = createMockReadline(['y']);
+      backend._createReadlineInterface = () => mockRl;
+
+      const result = await backend.requestTaskFailureAction('task-01', 'story-01', 'error msg');
+      expect(result).toBe('retry');
+    });
+
+    it('reject 入力で skip を返す', async () => {
+      const mockRl = createMockReadline(['n', '']);
+      backend._createReadlineInterface = () => mockRl;
+
+      const result = await backend.requestTaskFailureAction('task-01', 'story-01', 'error msg');
+      expect(result).toBe('skip');
+    });
+
+    it('c 入力で cancel を返す', async () => {
+      const mockRl = createMockReadline(['c']);
+      backend._createReadlineInterface = () => mockRl;
+
+      const result = await backend.requestTaskFailureAction('task-01', 'story-01', 'error msg');
+      expect(result).toBe('cancel');
+    });
+  });
+
   describe('notify', () => {
     it('notify が正常に呼べる（モック無しの場合のコンソール出力確認）', async () => {
       const realBackend = new LocalNotificationBackend();

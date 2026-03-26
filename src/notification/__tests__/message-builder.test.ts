@@ -6,6 +6,7 @@ import {
   buildReviewEscalationMessage,
   buildCIEscalationMessage,
   buildNotificationMessage,
+  buildTaskFailureBlocks,
 } from '../message-builder';
 import type { NotificationContext } from '../types';
 
@@ -259,5 +260,66 @@ describe('buildNotificationMessage', () => {
     });
     expect(msg).toContain('CI結果');
     expect(msg).toContain('All checks passed');
+  });
+});
+
+describe('buildTaskFailureBlocks', () => {
+  const id = 'test-story--failure-test-task--123';
+  const taskSlug = 'test-task';
+  const storySlug = 'test-story';
+  const errorSummary = 'Agent process crashed';
+
+  it('section ブロックにタスク名・ストーリー名・エラーメッセージが含まれる', () => {
+    const blocks = buildTaskFailureBlocks(id, taskSlug, storySlug, errorSummary);
+    const section = blocks.find((b) => b.type === 'section') as any;
+    expect(section).toBeDefined();
+    expect(section.text.text).toContain(taskSlug);
+    expect(section.text.text).toContain(storySlug);
+    expect(section.text.text).toContain(errorSummary);
+    expect(section.text.text).toContain('タスク失敗');
+  });
+
+  it('actions ブロックにリトライ・スキップ・キャンセルの3ボタンが含まれる', () => {
+    const blocks = buildTaskFailureBlocks(id, taskSlug, storySlug, errorSummary);
+    const actions = blocks.find((b) => b.type === 'actions') as any;
+    expect(actions).toBeDefined();
+    expect(actions.elements).toHaveLength(3);
+  });
+
+  it('リトライボタンの action_id が cwk_task_retry である', () => {
+    const blocks = buildTaskFailureBlocks(id, taskSlug, storySlug, errorSummary);
+    const actions = blocks.find((b) => b.type === 'actions') as any;
+    const retryBtn = actions.elements.find((e: any) => e.action_id === 'cwk_task_retry');
+    expect(retryBtn).toBeDefined();
+    expect(retryBtn.text.text).toBe('リトライ');
+    expect(retryBtn.style).toBe('primary');
+  });
+
+  it('スキップボタンの action_id が cwk_task_skip である', () => {
+    const blocks = buildTaskFailureBlocks(id, taskSlug, storySlug, errorSummary);
+    const actions = blocks.find((b) => b.type === 'actions') as any;
+    const skipBtn = actions.elements.find((e: any) => e.action_id === 'cwk_task_skip');
+    expect(skipBtn).toBeDefined();
+    expect(skipBtn.text.text).toBe('スキップして次へ');
+  });
+
+  it('キャンセルボタンの action_id が cwk_task_cancel である', () => {
+    const blocks = buildTaskFailureBlocks(id, taskSlug, storySlug, errorSummary);
+    const actions = blocks.find((b) => b.type === 'actions') as any;
+    const cancelBtn = actions.elements.find((e: any) => e.action_id === 'cwk_task_cancel');
+    expect(cancelBtn).toBeDefined();
+    expect(cancelBtn.text.text).toBe('ストーリーをキャンセル');
+    expect(cancelBtn.style).toBe('danger');
+  });
+
+  it('ボタンの value に id, taskSlug, storySlug が JSON で埋め込まれる', () => {
+    const blocks = buildTaskFailureBlocks(id, taskSlug, storySlug, errorSummary);
+    const actions = blocks.find((b) => b.type === 'actions') as any;
+    for (const element of actions.elements) {
+      const parsed = JSON.parse(element.value);
+      expect(parsed.id).toBe(id);
+      expect(parsed.taskSlug).toBe(taskSlug);
+      expect(parsed.storySlug).toBe(storySlug);
+    }
   });
 });

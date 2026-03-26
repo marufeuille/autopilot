@@ -694,8 +694,8 @@ describe('異常系ワークフロー結合テスト', () => {
         const notifier = new FakeNotifier();
         notifier.enqueueApprovalResponse(
           { action: 'approve' },                  // start
-          { action: 'reject', reason: 'skip' },   // failure action → skip
         );
+        notifier.enqueueTaskFailureResponse('skip');   // failure action → skip
 
         const agentError = new Error('Agent process crashed');
         const deps = createIntegrationDeps(vault, {
@@ -723,8 +723,8 @@ describe('異常系ワークフロー結合テスト', () => {
         const notifier = new FakeNotifier();
         notifier.enqueueApprovalResponse(
           { action: 'approve' },                  // start
-          { action: 'reject', reason: 'skip' },   // failure action → skip
         );
+        notifier.enqueueTaskFailureResponse('skip');   // failure action → skip
 
         const { transitions, fn: trackingFn } = createTrackingUpdateFileStatus();
         const deps = createIntegrationDeps(vault, {
@@ -757,8 +757,8 @@ describe('異常系ワークフロー結合テスト', () => {
         const notifier = new FakeNotifier();
         notifier.enqueueApprovalResponse(
           { action: 'approve' },                  // start
-          { action: 'reject', reason: 'skip' },   // failure action → skip
         );
+        notifier.enqueueTaskFailureResponse('skip');   // failure action → skip
 
         const deps = createIntegrationDeps(vault, {
           runAgent: vi.fn().mockRejectedValue(new Error('crash')),
@@ -798,10 +798,10 @@ describe('異常系ワークフロー結合テスト', () => {
         //   4. task-03 start → reject (スキップ)
         notifier.enqueueApprovalResponse(
           { action: 'approve' },                  // task-01 start
-          { action: 'reject', reason: 'skip' },   // task-01 failure → skip
           { action: 'reject', reason: 'skip' },   // task-02 start → skip
           { action: 'reject', reason: 'skip' },   // task-03 start → skip
         );
+        notifier.enqueueTaskFailureResponse('skip');   // task-01 failure → skip
 
         // task-01 のみ失敗させる（1回のみ reject して残りは通常動作）
         const runAgentMock = vi.fn()
@@ -844,10 +844,10 @@ describe('異常系ワークフロー結合テスト', () => {
         const notifier = new FakeNotifier();
         notifier.enqueueApprovalResponse(
           { action: 'approve' },                  // task-01 start
-          { action: 'reject', reason: 'skip' },   // task-01 failure → skip
           { action: 'reject', reason: 'skip' },   // task-02 start → skip
           { action: 'reject', reason: 'skip' },   // task-03 start → skip
         );
+        notifier.enqueueTaskFailureResponse('skip');   // task-01 failure → skip
 
         const { transitions, fn: trackingFn } = createTrackingUpdateFileStatus();
         const deps = createIntegrationDeps(vault, {
@@ -908,10 +908,10 @@ describe('異常系ワークフロー結合テスト', () => {
         //   4. task-03 start → approve
         notifier.enqueueApprovalResponse(
           { action: 'approve' },                  // task-01 start
-          { action: 'reject', reason: 'skip' },   // task-01 failure → skip
           { action: 'approve' },                  // task-02 start
           { action: 'approve' },                  // task-03 start
         );
+        notifier.enqueueTaskFailureResponse('skip');   // task-01 failure → skip
 
         const runAgentMock = vi.fn()
           .mockRejectedValueOnce(new Error('task-01 crashed'))
@@ -954,8 +954,8 @@ describe('異常系ワークフロー結合テスト', () => {
         //   2. task-01 failure action → cancel
         notifier.enqueueApprovalResponse(
           { action: 'approve' },   // task-01 start
-          { action: 'cancel' },    // task-01 failure → cancel story
         );
+        notifier.enqueueTaskFailureResponse('cancel');   // task-01 failure → cancel story
 
         const runAgentMock = vi.fn()
           .mockRejectedValueOnce(new Error('task-01 crashed'))

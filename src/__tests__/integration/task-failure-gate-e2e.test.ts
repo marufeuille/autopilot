@@ -167,9 +167,9 @@ describe('Task失敗ゲート E2E テスト', () => {
         //   (task-01 runAgent succeeds → pipeline completes → Done)
         notifier.enqueueApprovalResponse(
           { action: 'approve' },  // task-01 start
-          { action: 'approve' },  // task-01 failure → retry
           { action: 'approve' },  // task-01 start (2nd, after retry)
         );
+        notifier.enqueueTaskFailureResponse('retry');  // task-01 failure → retry
 
         // 1回目: agent crash, 2回目以降: 成功
         const runAgentMock = vi.fn()
@@ -205,9 +205,9 @@ describe('Task失敗ゲート E2E テスト', () => {
         const notifier = new FakeNotifier();
         notifier.enqueueApprovalResponse(
           { action: 'approve' },  // task start
-          { action: 'approve' },  // failure → retry
           { action: 'approve' },  // task start (2nd)
         );
+        notifier.enqueueTaskFailureResponse('retry');  // failure → retry
 
         const runAgentMock = vi.fn()
           .mockRejectedValueOnce(new Error('crash'))
@@ -263,9 +263,9 @@ describe('Task失敗ゲート E2E テスト', () => {
         //   (task-02 succeeds → Done)
         notifier.enqueueApprovalResponse(
           { action: 'approve' },                  // task-01 start
-          { action: 'reject', reason: 'skip' },   // task-01 failure → skip
           { action: 'approve' },                  // task-02 start
         );
+        notifier.enqueueTaskFailureResponse('skip');   // task-01 failure → skip
 
         // task-01 のみ失敗
         const runAgentMock = vi.fn()
@@ -318,8 +318,8 @@ describe('Task失敗ゲート E2E テスト', () => {
         //   2. task-01 failure action → cancel
         notifier.enqueueApprovalResponse(
           { action: 'approve' },  // task-01 start
-          { action: 'cancel' },   // task-01 failure → cancel
         );
+        notifier.enqueueTaskFailureResponse('cancel');   // task-01 failure → cancel
 
         const runAgentMock = vi.fn()
           .mockRejectedValueOnce(new Error('Agent crashed'))
@@ -367,8 +367,8 @@ describe('Task失敗ゲート E2E テスト', () => {
         const notifier = new FakeNotifier();
         notifier.enqueueApprovalResponse(
           { action: 'approve' },  // task-01 start
-          { action: 'cancel' },   // task-01 failure → cancel
         );
+        notifier.enqueueTaskFailureResponse('cancel');   // task-01 failure → cancel
 
         const deps = createIntegrationDeps(vault, {
           runAgent: vi.fn().mockRejectedValue(new Error('crash')),
@@ -411,10 +411,12 @@ describe('Task失敗ゲート E2E テスト', () => {
         notifier.enqueueApprovalResponse(
           { action: 'approve' },                  // task-01 start
           { action: 'approve' },                  // task-02 start
-          { action: 'approve' },                  // task-02 failure → retry
           { action: 'approve' },                  // task-02 start (2nd)
           { action: 'approve' },                  // task-03 start
-          { action: 'reject', reason: 'skip' },   // task-03 failure → skip
+        );
+        notifier.enqueueTaskFailureResponse(
+          'retry',   // task-02 failure → retry
+          'skip',    // task-03 failure → skip
         );
 
         // runAgent 呼び出し制御（pipeline は impl + doc-update で2回ずつ呼ぶ）:
@@ -476,10 +478,12 @@ describe('Task失敗ゲート E2E テスト', () => {
         notifier.enqueueApprovalResponse(
           { action: 'approve' },                  // task-01 start
           { action: 'approve' },                  // task-02 start
-          { action: 'approve' },                  // task-02 failure → retry
           { action: 'approve' },                  // task-02 start (2nd)
           { action: 'approve' },                  // task-03 start
-          { action: 'reject', reason: 'skip' },   // task-03 failure → skip
+        );
+        notifier.enqueueTaskFailureResponse(
+          'retry',   // task-02 failure → retry
+          'skip',    // task-03 failure → skip
         );
 
         const runAgentMock = vi.fn()
@@ -560,9 +564,11 @@ describe('Task失敗ゲート E2E テスト', () => {
         // 全タスク: start → approve, failure → skip
         notifier.enqueueApprovalResponse(
           { action: 'approve' },                  // task-01 start
-          { action: 'reject', reason: 'skip' },   // task-01 failure → skip
           { action: 'approve' },                  // task-02 start
-          { action: 'reject', reason: 'skip' },   // task-02 failure → skip
+        );
+        notifier.enqueueTaskFailureResponse(
+          'skip',   // task-01 failure → skip
+          'skip',   // task-02 failure → skip
         );
 
         const deps = createIntegrationDeps(vault, {
@@ -597,8 +603,8 @@ describe('Task失敗ゲート E2E テスト', () => {
         const notifier = new FakeNotifier();
         notifier.enqueueApprovalResponse(
           { action: 'approve' },  // task-01 start
-          { action: 'cancel' },   // task-01 failure → cancel
         );
+        notifier.enqueueTaskFailureResponse('cancel');   // task-01 failure → cancel
 
         const deps = createIntegrationDeps(vault, {
           runAgent: vi.fn().mockRejectedValue(new Error('crash')),
@@ -634,8 +640,8 @@ describe('Task失敗ゲート E2E テスト', () => {
         const notifier = new FakeNotifier();
         notifier.enqueueApprovalResponse(
           { action: 'approve' },                  // task-01 start
-          { action: 'reject', reason: 'skip' },   // task-01 failure → skip
         );
+        notifier.enqueueTaskFailureResponse('skip');   // task-01 failure → skip
 
         const deps = createIntegrationDeps(vault, {
           runAgent: vi.fn().mockRejectedValue(new Error('crash')),
@@ -648,12 +654,12 @@ describe('Task失敗ゲート E2E テスト', () => {
         expect(notifier.threadStarts).toHaveLength(1);
         expect(notifier.threadStarts[0].storySlug).toBe(STORY_SLUG);
 
-        // Task失敗時の承認リクエストが storySlug 付きで送信されている
-        const failureApproval = notifier.approvalRequests.find((r) =>
-          r.message.includes('タスク失敗'),
+        // Task失敗時のアクションリクエストが記録されている
+        const failureRequest = notifier.taskFailureRequests.find((r) =>
+          r.storySlug === STORY_SLUG,
         );
-        expect(failureApproval).toBeDefined();
-        expect(failureApproval!.storySlug).toBe(STORY_SLUG);
+        expect(failureRequest).toBeDefined();
+        expect(failureRequest!.storySlug).toBe(STORY_SLUG);
       }, {
         project: PROJECT,
         story: { slug: STORY_SLUG, status: 'Doing' },
@@ -669,8 +675,8 @@ describe('Task失敗ゲート E2E テスト', () => {
         const notifier = new FakeNotifier();
         notifier.enqueueApprovalResponse(
           { action: 'approve' },                  // task-01 start
-          { action: 'reject', reason: 'skip' },   // task-01 failure → skip
         );
+        notifier.enqueueTaskFailureResponse('skip');   // task-01 failure → skip
 
         const errorMessage = 'Something went terribly wrong';
         const deps = createIntegrationDeps(vault, {
@@ -680,14 +686,14 @@ describe('Task失敗ゲート E2E テスト', () => {
         const story = readStoryFile(vault.storyFilePath);
         await runStory(story, notifier, deps);
 
-        // 失敗承認リクエストの内容を検証
-        const failureApproval = notifier.approvalRequests.find((r) =>
-          r.message.includes('タスク失敗'),
+        // 失敗アクションリクエストの内容を検証
+        const failureRequest = notifier.taskFailureRequests.find((r) =>
+          r.storySlug === STORY_SLUG,
         );
-        expect(failureApproval).toBeDefined();
-        expect(failureApproval!.message).toContain(`${STORY_SLUG}-01-task`);
-        expect(failureApproval!.message).toContain(STORY_SLUG);
-        expect(failureApproval!.message).toContain(errorMessage);
+        expect(failureRequest).toBeDefined();
+        expect(failureRequest!.taskSlug).toContain(`${STORY_SLUG}-01-task`);
+        expect(failureRequest!.storySlug).toBe(STORY_SLUG);
+        expect(failureRequest!.errorSummary).toContain(errorMessage);
       }, {
         project: PROJECT,
         story: { slug: STORY_SLUG, status: 'Doing' },
@@ -703,8 +709,8 @@ describe('Task失敗ゲート E2E テスト', () => {
         const notifier = new FakeNotifier();
         notifier.enqueueApprovalResponse(
           { action: 'approve' },  // task-01 start
-          { action: 'cancel' },   // task-01 failure → cancel
         );
+        notifier.enqueueTaskFailureResponse('cancel');   // task-01 failure → cancel
 
         const deps = createIntegrationDeps(vault, {
           runAgent: vi.fn().mockRejectedValue(new Error('crash')),
@@ -735,9 +741,11 @@ describe('Task失敗ゲート E2E テスト', () => {
         // task-01: 失敗 → skip, task-02: 失敗 → skip
         notifier.enqueueApprovalResponse(
           { action: 'approve' },                  // task-01 start
-          { action: 'reject', reason: 'skip' },   // task-01 failure → skip
           { action: 'approve' },                  // task-02 start
-          { action: 'reject', reason: 'skip' },   // task-02 failure → skip
+        );
+        notifier.enqueueTaskFailureResponse(
+          'skip',   // task-01 failure → skip
+          'skip',   // task-02 failure → skip
         );
 
         const deps = createIntegrationDeps(vault, {
@@ -747,14 +755,14 @@ describe('Task失敗ゲート E2E テスト', () => {
         const story = readStoryFile(vault.storyFilePath);
         await runStory(story, notifier, deps);
 
-        // 失敗承認リクエストが2回送信されている
-        const failureApprovals = notifier.approvalRequests.filter((r) =>
-          r.message.includes('タスク失敗'),
+        // 失敗アクションリクエストが2回送信されている
+        const failureRequests = notifier.taskFailureRequests.filter((r) =>
+          r.storySlug === STORY_SLUG,
         );
-        expect(failureApprovals).toHaveLength(2);
+        expect(failureRequests).toHaveLength(2);
         // すべてが storySlug 付き（スレッドに紐付く）
-        for (const approval of failureApprovals) {
-          expect(approval.storySlug).toBe(STORY_SLUG);
+        for (const req of failureRequests) {
+          expect(req.storySlug).toBe(STORY_SLUG);
         }
       }, {
         project: PROJECT,

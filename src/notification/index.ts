@@ -6,9 +6,9 @@
  * - "slack": Slack バックエンド
  * - 未設定: デフォルトは "local"
  */
-export { NotificationBackend, ApprovalResult, NotificationEventType, NotificationContext, NotifyOptions } from './types';
+export { NotificationBackend, ApprovalResult, NotificationEventType, NotificationContext, NotifyOptions, TaskFailureAction } from './types';
 export { LocalNotificationBackend } from './local';
-export { SlackNotificationBackend, registerPRRejectHandlers } from './slack';
+export { SlackNotificationBackend, registerPRRejectHandlers, registerTaskFailureHandlers } from './slack';
 export { NtfyNotificationBackend } from './ntfy';
 export { generateApprovalId } from './approval-id';
 export { ThreadSessionManager } from './thread-session';
@@ -23,6 +23,7 @@ export {
   buildThreadOriginMessage,
   buildMergeReadyBlocks,
   buildRejectModal,
+  buildTaskFailureBlocks,
 } from './message-builder';
 export type { MergeConditionItem } from './types';
 
@@ -49,7 +50,7 @@ export async function createNotificationBackend(): Promise<NotificationBackend> 
     case 'slack': {
       // Slack 依存を動的インポート（local 使用時は不要な依存を読み込まない）
       const { createSlackApp } = await import('../slack/bot');
-      const { registerApprovalHandlers, registerPRRejectHandlers, SlackNotificationBackend } = await import('./slack');
+      const { registerApprovalHandlers, registerPRRejectHandlers, registerTaskFailureHandlers, SlackNotificationBackend } = await import('./slack');
 
       const { registerSlashCommands, registerSubcommand } = await import('../slack/slash-commands');
       const { handleStatus } = await import('../slack/commands/status');
@@ -70,6 +71,7 @@ export async function createNotificationBackend(): Promise<NotificationBackend> 
       registerSubcommand('fix', createFixHandler(slackApp));
       registerApprovalHandlers(slackApp);
       registerPRRejectHandlers(slackApp);
+      registerTaskFailureHandlers(slackApp);
       registerStoryApprovalHandlers(slackApp);
       registerFixApprovalHandlers(slackApp);
       registerSlashCommands(slackApp);
