@@ -314,6 +314,20 @@ describe('vault/writer', () => {
       expect(parsed.content).toContain('- [ ] 条件B');
     });
 
+    it('マークダウン本文にテスト方針セクションが含まれる', () => {
+      const filePath = createTaskFile('test-proj', 'story-1', baseDraft);
+      const parsed = matter(fs.readFileSync(filePath, 'utf-8'));
+
+      expect(parsed.content).toContain('## テスト方針');
+    });
+
+    it('テスト方針セクションにデフォルトの説明コメントが含まれる', () => {
+      const filePath = createTaskFile('test-proj', 'story-1', baseDraft);
+      const parsed = matter(fs.readFileSync(filePath, 'utf-8'));
+
+      expect(parsed.content).toContain('タスクごとのテスト方針を記述してください');
+    });
+
     it('ディレクトリが存在しない場合に再帰的に作成する', () => {
       // 存在しないサブディレクトリを指すようモックを変更
       const nestedDir = `${tmpDir}/deep/nested/dir`;

@@ -88,7 +88,7 @@ export function createTaskFile(project: string, storySlug: string, draft: TaskDr
   };
 
   const criteriaList = draft.criteria.map((c) => `- [ ] ${c}`).join('\n');
-  const content = `\n# ${draft.title}\n\n## 目的\n\n${draft.purpose}\n\n## 詳細\n\n${draft.detail}\n\n## 完了条件\n\n${criteriaList}\n\n## メモ\n\n`;
+  const content = `\n# ${draft.title}\n\n## 目的\n\n${draft.purpose}\n\n## 詳細\n\n${draft.detail}\n\n## 完了条件\n\n${criteriaList}\n\n## テスト方針\n\n<!-- タスクごとのテスト方針を記述してください（例: 単体テストのみ、統合テストのみ、モック方針など）。未記入の場合はデフォルトのテストルールが適用されます。 -->\n\n## メモ\n\n`;
 
   fs.writeFileSync(filePath, matter.stringify(content, frontmatter));
   return filePath;
