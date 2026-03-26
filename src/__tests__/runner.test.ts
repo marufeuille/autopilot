@@ -774,7 +774,7 @@ describe('runTask', () => {
     ]);
   });
 
-  it('syncMainBranch が GitSyncError で失敗した場合、通知が送信されタスクが Failed になり Agent は実行されない', async () => {
+  it('syncMainBranch が GitSyncError で失敗した場合、通知が送信されタスクが Failed になり例外が re-throw される', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
     const notifier = createMockNotifier('approve');
@@ -786,10 +786,12 @@ describe('runTask', () => {
 
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    // GitSyncError の場合は throw せず return する
-    await runTask(task, story, notifier, repoPath);
+    // GitSyncError も他のエラーと同様に throw される（失敗ゲートへ伝搬）
+    await expect(runTask(task, story, notifier, repoPath)).rejects.toThrow(
+      'Failed to checkout main: error: Your local changes would be overwritten',
+    );
 
-    // 通知が送信されること
+    // 通知が送信されること（pipeline 内部で送信済み）
     expect(notifier.notify).toHaveBeenCalledWith(
       expect.stringContaining('main同期失敗'),
       'my-story',
