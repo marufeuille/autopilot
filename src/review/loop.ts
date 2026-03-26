@@ -1,7 +1,7 @@
 import { execSync } from 'child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { SubprocessReviewRunner } from './subprocess-runner';
-import { ReviewResult, ReviewError } from './types';
+import { ReviewResult, ReviewFinding, ReviewError } from './types';
 
 /**
  * レビューループの各イテレーション記録
@@ -29,6 +29,11 @@ export interface ReviewLoopResult {
   iterations: ReviewIteration[];
   /** 最終レビュー結果 */
   lastReviewResult: ReviewResult;
+  /**
+   * 最終レビューで残った warning 指摘（自動修正対象外）
+   * ユーザーが必要に応じて Pick して追加要件として渡すことを想定
+   */
+  warnings: ReviewFinding[];
 }
 
 /**
@@ -77,7 +82,9 @@ export function buildFixPrompt(
   taskDescription: string,
   repoPath: string,
 ): string {
+  // 自動修正対象は error のみ。warning はユーザー判断に委ねる
   const findings = reviewResult.findings
+    .filter((f) => f.severity === 'error')
     .map((f) => {
       const location = [f.file, f.line].filter(Boolean).join(':');
       const prefix = location ? `[${location}] ` : '';
@@ -180,6 +187,7 @@ export async function runReviewLoop(
         escalationRequired: false,
         iterations,
         lastReviewResult: emptyResult,
+        warnings: [],
       };
     }
 
@@ -207,6 +215,7 @@ export async function runReviewLoop(
           escalationRequired: true,
           iterations,
           lastReviewResult: errorResult,
+          warnings: [],
         };
       }
       throw error;
@@ -227,6 +236,7 @@ export async function runReviewLoop(
         escalationRequired: false,
         iterations,
         lastReviewResult: reviewResult,
+        warnings: reviewResult.findings.filter(f => f.severity === 'warning'),
       };
     }
 
@@ -266,6 +276,7 @@ export async function runReviewLoop(
     escalationRequired: true,
     iterations,
     lastReviewResult: lastReviewResult!,
+    warnings: lastReviewResult!.findings.filter(f => f.severity === 'warning'),
   };
 }
 
@@ -287,12 +298,22 @@ export function formatReviewLoopResult(result: ReviewLoopResult): string {
   lines.push(`最終判定: ${result.lastReviewResult.verdict}`);
   lines.push(`要約: ${result.lastReviewResult.summary}`);
 
-  if (result.lastReviewResult.findings.length > 0) {
-    lines.push('\n*指摘事項:*');
-    for (const f of result.lastReviewResult.findings) {
+  const errors = result.lastReviewResult.findings.filter(f => f.severity === 'error');
+  if (errors.length > 0) {
+    lines.push('\n*未解決エラー:*');
+    for (const f of errors) {
       const location = [f.file, f.line].filter(Boolean).join(':');
       const prefix = location ? `[${location}] ` : '';
-      lines.push(`  [${f.severity.toUpperCase()}] ${prefix}${f.message}`);
+      lines.push(`  [ERROR] ${prefix}${f.message}`);
+    }
+  }
+
+  if (result.warnings.length > 0) {
+    lines.push('\n*警告（要確認）:*');
+    for (const f of result.warnings) {
+      const location = [f.file, f.line].filter(Boolean).join(':');
+      const prefix = location ? `[${location}] ` : '';
+      lines.push(`  [WARNING] ${prefix}${f.message}`);
     }
   }
 

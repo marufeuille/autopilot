@@ -278,20 +278,21 @@ describe('getDiff', () => {
 });
 
 describe('buildFixPrompt', () => {
-  it('レビュー結果から修正プロンプトを生成する', () => {
+  it('レビュー結果から修正プロンプトを生成する（errorのみ、warningは除外）', () => {
     const review = ngResult();
     const prompt = buildFixPrompt(review, 'タスクの説明', '/repo');
 
     expect(prompt).toContain('タスクの説明');
     expect(prompt).toContain('/repo');
     expect(prompt).toContain('Bug found');
-    expect(prompt).toContain('Consider refactoring');
     expect(prompt).toContain('[ERROR]');
-    expect(prompt).toContain('[WARNING]');
     expect(prompt).toContain('src/foo.ts:10');
+    // warning は自動修正対象外なのでプロンプトに含まれない
+    expect(prompt).not.toContain('Consider refactoring');
+    expect(prompt).not.toContain('[WARNING]');
   });
 
-  it('info レベルの指摘もプロンプトに含まれる', () => {
+  it('infoはプロンプトに含まれずerrorのみ含まれる', () => {
     const review: ReviewResult = {
       verdict: 'NG',
       summary: 'Issues',
@@ -302,13 +303,12 @@ describe('buildFixPrompt', () => {
     };
     const prompt = buildFixPrompt(review, 'task', '/repo');
 
-    expect(prompt).toContain('Just FYI');
-    expect(prompt).toContain('[INFO]');
+    expect(prompt).not.toContain('Just FYI');
     expect(prompt).toContain('Must fix');
     expect(prompt).toContain('[ERROR]');
   });
 
-  it('全severity（error・warning・info）の指摘がプロンプトに含まれる', () => {
+  it('error のみ修正プロンプトに含まれる（warning・infoは除外）', () => {
     const review: ReviewResult = {
       verdict: 'NG',
       summary: 'Multiple issues',
@@ -321,11 +321,11 @@ describe('buildFixPrompt', () => {
     const prompt = buildFixPrompt(review, 'task', '/repo');
 
     expect(prompt).toContain('[ERROR] [src/a.ts:1] Critical bug');
-    expect(prompt).toContain('[WARNING] [src/b.ts:20] Potential issue');
-    expect(prompt).toContain('[INFO] Style suggestion');
+    expect(prompt).not.toContain('Potential issue');
+    expect(prompt).not.toContain('Style suggestion');
   });
 
-  it('各指摘のseverityラベルがプロンプト内で識別可能', () => {
+  it('errorのみseverityラベル付きでプロンプトに含まれる', () => {
     const review: ReviewResult = {
       verdict: 'NG',
       summary: 'Issues',
@@ -337,10 +337,9 @@ describe('buildFixPrompt', () => {
     };
     const prompt = buildFixPrompt(review, 'task', '/repo');
 
-    // severity ラベルが大文字で含まれていること
     expect(prompt).toMatch(/\[ERROR\].*Error msg/);
-    expect(prompt).toMatch(/\[WARNING\].*Warning msg/);
-    expect(prompt).toMatch(/\[INFO\].*Info msg/);
+    expect(prompt).not.toContain('Warning msg');
+    expect(prompt).not.toContain('Info msg');
   });
 });
 
@@ -353,6 +352,7 @@ describe('formatReviewLoopResult', () => {
         { iteration: 1, reviewResult: okResult(), timestamp: new Date() },
       ],
       lastReviewResult: okResult(),
+      warnings: [],
     };
 
     const text = formatReviewLoopResult(result);
@@ -372,6 +372,7 @@ describe('formatReviewLoopResult', () => {
         { iteration: 3, reviewResult: ngResult(), timestamp: new Date() },
       ],
       lastReviewResult: ngResult(),
+      warnings: [{ severity: 'warning', message: 'Consider refactoring' }],
     };
 
     const text = formatReviewLoopResult(result);
@@ -380,5 +381,8 @@ describe('formatReviewLoopResult', () => {
     expect(text).toContain('イテレーション数: 3');
     expect(text).toContain('Bug found');
     expect(text).toContain('src/foo.ts:10');
+    // warning は別セクションで表示される
+    expect(text).toContain('警告（要確認）');
+    expect(text).toContain('Consider refactoring');
   });
 });

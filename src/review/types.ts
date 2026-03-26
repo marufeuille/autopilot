@@ -27,12 +27,11 @@ export interface ReviewResult {
 /**
  * findings から verdict を判定する
  *
- * error または warning が1つでもあれば "NG"、それ以外（info のみ or 空）は "OK"
+ * error が1つでもあれば "NG"、それ以外（warning / info のみ or 空）は "OK"
+ * warning は自動修正対象外（ユーザーが必要に応じて Pick して渡す）
  */
 export function determineVerdict(findings: ReviewFinding[]): 'OK' | 'NG' {
-  return findings.some(f => f.severity === 'error' || f.severity === 'warning')
-    ? 'NG'
-    : 'OK';
+  return findings.some(f => f.severity === 'error') ? 'NG' : 'OK';
 }
 
 /**

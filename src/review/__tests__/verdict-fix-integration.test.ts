@@ -88,17 +88,17 @@ describe('verdict判定〜修正ループ 統合テスト', () => {
       // 修正エージェントが呼ばれた（=修正ループが起動した）
       expect(mockQuery).toHaveBeenCalledTimes(1);
 
-      // buildFixPrompt で全指摘が含まれることを検証
+      // buildFixPrompt に error のみ含まれることを検証
       const fixPrompt = buildFixPrompt(ngReview, 'task desc', '/repo');
       expect(fixPrompt).toContain('[ERROR]');
       expect(fixPrompt).toContain('Null pointer dereference');
-      expect(fixPrompt).toContain('[INFO]');
-      expect(fixPrompt).toContain('Consider adding JSDoc comments');
+      // info は自動修正対象外
+      expect(fixPrompt).not.toContain('Consider adding JSDoc comments');
     });
   });
 
   // ---------------------------------------------------------------
-  // シナリオ2: warning+info混在 → NG判定かつ全指摘が修正プロンプトに含まれる
+  // シナリオ2: warning+info混在 → OK判定かつ修正ループが起動しない
   // ---------------------------------------------------------------
   describe('warning+info混在', () => {
     const findings: ReviewFinding[] = [
@@ -106,44 +106,35 @@ describe('verdict判定〜修正ループ 統合テスト', () => {
       { severity: 'info', message: 'Function could be simplified' },
     ];
 
-    it('verdictがNGになる', () => {
-      expect(determineVerdict(findings)).toBe('NG');
+    it('verdictがOKになる（warningは自動修正対象外）', () => {
+      expect(determineVerdict(findings)).toBe('OK');
     });
 
-    it('NG判定で修正ループが起動し、全指摘（warning+info）が修正プロンプトに含まれる', async () => {
-      const ngReview: ReviewResult = {
-        verdict: 'NG',
-        summary: 'Warning and info findings',
-        findings,
-      };
+    it('OK判定で修正ループが起動せず、warningsに格納される', async () => {
       const okReview: ReviewResult = {
         verdict: 'OK',
-        summary: 'All fixed',
-        findings: [],
+        summary: 'Warning and info findings only',
+        findings,
       };
 
-      const runner = createMockRunner([ngReview, okReview]);
+      const runner = createMockRunner([okReview]);
 
       const result = await runReviewLoop('/repo', 'feature/test', 'task desc', {
         reviewRunner: runner,
         maxRetries: 3,
       });
 
-      // NG → 修正 → OK
+      // 1イテレーションで即OK
       expect(result.finalVerdict).toBe('OK');
-      expect(result.iterations).toHaveLength(2);
-      expect(result.iterations[0].reviewResult.verdict).toBe('NG');
-      expect(result.iterations[0].fixDescription).toBeDefined();
+      expect(result.iterations).toHaveLength(1);
+      expect(result.iterations[0].fixDescription).toBeUndefined();
 
-      // 修正エージェントが呼ばれた
-      expect(mockQuery).toHaveBeenCalledTimes(1);
+      // 修正エージェントは呼ばれない
+      expect(mockQuery).not.toHaveBeenCalled();
 
-      // buildFixPrompt で全指摘が含まれることを検証
-      const fixPrompt = buildFixPrompt(ngReview, 'task desc', '/repo');
-      expect(fixPrompt).toContain('[WARNING]');
-      expect(fixPrompt).toContain('Unused variable detected');
-      expect(fixPrompt).toContain('[INFO]');
-      expect(fixPrompt).toContain('Function could be simplified');
+      // warning は ReviewLoopResult.warnings に格納される
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0].message).toBe('Unused variable detected');
     });
   });
 
@@ -242,7 +233,7 @@ describe('verdict判定〜修正ループ 統合テスト', () => {
       expect(determineVerdict(findings)).toBe('NG');
     });
 
-    it('全severity（error・warning・info）の指摘が修正プロンプトに含まれる', () => {
+    it('修正プロンプトにはerrorのみ含まれ、warningとinfoは除外される', () => {
       const ngReview: ReviewResult = {
         verdict: 'NG',
         summary: 'All severity levels',
@@ -252,8 +243,8 @@ describe('verdict判定〜修正ループ 統合テスト', () => {
       const fixPrompt = buildFixPrompt(ngReview, 'task desc', '/repo');
 
       expect(fixPrompt).toContain('[ERROR] [src/main.ts:10] Critical bug');
-      expect(fixPrompt).toContain('[WARNING] [src/main.ts:25] Potential issue');
-      expect(fixPrompt).toContain('[INFO] Documentation suggestion');
+      expect(fixPrompt).not.toContain('Potential issue');
+      expect(fixPrompt).not.toContain('Documentation suggestion');
     });
   });
 });

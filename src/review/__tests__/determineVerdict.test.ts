@@ -9,11 +9,11 @@ describe('determineVerdict', () => {
     expect(determineVerdict(findings)).toBe('NG');
   });
 
-  it('warningが1つでもあればNGになる', () => {
+  it('warningのみはOKになる（自動修正対象外）', () => {
     const findings: ReviewFinding[] = [
       { severity: 'warning', message: 'Consider refactoring' },
     ];
-    expect(determineVerdict(findings)).toBe('NG');
+    expect(determineVerdict(findings)).toBe('OK');
   });
 
   it('infoのみの場合はOKのまま', () => {
@@ -37,11 +37,11 @@ describe('determineVerdict', () => {
     expect(determineVerdict(findings)).toBe('NG');
   });
 
-  it('warningとinfoのみの場合もNGになる', () => {
+  it('warningとinfoのみの場合はOKになる', () => {
     const findings: ReviewFinding[] = [
       { severity: 'info', message: 'FYI' },
       { severity: 'warning', message: 'Consider refactoring' },
     ];
-    expect(determineVerdict(findings)).toBe('NG');
+    expect(determineVerdict(findings)).toBe('OK');
   });
 });

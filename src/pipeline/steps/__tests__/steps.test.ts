@@ -268,6 +268,7 @@ describe('handleImplementation', () => {
           escalationRequired: false,
           iterations: [],
           lastReviewResult: { verdict: 'NG', summary: 'bad', findings: [] },
+          warnings: [],
         }),
       },
     });
@@ -286,6 +287,7 @@ describe('handleImplementation', () => {
           escalationRequired: true,
           iterations: [],
           lastReviewResult: { verdict: 'NG', summary: 'escalated', findings: [] },
+          warnings: [],
         }),
       },
     });

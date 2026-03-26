@@ -24,10 +24,10 @@ describe('buildReviewPrompt', () => {
     expect(prompt).toContain('"severity"');
   });
 
-  it('should specify that error or warning makes verdict NG', () => {
+  it('should specify that only error makes verdict NG', () => {
     const prompt = buildReviewPrompt({ diff: 'test diff' });
-    expect(prompt).toContain('"error" または "warning"');
-    expect(prompt).toContain('"info" のみの場合は "OK"');
+    expect(prompt).toContain('"error" の指摘が1つでもあれば "NG"');
+    expect(prompt).toContain('"warning" / "info" のみの場合は "OK"');
   });
 
   it('should include task description when provided', () => {
