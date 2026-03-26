@@ -49,8 +49,12 @@ export async function promoteNextQueuedStory(
     }
 
     case 'paused': {
+      const remaining = queueManager.list();
+      const remainingList = remaining.length > 0
+        ? `\n残キュー (${remaining.length}件): ${remaining.map(s => `\`${s.slug}\``).join(', ')}`
+        : '\n残キュー: なし';
       await notifier.notify(
-        `⏸ キューを停止しました。Story \`${completedStory.slug}\` が Failed です。`,
+        `⏸ キューを停止しました。Story \`${completedStory.slug}\` が Failed です。${remainingList}`,
         completedStory.slug,
       );
 

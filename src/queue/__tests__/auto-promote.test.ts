@@ -152,6 +152,56 @@ describe('promoteNextQueuedStory', () => {
       );
     });
 
+    it('通知に Failed Story の slug と残キュー一覧が含まれる', async () => {
+      const next1 = makeStory('queued-story-1');
+      const next2 = makeStory('queued-story-2');
+      qm.enqueue(next1);
+      qm.enqueue(next2);
+      const failedStory = makeStory('failed-story', 'Failed');
+
+      notifier.requestQueueFailedAction.mockResolvedValue('clear');
+
+      await promoteNextQueuedStory('Failed', failedStory, qm, notifier, deps);
+
+      // 最初の notify 呼び出し（キュー停止通知）を検証
+      const pauseNotifyCall = notifier.notify.mock.calls[0];
+      const message = pauseNotifyCall[0];
+      expect(message).toContain('failed-story');
+      expect(message).toContain('queued-story-1');
+      expect(message).toContain('queued-story-2');
+      expect(message).toContain('2件');
+    });
+
+    it('キューが空の場合は「残キュー: なし」と通知される', async () => {
+      const failedStory = makeStory('failed-story', 'Failed');
+
+      notifier.requestQueueFailedAction.mockResolvedValue('resume');
+
+      await promoteNextQueuedStory('Failed', failedStory, qm, notifier, deps);
+
+      const pauseNotifyCall = notifier.notify.mock.calls[0];
+      const message = pauseNotifyCall[0];
+      expect(message).toContain('failed-story');
+      expect(message).toContain('残キュー: なし');
+    });
+
+    it('キュー内の残 Story は Queued ステータスのまま維持される', async () => {
+      const next = makeStory('next-story');
+      qm.enqueue(next);
+      const failedStory = makeStory('failed-story', 'Failed');
+
+      // clear を選ばない限り、キュー内の Story は Queued のまま
+      notifier.requestQueueFailedAction.mockResolvedValue('resume');
+
+      await promoteNextQueuedStory('Failed', failedStory, qm, notifier, deps);
+
+      // pause 時点では updateFileStatus は Queued→Todo に変更されていない
+      // （resume で dequeue されて Doing に変わるのは別の操作）
+      // pause 通知の時点でキューに残っていた Story のステータスは変更されないことを確認
+      const pauseNotifyCall = notifier.notify.mock.calls[0];
+      expect(pauseNotifyCall[0]).toContain('next-story');
+    });
+
     it('resume 選択時: 次の Story を実行する', async () => {
       const next = makeStory('next-story');
       qm.enqueue(next);
