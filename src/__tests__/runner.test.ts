@@ -554,6 +554,109 @@ describe('runStory', () => {
     consoleLogSpy.mockRestore();
   });
 
+  it('GitSyncError 発生時も失敗ゲートを通り、スキップ選択で次タスクへ進む', async () => {
+    const story = createStory();
+    const notifier = createMockNotifier();
+    const todoTask1 = createTask('task-01', 'Todo');
+    const todoTask2 = createTask('task-02', 'Todo');
+
+    // 1回目: タスク存在チェック
+    mockedGetStoryTasks.mockResolvedValueOnce([todoTask1, todoTask2]);
+    // 2回目: Todo フィルタ用
+    mockedGetStoryTasks.mockResolvedValueOnce([todoTask1, todoTask2]);
+
+    // task-01 の sync-main で GitSyncError が発生
+    mockedSyncMainBranch
+      .mockRejectedValueOnce(new GitSyncError('Failed to checkout main'))
+      // task-02 は正常
+      .mockResolvedValueOnce(undefined);
+
+    // task-02 の agent は正常
+    mockQuery
+      .mockImplementationOnce(() => ({
+        [Symbol.asyncIterator]: () => ({
+          next: () => Promise.resolve({ done: true, value: undefined }),
+        }),
+      }));
+
+    // 承認キュー: task-02 start → approve（task-01 は sync-main で失敗するため start-approval の後に失敗）
+    (notifier.requestApproval as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ action: 'approve' })  // task-01 start
+      .mockResolvedValueOnce({ action: 'approve' }); // task-02 start
+    // task-01 failure → skip（GitSyncError でも失敗ゲートが発動する）
+    (notifier.requestTaskFailureAction as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce('skip');
+
+    // 3回目: 完了判定用
+    mockedGetStoryTasks.mockResolvedValueOnce([
+      createTask('task-01', 'Skipped'),
+      createTask('task-02', 'Done'),
+    ]);
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await runStory(story, notifier);
+
+    // task-01 は Failed に更新される（GitSyncError でも Failed）
+    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(todoTask1.filePath, 'Failed');
+    // 失敗ゲートでスキップ選択後、Skipped に更新される
+    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(todoTask1.filePath, 'Skipped');
+    // ストーリーは Done になる（Skipped + Done）
+    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Done');
+    // GitSyncError の通知が送信される（pipeline 内部）
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('main同期失敗'),
+      'my-story',
+    );
+    // 失敗ゲートが呼ばれたこと
+    expect(notifier.requestTaskFailureAction).toHaveBeenCalledWith(
+      'task-01',
+      'my-story',
+      'Failed to checkout main',
+    );
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('GitSyncError 発生時も失敗ゲートを通り、キャンセル選択でストーリーが Cancelled になる', async () => {
+    const story = createStory();
+    const notifier = createMockNotifier();
+    const todoTask1 = createTask('task-01', 'Todo');
+
+    // 1回目: タスク存在チェック
+    mockedGetStoryTasks.mockResolvedValueOnce([todoTask1]);
+    // 2回目: Todo フィルタ用
+    mockedGetStoryTasks.mockResolvedValueOnce([todoTask1]);
+
+    // task-01 の sync-main で GitSyncError が発生
+    mockedSyncMainBranch.mockRejectedValueOnce(new GitSyncError('worktree creation failed'));
+
+    // 承認キュー: task-01 start → approve
+    (notifier.requestApproval as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ action: 'approve' });
+    // task-01 failure → cancel
+    (notifier.requestTaskFailureAction as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce('cancel');
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await runStory(story, notifier);
+
+    // task-01 は Failed に更新される
+    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(todoTask1.filePath, 'Failed');
+    // ストーリーが Cancelled に更新される
+    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Cancelled');
+    // Claude Agent が実行されないこと
+    expect(mockQuery).not.toHaveBeenCalled();
+    // キャンセル通知が送信される
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('キャンセル'),
+      'my-story',
+    );
+
+    consoleErrorSpy.mockRestore();
+  });
+
   describe('Story完了時のREADME更新', () => {
     beforeEach(() => {
       mockRunStoryDocUpdate.mockReset();
