@@ -101,6 +101,72 @@ describe('LocalNotificationBackend', () => {
       expect(result.action).toBe('reject');
     });
 
+    it('c 入力で cancel を返す（buttons.cancel 指定時）', async () => {
+      const mockRl = createMockReadline(['c']);
+      backend._createReadlineInterface = () => mockRl;
+
+      const result = await backend.requestApproval(
+        'test-cancel-1',
+        'テストメッセージ',
+        { approve: '承認', reject: '却下', cancel: 'キャンセル' },
+      );
+
+      expect(result).toEqual({ action: 'cancel' });
+      expect(mockRl.close).toHaveBeenCalled();
+    });
+
+    it('cancel 入力で cancel を返す（buttons.cancel 指定時）', async () => {
+      const mockRl = createMockReadline(['cancel']);
+      backend._createReadlineInterface = () => mockRl;
+
+      const result = await backend.requestApproval(
+        'test-cancel-2',
+        'テストメッセージ',
+        { approve: '承認', reject: '却下', cancel: 'キャンセル' },
+      );
+
+      expect(result).toEqual({ action: 'cancel' });
+    });
+
+    it('Cancel（大文字混在）入力で cancel を返す', async () => {
+      const mockRl = createMockReadline(['Cancel']);
+      backend._createReadlineInterface = () => mockRl;
+
+      const result = await backend.requestApproval(
+        'test-cancel-3',
+        'テストメッセージ',
+        { approve: '承認', reject: '却下', cancel: 'キャンセル' },
+      );
+
+      expect(result).toEqual({ action: 'cancel' });
+    });
+
+    it('C（大文字）入力で cancel を返す', async () => {
+      const mockRl = createMockReadline(['C']);
+      backend._createReadlineInterface = () => mockRl;
+
+      const result = await backend.requestApproval(
+        'test-cancel-4',
+        'テストメッセージ',
+        { approve: '承認', reject: '却下', cancel: 'キャンセル' },
+      );
+
+      expect(result).toEqual({ action: 'cancel' });
+    });
+
+    it('buttons.cancel 未指定時は c 入力で reject を返す', async () => {
+      const mockRl = createMockReadline(['c', '']);
+      backend._createReadlineInterface = () => mockRl;
+
+      const result = await backend.requestApproval(
+        'test-cancel-5',
+        'テストメッセージ',
+        defaultButtons,
+      );
+
+      expect(result.action).toBe('reject');
+    });
+
     it('承認リクエスト時に notify が呼ばれる', async () => {
       const mockRl = createMockReadline(['y']);
       backend._createReadlineInterface = () => mockRl;

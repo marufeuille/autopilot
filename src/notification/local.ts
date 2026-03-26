@@ -43,7 +43,7 @@ export class LocalNotificationBackend implements NotificationBackend {
   async requestApproval(
     _id: string,
     message: string,
-    buttons: { approve: string; reject: string },
+    buttons: { approve: string; reject: string; cancel?: string },
     _storySlug?: string,
   ): Promise<ApprovalResult> {
     // macOS 通知で承認リクエストがある旨を通知
@@ -81,7 +81,7 @@ export class LocalNotificationBackend implements NotificationBackend {
    */
   private promptTerminal(
     message: string,
-    buttons: { approve: string; reject: string },
+    buttons: { approve: string; reject: string; cancel?: string },
   ): Promise<ApprovalResult> {
     return new Promise<ApprovalResult>((resolve) => {
       const rl = this._createReadlineInterface();
@@ -93,13 +93,22 @@ export class LocalNotificationBackend implements NotificationBackend {
       console.log(stripMarkdown(message));
       console.log('-'.repeat(60));
 
+      const promptParts = [`[${buttons.approve}] y/yes`];
+      if (buttons.cancel) {
+        promptParts.push(`[${buttons.cancel}] c/cancel`);
+      }
+      promptParts.push(`[${buttons.reject}] その他`);
+
       rl.question(
-        `[${buttons.approve}] y/yes | [${buttons.reject}] その他\n> `,
+        `${promptParts.join(' | ')}\n> `,
         (answer: string) => {
           const normalized = answer.trim().toLowerCase();
           if (normalized === 'y' || normalized === 'yes') {
             rl.close();
             resolve({ action: 'approve' });
+          } else if (buttons.cancel && (normalized === 'c' || normalized === 'cancel')) {
+            rl.close();
+            resolve({ action: 'cancel' });
           } else {
             // reject の場合は理由を聞く
             rl.question('理由を入力してください（省略可）: ', (reason: string) => {
