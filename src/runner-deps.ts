@@ -6,6 +6,7 @@ import { decomposeTasks } from './decomposer';
 import { syncMainBranch, createWorktree, removeWorktree } from './git';
 import { runReviewLoop, ReviewLoopResult } from './review';
 import { runCIPollingLoop, CIPollingResult } from './ci';
+import { checkAcceptanceCriteria, AcceptanceCheckResult, AcceptanceGateDeps, defaultQueryAI } from './story-acceptance-gate';
 
 /**
  * runner の外部依存を表すインターフェース。
@@ -50,6 +51,9 @@ export interface RunnerDeps {
 
   /** git worktree を削除する */
   removeWorktree: (repoPath: string, worktreePath: string) => void;
+
+  /** ストーリーの受け入れ条件をチェックする */
+  checkAcceptanceCriteria: (story: StoryFile, tasks: TaskFile[], repoPath: string) => Promise<AcceptanceCheckResult>;
 }
 
 /**
@@ -115,5 +119,14 @@ export function createDefaultRunnerDeps(): RunnerDeps {
     recordTaskCompletion,
     createWorktree,
     removeWorktree,
+    checkAcceptanceCriteria: (story: StoryFile, tasks: TaskFile[], repoPath: string) => {
+      const gateDeps: AcceptanceGateDeps = {
+        execGh: (args: string[], cwd: string) => {
+          return execFileSync('gh', args, { cwd, encoding: 'utf-8', stdio: 'pipe' });
+        },
+        queryAI: defaultQueryAI,
+      };
+      return checkAcceptanceCriteria(story, tasks, repoPath, gateDeps);
+    },
   };
 }
