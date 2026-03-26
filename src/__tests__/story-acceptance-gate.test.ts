@@ -399,4 +399,17 @@ describe('checkAcceptanceCriteria', () => {
       '/repo',
     );
   });
+
+  it('AI応答のパースに失敗した場合、エラーメッセージを含む例外をスローする', async () => {
+    const story = createStoryFile();
+    const tasks = [createTaskFile()];
+
+    const deps = createFakeGateDeps({
+      queryAI: vi.fn().mockResolvedValue('これはJSONではない不正な応答'),
+    });
+
+    await expect(
+      checkAcceptanceCriteria(story, tasks, '/repo', deps),
+    ).rejects.toThrow('受け入れ条件チェックのAI応答パースに失敗しました');
+  });
 });

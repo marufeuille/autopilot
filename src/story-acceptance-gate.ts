@@ -1,4 +1,4 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
+import { query, type SDKResultSuccess } from '@anthropic-ai/claude-agent-sdk';
 import { StoryFile, TaskFile } from './vault/reader';
 
 // --- 型定義 ---
@@ -216,28 +216,37 @@ export function parseAIResponse(responseText: string): CriterionResult[] {
 
 /**
  * Claude Agent SDK を使用してプロンプトを送信し、テキスト応答を返すデフォルト実装。
+ *
+ * SDK の query() が返す AsyncGenerator を消費し、最終的な SDKResultSuccess.result
+ * からテキストを取得する。ツールは無効化し、permissionMode: 'bypassPermissions' で
+ * 権限チェックをスキップする。
  */
 export async function defaultQueryAI(prompt: string): Promise<string> {
-  let fullText = '';
+  let resultText = '';
 
   for await (const message of query({
     prompt,
     options: {
-      allowedTools: [],
+      tools: [],
       permissionMode: 'bypassPermissions',
+      allowDangerouslySkipPermissions: true,
     },
   })) {
-    if (message.type === 'assistant') {
-      const content = message.message?.content ?? [];
-      for (const block of content) {
-        if ('text' in block && block.text) {
-          fullText += block.text;
-        }
+    if (message.type === 'result') {
+      if (message.subtype === 'success') {
+        resultText = (message as SDKResultSuccess).result;
+      } else {
+        // result が error の場合、エラー情報をスローする
+        throw new Error('AI query returned an error result');
       }
     }
   }
 
-  return fullText;
+  if (!resultText) {
+    throw new Error('AI query returned an empty response');
+  }
+
+  return resultText;
 }
 
 // --- メイン関数 ---
@@ -278,7 +287,14 @@ export async function checkAcceptanceCriteria(
   const responseText = await deps.queryAI(prompt);
 
   // 5. 応答をパースして結果を構築
-  const results = parseAIResponse(responseText);
+  let results: CriterionResult[];
+  try {
+    results = parseAIResponse(responseText);
+  } catch (err) {
+    throw new Error(
+      `受け入れ条件チェックのAI応答パースに失敗しました: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
   const allPassed = results.every((r) => r.result === 'PASS');
 
   return {
