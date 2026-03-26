@@ -61,6 +61,7 @@ describe('summarizeTaskStatuses', () => {
       Done: 2,
       Failed: 1,
       Skipped: 0,
+      Cancelled: 0,
     });
   });
 
@@ -72,6 +73,7 @@ describe('summarizeTaskStatuses', () => {
       Done: 0,
       Failed: 0,
       Skipped: 0,
+      Cancelled: 0,
     });
   });
 });
@@ -84,6 +86,7 @@ describe('formatStatusSummary', () => {
       Done: 2,
       Failed: 0,
       Skipped: 0,
+      Cancelled: 0,
     });
     expect(result).toContain('Doing: 1');
     expect(result).toContain('Done: 2');
@@ -99,6 +102,7 @@ describe('formatStatusSummary', () => {
       Done: 0,
       Failed: 0,
       Skipped: 0,
+      Cancelled: 0,
     });
     expect(result).toBe('');
   });

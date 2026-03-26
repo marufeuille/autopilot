@@ -11,6 +11,7 @@ const STATUS_EMOJI: Record<TaskStatus, string> = {
   Done: '\u{2705}',   // ✅
   Failed: '\u{274C}', // ❌
   Skipped: '\u{23ED}\u{FE0F}', // ⏭️
+  Cancelled: '\u{1F6AB}', // 🚫
 };
 
 /**
@@ -25,6 +26,7 @@ export function summarizeTaskStatuses(
     Done: 0,
     Failed: 0,
     Skipped: 0,
+    Cancelled: 0,
   };
   for (const s of statuses) {
     counts[s]++;
