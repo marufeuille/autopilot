@@ -852,6 +852,184 @@ describe('runStory - README 更新スキップ時の通知順序', () => {
     expect(deps.updateFileStatus).toHaveBeenCalledWith(story.filePath, 'Done');
   });
 
+  it('README 更新 PR 作成ありの場合、通知順序が「README PR 作成 → PR マージ完了 → ストーリー完了」である', async () => {
+    const { detectNoRemote } = await import('../git');
+    (detectNoRemote as ReturnType<typeof vi.fn>).mockReturnValue(false);
+
+    const { runStoryDocUpdate } = await import('../story-doc-update');
+    (runStoryDocUpdate as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      skipped: false,
+      prUrl: 'https://github.com/test/repo/pull/42',
+    });
+
+    const { runMergePollingLoop } = await import('../merge');
+    (runMergePollingLoop as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      finalStatus: 'merged',
+      elapsedMs: 5000,
+    });
+
+    const story = createStory();
+    const doneTasks = [createTask('task-01', 'Done')];
+
+    (deps.getStoryTasks as ReturnType<typeof vi.fn>).mockResolvedValue(doneTasks);
+    (deps.checkAcceptanceCriteria as ReturnType<typeof vi.fn>).mockResolvedValue({
+      allPassed: true,
+      skipped: false,
+      results: [{ criterion: '条件A', result: 'PASS', reason: 'OK' }],
+    });
+
+    notifier.enqueueAcceptanceGateResponse({ action: 'done' });
+
+    await runStory(story, notifier, deps);
+
+    const notifications = notifier.notifications;
+
+    // README PR 作成通知が存在する
+    const prCreateIdx = notifications.findIndex(n => n.message.includes('README 更新 PR 作成'));
+    expect(prCreateIdx).toBeGreaterThanOrEqual(0);
+
+    // README PR マージ完了通知が存在する
+    const prMergeIdx = notifications.findIndex(n => n.message.includes('README 更新 PR マージ完了'));
+    expect(prMergeIdx).toBeGreaterThanOrEqual(0);
+
+    // ストーリー完了通知が存在する
+    const completionIdx = notifications.findIndex(n => n.message.includes('ストーリー完了'));
+    expect(completionIdx).toBeGreaterThanOrEqual(0);
+
+    // 順序: README PR 作成 → PR マージ完了 → ストーリー完了
+    expect(prCreateIdx).toBeLessThan(prMergeIdx);
+    expect(prMergeIdx).toBeLessThan(completionIdx);
+  });
+
+  it('README 更新 PR 作成ありの場合でも notifyUpdate でストーリー完了が上書きされる', async () => {
+    const { detectNoRemote } = await import('../git');
+    (detectNoRemote as ReturnType<typeof vi.fn>).mockReturnValue(false);
+
+    const { runStoryDocUpdate } = await import('../story-doc-update');
+    (runStoryDocUpdate as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      skipped: false,
+      prUrl: 'https://github.com/test/repo/pull/42',
+    });
+
+    const { runMergePollingLoop } = await import('../merge');
+    (runMergePollingLoop as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      finalStatus: 'merged',
+      elapsedMs: 5000,
+    });
+
+    const story = createStory();
+    const doneTasks = [createTask('task-01', 'Done')];
+
+    (deps.getStoryTasks as ReturnType<typeof vi.fn>).mockResolvedValue(doneTasks);
+    (deps.checkAcceptanceCriteria as ReturnType<typeof vi.fn>).mockResolvedValue({
+      allPassed: true,
+      skipped: false,
+      results: [{ criterion: '条件A', result: 'PASS', reason: 'OK' }],
+    });
+
+    notifier.enqueueAcceptanceGateResponse({ action: 'done' });
+
+    await runStory(story, notifier, deps);
+
+    // notifyUpdate でストーリー完了メッセージが上書きされている
+    expect(notifier.updatedMessages).toHaveLength(1);
+    expect(notifier.updatedMessages[0].message).toContain('ストーリー完了');
+    expect(notifier.updatedMessages[0].messageTs).toBeTruthy();
+  });
+
+  it('force_done + README 更新 PR 作成ありの場合、通知順序が正しい', async () => {
+    const { detectNoRemote } = await import('../git');
+    (detectNoRemote as ReturnType<typeof vi.fn>).mockReturnValue(false);
+
+    const { runStoryDocUpdate } = await import('../story-doc-update');
+    (runStoryDocUpdate as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      skipped: false,
+      prUrl: 'https://github.com/test/repo/pull/99',
+    });
+
+    const { runMergePollingLoop } = await import('../merge');
+    (runMergePollingLoop as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      finalStatus: 'merged',
+      elapsedMs: 3000,
+    });
+
+    const story = createStory();
+    const doneTasks = [createTask('task-01', 'Done')];
+
+    (deps.getStoryTasks as ReturnType<typeof vi.fn>).mockResolvedValue(doneTasks);
+    (deps.checkAcceptanceCriteria as ReturnType<typeof vi.fn>).mockResolvedValue({
+      allPassed: false,
+      skipped: false,
+      results: [
+        { criterion: '条件A', result: 'PASS', reason: 'OK' },
+        { criterion: '条件B', result: 'FAIL', reason: 'NG' },
+      ],
+    });
+
+    notifier.enqueueAcceptanceGateResponse({ action: 'force_done' });
+
+    await runStory(story, notifier, deps);
+
+    const notifications = notifier.notifications;
+
+    // README PR 作成 → PR マージ → ストーリー完了の順序を確認
+    const prCreateIdx = notifications.findIndex(n => n.message.includes('README 更新 PR 作成'));
+    const prMergeIdx = notifications.findIndex(n => n.message.includes('README 更新 PR マージ完了'));
+    const completionIdx = notifications.findIndex(n => n.message.includes('ストーリー完了'));
+
+    expect(prCreateIdx).toBeGreaterThanOrEqual(0);
+    expect(prMergeIdx).toBeGreaterThanOrEqual(0);
+    expect(completionIdx).toBeGreaterThanOrEqual(0);
+    expect(prCreateIdx).toBeLessThan(prMergeIdx);
+    expect(prMergeIdx).toBeLessThan(completionIdx);
+
+    // notifyUpdate で上書き
+    expect(notifier.updatedMessages).toHaveLength(1);
+    expect(notifier.updatedMessages[0].message).toContain('ストーリー完了');
+  });
+
+  it('README 更新 PR が未マージ（timeout）の場合でも完了通知が最後に届く', async () => {
+    const { detectNoRemote } = await import('../git');
+    (detectNoRemote as ReturnType<typeof vi.fn>).mockReturnValue(false);
+
+    const { runStoryDocUpdate } = await import('../story-doc-update');
+    (runStoryDocUpdate as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      skipped: false,
+      prUrl: 'https://github.com/test/repo/pull/55',
+    });
+
+    const { runMergePollingLoop } = await import('../merge');
+    (runMergePollingLoop as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      finalStatus: 'timeout',
+      elapsedMs: 60000,
+    });
+
+    const story = createStory();
+    const doneTasks = [createTask('task-01', 'Done')];
+
+    (deps.getStoryTasks as ReturnType<typeof vi.fn>).mockResolvedValue(doneTasks);
+    (deps.checkAcceptanceCriteria as ReturnType<typeof vi.fn>).mockResolvedValue({
+      allPassed: true,
+      skipped: false,
+      results: [{ criterion: '条件A', result: 'PASS', reason: 'OK' }],
+    });
+
+    notifier.enqueueAcceptanceGateResponse({ action: 'done' });
+
+    await runStory(story, notifier, deps);
+
+    const notifications = notifier.notifications;
+
+    // PR 未マージ警告通知が存在する
+    const warningIdx = notifications.findIndex(n => n.message.includes('README 更新 PR 未マージ'));
+    expect(warningIdx).toBeGreaterThanOrEqual(0);
+
+    // ストーリー完了通知が最後に来る
+    const completionIdx = notifications.findIndex(n => n.message.includes('ストーリー完了'));
+    expect(completionIdx).toBeGreaterThanOrEqual(0);
+    expect(warningIdx).toBeLessThan(completionIdx);
+  });
+
   it('スキップ時に不要なエラーや警告が出ない', async () => {
     const { detectNoRemote } = await import('../git');
     (detectNoRemote as ReturnType<typeof vi.fn>).mockReturnValue(false);
