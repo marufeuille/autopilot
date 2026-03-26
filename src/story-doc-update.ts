@@ -20,6 +20,8 @@ export interface StoryDocUpdateResult {
   skipped: boolean;
   /** 作成された PR の URL（更新時のみ） */
   prUrl?: string;
+  /** スキップした理由（skipped: true の場合のみ） */
+  skipReason?: string;
 }
 
 /**
@@ -124,8 +126,9 @@ export async function runStoryDocUpdate(
       // 変更なし → ブランチを削除してスキップ
       deps.execCommand('git checkout main', repoPath);
       deps.execCommand(`git branch -D ${branch}`, repoPath);
+      const reason = 'Agentが更新不要と判断（変更なし）';
       console.log(`[story-doc-update] README 更新不要と判断: ${story.slug}`);
-      return { skipped: true };
+      return { skipped: true, skipReason: reason };
     }
 
     // README.md をまずステージングする（Agent が変更していれば）
@@ -150,8 +153,9 @@ export async function runStoryDocUpdate(
       // README 以外の変更のみだった → すべての変更をリセットしてからブランチ削除
       deps.execCommand('git checkout main', repoPath);
       deps.execCommand(`git branch -D ${branch}`, repoPath);
+      const reasonNonReadme = 'Agentが更新不要と判断（README以外の変更のみ）';
       console.log(`[story-doc-update] README 更新不要と判断（README以外の変更のみ）: ${story.slug}`);
-      return { skipped: true };
+      return { skipped: true, skipReason: reasonNonReadme };
     }
 
     // commit メッセージはシェルインジェクション防止のため一時ファイル経由で渡す

@@ -107,7 +107,7 @@ describe('runStoryDocUpdate', () => {
   });
 
   describe('README 更新が不要な場合', () => {
-    it('Agent が何も変更しなければ skipped: true を返す', async () => {
+    it('Agent が何も変更しなければ skipped: true と skipReason を返す', async () => {
       deps = createFakeDeps({
         // git status --porcelain で空文字を返す（変更なし）
         execCommand: vi.fn().mockReturnValue(''),
@@ -125,6 +125,8 @@ describe('runStoryDocUpdate', () => {
 
       expect(result.skipped).toBe(true);
       expect(result.prUrl).toBeUndefined();
+      expect(result.skipReason).toBeDefined();
+      expect(result.skipReason).toContain('変更なし');
     });
 
     it('ブランチ作成後にスキップした場合、ブランチが削除される', async () => {
@@ -289,7 +291,7 @@ describe('runStoryDocUpdate', () => {
       expect(calls.some((c: string) => c === 'git clean -fd')).toBe(true);
     });
 
-    it('README 以外のファイルのみ変更された場合は skipped を返す', async () => {
+    it('README 以外のファイルのみ変更された場合は skipped と skipReason を返す', async () => {
       const execCommand = vi.fn().mockImplementation((cmd: string) => {
         if (cmd === 'git status --porcelain') return '?? src/temp.ts\n';
         if (cmd === 'git diff --cached --name-only') return '';
@@ -304,6 +306,8 @@ describe('runStoryDocUpdate', () => {
       const result = await runStoryDocUpdate(makeStory(), [makeTask('01-task')], repoPath, notifier, deps);
 
       expect(result.skipped).toBe(true);
+      expect(result.skipReason).toBeDefined();
+      expect(result.skipReason).toContain('README以外');
     });
   });
 
