@@ -526,3 +526,112 @@ describe('runStory - 受け入れ条件ゲート', () => {
     expect(deps.updateFileStatus).toHaveBeenCalledWith(story.filePath, 'Done');
   });
 });
+
+describe('runStory - Done 通知の順序と notifyUpdate', () => {
+  let notifier: FakeNotifier;
+  let deps: RunnerDeps;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    notifier = new FakeNotifier();
+    deps = createFakeDeps();
+  });
+
+  it('Done ボタン押下後、ストーリー完了通知が notifyUpdate で送信される', async () => {
+    const story = createStory();
+    const doneTasks = [createTask('task-01', 'Done')];
+
+    (deps.getStoryTasks as ReturnType<typeof vi.fn>).mockResolvedValue(doneTasks);
+    (deps.checkAcceptanceCriteria as ReturnType<typeof vi.fn>).mockResolvedValue({
+      allPassed: true,
+      skipped: false,
+      results: [{ criterion: '条件A', result: 'PASS', reason: 'OK' }],
+    });
+
+    notifier.enqueueAcceptanceGateResponse({ action: 'done' });
+
+    await runStory(story, notifier, deps);
+
+    // notifyUpdate でストーリー完了メッセージが送信されている
+    expect(notifier.updatedMessages).toHaveLength(1);
+    expect(notifier.updatedMessages[0].message).toContain('ストーリー完了');
+    expect(notifier.updatedMessages[0].messageTs).toBeTruthy();
+  });
+
+  it('force_done でも notifyUpdate でストーリー完了通知が送信される', async () => {
+    const story = createStory();
+    const doneTasks = [createTask('task-01', 'Done')];
+
+    (deps.getStoryTasks as ReturnType<typeof vi.fn>).mockResolvedValue(doneTasks);
+    (deps.checkAcceptanceCriteria as ReturnType<typeof vi.fn>).mockResolvedValue({
+      allPassed: false,
+      skipped: false,
+      results: [
+        { criterion: '条件A', result: 'PASS', reason: 'OK' },
+        { criterion: '条件B', result: 'FAIL', reason: 'NG' },
+      ],
+    });
+
+    notifier.enqueueAcceptanceGateResponse({ action: 'force_done' });
+
+    await runStory(story, notifier, deps);
+
+    // notifyUpdate が使われている
+    expect(notifier.updatedMessages).toHaveLength(1);
+    expect(notifier.updatedMessages[0].message).toContain('ストーリー完了');
+  });
+
+  it('受け入れ条件スキップ時（messageTs なし）は notify で送信される', async () => {
+    const story = createStory({
+      content: '# My Story\nNo acceptance criteria',
+    });
+    const doneTasks = [createTask('task-01', 'Done')];
+
+    (deps.getStoryTasks as ReturnType<typeof vi.fn>).mockResolvedValue(doneTasks);
+    (deps.checkAcceptanceCriteria as ReturnType<typeof vi.fn>).mockResolvedValue({
+      allPassed: true,
+      skipped: true,
+      results: [],
+    });
+
+    await runStory(story, notifier, deps);
+
+    // notifyUpdate は呼ばれない（messageTs がないため notify にフォールバック）
+    expect(notifier.updatedMessages).toHaveLength(0);
+    // 通常の notify でストーリー完了が送信される
+    expect(notifier.notifications.some(n => n.message.includes('ストーリー完了'))).toBe(true);
+  });
+
+  it('README 更新 PR 通知 → ストーリー完了通知の順序が正しい', async () => {
+    // detectNoRemote を false に設定（README 更新を実行する）
+    const { detectNoRemote } = await import('../git');
+    (detectNoRemote as ReturnType<typeof vi.fn>).mockReturnValue(false);
+
+    const story = createStory();
+    const doneTasks = [createTask('task-01', 'Done')];
+
+    (deps.getStoryTasks as ReturnType<typeof vi.fn>).mockResolvedValue(doneTasks);
+    (deps.checkAcceptanceCriteria as ReturnType<typeof vi.fn>).mockResolvedValue({
+      allPassed: true,
+      skipped: false,
+      results: [{ criterion: '条件A', result: 'PASS', reason: 'OK' }],
+    });
+
+    notifier.enqueueAcceptanceGateResponse({ action: 'done' });
+
+    await runStory(story, notifier, deps);
+
+    // 全イベントの中でストーリー完了通知が最後に来ることを確認
+    const notifyEvents = notifier.notifications;
+    const completionIdx = notifyEvents.findIndex(n => n.message.includes('ストーリー完了'));
+    expect(completionIdx).toBeGreaterThanOrEqual(0);
+
+    // README スキップ通知がストーリー完了より先に来る
+    const readmeIdx = notifyEvents.findIndex(n =>
+      n.message.includes('README 更新スキップ') || n.message.includes('README 更新 PR')
+    );
+    if (readmeIdx >= 0) {
+      expect(readmeIdx).toBeLessThan(completionIdx);
+    }
+  });
+});

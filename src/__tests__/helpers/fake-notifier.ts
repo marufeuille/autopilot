@@ -118,6 +118,9 @@ export class FakeNotifier implements NotificationBackend {
   /** 記録された受け入れ条件ゲートリクエストのみ */
   public readonly acceptanceGateRequests: RecordedAcceptanceGateRequest[] = [];
 
+  /** 記録されたメッセージ更新 */
+  public readonly updatedMessages: Array<{ messageTs: string; message: string; storySlug?: string }> = [];
+
   /** 記録されたスレッド開始呼び出し */
   public readonly threadStarts: Array<{ storySlug: string; message: string }> = [];
 
@@ -145,6 +148,18 @@ export class FakeNotifier implements NotificationBackend {
     };
     this.events.push(record);
     this.notifications.push(record);
+  }
+
+  async notifyUpdate(messageTs: string, message: string, storySlug?: string): Promise<void> {
+    const record: RecordedNotification = {
+      type: 'notify',
+      message,
+      storySlug,
+      timestamp: new Date(),
+    };
+    this.events.push(record);
+    this.notifications.push(record);
+    this.updatedMessages.push({ messageTs, message, storySlug });
   }
 
   async requestApproval(
@@ -246,6 +261,11 @@ export class FakeNotifier implements NotificationBackend {
         ? this.acceptanceGateQueue.shift()!
         : { action: 'done' };
 
+    // done/force_done の場合、Slack と同様に messageTs を付与する
+    if ((response.action === 'done' || response.action === 'force_done') && !response.messageTs) {
+      response.messageTs = `fake-gate-msg-ts-${Date.now()}`;
+    }
+
     const record: RecordedAcceptanceGateRequest = {
       type: 'requestAcceptanceGateAction',
       storySlug,
@@ -306,6 +326,7 @@ export class FakeNotifier implements NotificationBackend {
     this.taskFailureQueue.length = 0;
     this.queueFailedQueue.length = 0;
     this.acceptanceGateQueue.length = 0;
+    this.updatedMessages.length = 0;
     this.threadStarts.length = 0;
     this.threadSessions.clear();
   }

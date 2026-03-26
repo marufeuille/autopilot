@@ -38,6 +38,13 @@ export class LocalNotificationBackend implements NotificationBackend {
   }
 
   /**
+   * メッセージ更新（ローカルでは notify にフォールバック）
+   */
+  async notifyUpdate(_messageTs: string, message: string, storySlug?: string): Promise<void> {
+    await this.notify(message, storySlug);
+  }
+
+  /**
    * 承認リクエスト: macOS 通知を送りつつターミナルで y/n を待つ
    */
   async requestApproval(

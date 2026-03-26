@@ -52,6 +52,18 @@ export class ResilientNotificationBackend implements NotificationBackend {
     }
   }
 
+  async notifyUpdate(messageTs: string, message: string, storySlug?: string): Promise<void> {
+    try {
+      await this.withRetry(() => this.primary.notifyUpdate(messageTs, message, storySlug));
+    } catch (error) {
+      console.warn(
+        `[resilient-notify] primary notifyUpdate failed after ${this.maxRetries + 1} attempts, falling back to local:`,
+        error instanceof Error ? error.message : error,
+      );
+      await this.fallback.notifyUpdate(messageTs, message, storySlug);
+    }
+  }
+
   async startThread(storySlug: string, message: string): Promise<void> {
     try {
       await this.withRetry(() => this.primary.startThread(storySlug, message));
