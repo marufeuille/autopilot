@@ -9,6 +9,7 @@ import { runStory } from '../../runner';
 import { readStoryFile, TaskFile, TaskStatus } from '../../vault/reader';
 import { updateFileStatus, recordTaskCompletion, TaskCompletionRecord } from '../../vault/writer';
 import { RunnerDeps } from '../../runner-deps';
+import { GitSyncError } from '../../git';
 
 // detectNoRemote をモック化（テスト環境では remote なしと判定されるため）
 vi.mock('../../git', async (importOriginal) => {
@@ -770,6 +771,288 @@ describe('Task失敗ゲート E2E テスト', () => {
         tasks: [
           { slug: `${STORY_SLUG}-01-task`, status: 'Todo', priority: 'high' },
           { slug: `${STORY_SLUG}-02-task`, status: 'Todo', priority: 'medium' },
+        ],
+      }),
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // シナリオ 7: GitSyncError — main同期失敗時も失敗ゲートで停止する
+  // -------------------------------------------------------------------------
+  describe('GitSyncError シナリオ', () => {
+    const PROJECT = 'gitsync-e2e-project';
+    const STORY_SLUG = 'gitsync-e2e-story';
+
+    it(
+      'GitSyncError発生時に失敗ゲートで停止し、skip選択で次タスクが実行される',
+      withVault(async (vault) => {
+        const notifier = new FakeNotifier();
+        // 承認キュー:
+        //   1. task-01 start → approve
+        //   (task-01 syncMainBranch throws GitSyncError → Failed)
+        //   2. task-01 failure action → skip
+        //   3. task-02 start → approve
+        //   (task-02 succeeds → Done)
+        notifier.enqueueApprovalResponse(
+          { action: 'approve' },  // task-01 start
+          { action: 'approve' },  // task-02 start
+        );
+        notifier.enqueueTaskFailureResponse('skip');  // task-01 failure → skip
+
+        // syncMainBranch: 1回目は GitSyncError、2回目以降は成功
+        const syncMainMock = vi.fn()
+          .mockRejectedValueOnce(new GitSyncError('Failed to pull origin main: connection refused'))
+          .mockResolvedValue(undefined);
+
+        const deps = createIntegrationDeps(vault, {
+          syncMainBranch: syncMainMock,
+        });
+
+        const story = readStoryFile(vault.storyFilePath);
+        await runStory(story, notifier, deps);
+
+        // task-01 が Skipped（GitSyncError → 失敗ゲート → skip）
+        const task01Fm = readFrontmatter(vault.taskFilePaths[0]);
+        expect(task01Fm.status).toBe('Skipped');
+
+        // task-02 が Done
+        const task02Fm = readFrontmatter(vault.taskFilePaths[1]);
+        expect(task02Fm.status).toBe('Done');
+
+        // ストーリーが Done
+        const storyFm = readFrontmatter(vault.storyFilePath);
+        expect(storyFm.status).toBe('Done');
+
+        // 失敗ゲートが呼ばれたことを検証
+        expect(notifier.taskFailureRequests).toHaveLength(1);
+        expect(notifier.taskFailureRequests[0].storySlug).toBe(STORY_SLUG);
+
+        // Slack通知（❌ main同期失敗）が送信されている
+        const syncFailNotification = notifier.notifications.find((n) =>
+          n.message.includes('main同期失敗'),
+        );
+        expect(syncFailNotification).toBeDefined();
+      }, {
+        project: PROJECT,
+        story: { slug: STORY_SLUG, status: 'Doing' },
+        tasks: [
+          { slug: `${STORY_SLUG}-01-task`, status: 'Todo', priority: 'high' },
+          { slug: `${STORY_SLUG}-02-task`, status: 'Todo', priority: 'medium' },
+        ],
+      }),
+    );
+
+    it(
+      'GitSyncError発生時にretry選択で同じタスクが再実行される',
+      withVault(async (vault) => {
+        const notifier = new FakeNotifier();
+        // 承認キュー:
+        //   1. task-01 start → approve
+        //   (task-01 syncMainBranch throws GitSyncError → Failed)
+        //   2. task-01 failure action → retry
+        //   3. task-01 start (2nd) → approve
+        //   (task-01 syncMainBranch succeeds → pipeline completes → Done)
+        notifier.enqueueApprovalResponse(
+          { action: 'approve' },  // task-01 start
+          { action: 'approve' },  // task-01 start (2nd, after retry)
+        );
+        notifier.enqueueTaskFailureResponse('retry');  // task-01 failure → retry
+
+        // syncMainBranch: 1回目は GitSyncError、2回目以降は成功
+        const syncMainMock = vi.fn()
+          .mockRejectedValueOnce(new GitSyncError('Failed to checkout main: detached HEAD'))
+          .mockResolvedValue(undefined);
+
+        const deps = createIntegrationDeps(vault, {
+          syncMainBranch: syncMainMock,
+        });
+
+        const story = readStoryFile(vault.storyFilePath);
+        await runStory(story, notifier, deps);
+
+        // task-01 が Done（retry後に成功）
+        const task01Fm = readFrontmatter(vault.taskFilePaths[0]);
+        expect(task01Fm.status).toBe('Done');
+
+        // ストーリーが Done
+        const storyFm = readFrontmatter(vault.storyFilePath);
+        expect(storyFm.status).toBe('Done');
+
+        // syncMainBranch が3回呼ばれた（1回目失敗、2回目成功=タスクパイプライン、3回目=ストーリーdoc更新）
+        expect(syncMainMock).toHaveBeenCalledTimes(3);
+      }, {
+        project: PROJECT,
+        story: { slug: STORY_SLUG, status: 'Doing' },
+        tasks: [
+          { slug: `${STORY_SLUG}-01-task`, status: 'Todo', priority: 'high' },
+        ],
+      }),
+    );
+
+    it(
+      'GitSyncError発生時にcancel選択でストーリーがキャンセルされる',
+      withVault(async (vault) => {
+        const notifier = new FakeNotifier();
+        notifier.enqueueApprovalResponse(
+          { action: 'approve' },  // task-01 start
+        );
+        notifier.enqueueTaskFailureResponse('cancel');  // task-01 failure → cancel
+
+        const syncMainMock = vi.fn()
+          .mockRejectedValue(new GitSyncError('Failed to pull origin main: network error'));
+
+        const deps = createIntegrationDeps(vault, {
+          syncMainBranch: syncMainMock,
+        });
+
+        const story = readStoryFile(vault.storyFilePath);
+        await runStory(story, notifier, deps);
+
+        // ストーリーが Cancelled
+        const storyFm = readFrontmatter(vault.storyFilePath);
+        expect(storyFm.status).toBe('Cancelled');
+
+        // task-02 は Todo のまま（実行されない）
+        const task02Fm = readFrontmatter(vault.taskFilePaths[1]);
+        expect(task02Fm.status).toBe('Todo');
+
+        // キャンセル通知が送信される
+        const cancelNotification = notifier.notifications.find((n) =>
+          n.message.includes('キャンセル'),
+        );
+        expect(cancelNotification).toBeDefined();
+
+        // runAgent は一度も呼ばれない（sync-main で失敗するため implementation に到達しない）
+        expect(deps.runAgent).not.toHaveBeenCalled();
+      }, {
+        project: PROJECT,
+        story: { slug: STORY_SLUG, status: 'Doing' },
+        tasks: [
+          { slug: `${STORY_SLUG}-01-task`, status: 'Todo', priority: 'high' },
+          { slug: `${STORY_SLUG}-02-task`, status: 'Todo', priority: 'medium' },
+        ],
+      }),
+    );
+
+    it(
+      'GitSyncError発生時にタスクが Failed ステータスになる',
+      withVault(async (vault) => {
+        const notifier = new FakeNotifier();
+        notifier.enqueueApprovalResponse(
+          { action: 'approve' },  // task-01 start
+        );
+        notifier.enqueueTaskFailureResponse('skip');  // task-01 failure → skip
+
+        const syncMainMock = vi.fn()
+          .mockRejectedValueOnce(new GitSyncError('Failed to pull origin main'))
+          .mockResolvedValue(undefined);
+
+        const { transitions, fn: trackingFn, completionFn } = createTrackingUpdateFileStatus();
+        const deps = createIntegrationDeps(vault, {
+          syncMainBranch: syncMainMock,
+          updateFileStatus: vi.fn().mockImplementation(trackingFn),
+          recordTaskCompletion: vi.fn().mockImplementation(completionFn),
+        });
+
+        const story = readStoryFile(vault.storyFilePath);
+        await runStory(story, notifier, deps);
+
+        // task-01 の遷移: Failed → Skipped
+        // GitSyncError は sync-main ステップで発生するため、implementation の 'Doing' 遷移に到達しない
+        const taskSlug = `${STORY_SLUG}-01-task`;
+        const taskTransitions = transitions.filter((t) => t.slug === taskSlug);
+        expect(taskTransitions).toEqual([
+          { slug: taskSlug, status: 'Failed' },
+          { slug: taskSlug, status: 'Skipped' },
+        ]);
+      }, {
+        project: PROJECT,
+        story: { slug: STORY_SLUG, status: 'Doing' },
+        tasks: [
+          { slug: `${STORY_SLUG}-01-task`, status: 'Todo', priority: 'high' },
+        ],
+      }),
+    );
+
+    it(
+      'worktree作成失敗（GitSyncError）でも失敗ゲートで停止する',
+      withVault(async (vault) => {
+        const notifier = new FakeNotifier();
+        notifier.enqueueApprovalResponse(
+          { action: 'approve' },  // task-01 start
+          { action: 'approve' },  // task-02 start
+        );
+        notifier.enqueueTaskFailureResponse('skip');  // task-01 failure → skip
+
+        // syncMainBranch は成功するが、createWorktree が GitSyncError を投げる
+        const createWorktreeMock = vi.fn()
+          .mockRejectedValueOnce(new GitSyncError('Failed to create worktree: already exists'))
+          .mockResolvedValue(undefined);
+
+        const deps = createIntegrationDeps(vault, {
+          createWorktree: createWorktreeMock,
+        });
+
+        const story = readStoryFile(vault.storyFilePath);
+        await runStory(story, notifier, deps);
+
+        // task-01 が Skipped（worktree作成失敗 → 失敗ゲート → skip）
+        const task01Fm = readFrontmatter(vault.taskFilePaths[0]);
+        expect(task01Fm.status).toBe('Skipped');
+
+        // task-02 が Done
+        const task02Fm = readFrontmatter(vault.taskFilePaths[1]);
+        expect(task02Fm.status).toBe('Done');
+
+        // ストーリーが Done
+        const storyFm = readFrontmatter(vault.storyFilePath);
+        expect(storyFm.status).toBe('Done');
+
+        // Slack通知（❌ worktree作成失敗）が送信されている
+        const worktreeFailNotification = notifier.notifications.find((n) =>
+          n.message.includes('worktree作成失敗'),
+        );
+        expect(worktreeFailNotification).toBeDefined();
+      }, {
+        project: PROJECT,
+        story: { slug: STORY_SLUG, status: 'Doing' },
+        tasks: [
+          { slug: `${STORY_SLUG}-01-task`, status: 'Todo', priority: 'high' },
+          { slug: `${STORY_SLUG}-02-task`, status: 'Todo', priority: 'medium' },
+        ],
+      }),
+    );
+
+    it(
+      'GitSyncError の失敗通知にエラーメッセージが含まれる',
+      withVault(async (vault) => {
+        const notifier = new FakeNotifier();
+        notifier.enqueueApprovalResponse(
+          { action: 'approve' },  // task-01 start
+        );
+        notifier.enqueueTaskFailureResponse('skip');
+
+        const errorMsg = 'Failed to pull origin main: connection refused';
+        const syncMainMock = vi.fn()
+          .mockRejectedValueOnce(new GitSyncError(errorMsg))
+          .mockResolvedValue(undefined);
+
+        const deps = createIntegrationDeps(vault, {
+          syncMainBranch: syncMainMock,
+        });
+
+        const story = readStoryFile(vault.storyFilePath);
+        await runStory(story, notifier, deps);
+
+        // 失敗アクションリクエストにエラーメッセージが含まれる
+        const failureRequest = notifier.taskFailureRequests[0];
+        expect(failureRequest).toBeDefined();
+        expect(failureRequest.errorSummary).toContain(errorMsg);
+      }, {
+        project: PROJECT,
+        story: { slug: STORY_SLUG, status: 'Doing' },
+        tasks: [
+          { slug: `${STORY_SLUG}-01-task`, status: 'Todo', priority: 'high' },
         ],
       }),
     );
