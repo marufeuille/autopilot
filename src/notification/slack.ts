@@ -21,8 +21,33 @@ const pending = new Map<string, PendingApproval>();
 function buildApprovalBlocks(
   id: string,
   message: string,
-  buttons: { approve: string; reject: string },
+  buttons: { approve: string; reject: string; cancel?: string },
 ): (Block | KnownBlock)[] {
+  const elements: KnownBlock[] = [
+    {
+      type: 'button',
+      text: { type: 'plain_text', text: buttons.approve },
+      style: 'primary',
+      action_id: 'cwk_approve',
+      value: id,
+    } as any,
+    {
+      type: 'button',
+      text: { type: 'plain_text', text: buttons.reject },
+      style: 'danger',
+      action_id: 'cwk_reject',
+      value: id,
+    } as any,
+  ];
+  if (buttons.cancel) {
+    elements.push({
+      type: 'button',
+      text: { type: 'plain_text', text: buttons.cancel },
+      style: 'danger',
+      action_id: 'cwk_cancel',
+      value: id,
+    } as any);
+  }
   return [
     {
       type: 'section',
@@ -30,22 +55,7 @@ function buildApprovalBlocks(
     },
     {
       type: 'actions',
-      elements: [
-        {
-          type: 'button',
-          text: { type: 'plain_text', text: buttons.approve },
-          style: 'primary',
-          action_id: 'cwk_approve',
-          value: id,
-        },
-        {
-          type: 'button',
-          text: { type: 'plain_text', text: buttons.reject },
-          style: 'danger',
-          action_id: 'cwk_reject',
-          value: id,
-        },
-      ],
+      elements,
     },
   ];
 }
@@ -98,6 +108,17 @@ export function registerApprovalHandlers(app: App): void {
     const entry = pending.get(id);
     if (entry) await updateMessageWithResult(app, entry, `✅ ${label}`);
     resolveApproval(id, { action: 'approve' });
+  });
+
+  // キャンセルボタン: メッセージを更新してすぐ解決
+  app.action('cwk_cancel', async ({ body, ack }) => {
+    await ack();
+    const action = (body as any).actions[0];
+    const id = action.value as string;
+    const label = action.text?.text ?? 'キャンセル';
+    const entry = pending.get(id);
+    if (entry) await updateMessageWithResult(app, entry, `🚫 ${label}`);
+    resolveApproval(id, { action: 'cancel' });
   });
 
   // 却下ボタン: ボタンをすぐ消してからモーダルを開く
@@ -254,7 +275,7 @@ export class SlackNotificationBackend implements NotificationBackend {
   requestApproval(
     id: string,
     message: string,
-    buttons: { approve: string; reject: string },
+    buttons: { approve: string; reject: string; cancel?: string },
     storySlug?: string,
   ): Promise<ApprovalResult> {
     return this._postApprovalRequest(id, message, buttons, storySlug);
@@ -264,7 +285,7 @@ export class SlackNotificationBackend implements NotificationBackend {
   private async _postApprovalRequest(
     id: string,
     message: string,
-    buttons: { approve: string; reject: string },
+    buttons: { approve: string; reject: string; cancel?: string },
     storySlug?: string,
   ): Promise<ApprovalResult> {
     const threadTs = storySlug ? this.threadSession.getThreadTs(storySlug) : undefined;
