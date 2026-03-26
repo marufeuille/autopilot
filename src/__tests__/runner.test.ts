@@ -132,7 +132,7 @@ import { getStoryTasks } from '../vault/reader';
 import { updateFileStatus, recordTaskCompletion } from '../vault/writer';
 import { decomposeTasks } from '../decomposer';
 import { syncMainBranch, GitSyncError } from '../git';
-import { runStory, runTask } from '../runner';
+import { runStory, runTask, deriveStoryStatus } from '../runner';
 
 const mockedGetStoryTasks = vi.mocked(getStoryTasks);
 const mockedUpdateFileStatus = vi.mocked(updateFileStatus);
@@ -304,7 +304,7 @@ describe('runStory', () => {
     expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Done');
   });
 
-  it('Done + Skipped の組み合わせでもストーリーが Done に更新される', async () => {
+  it('Done + Skipped の組み合わせでストーリーが Done に更新される', async () => {
     const story = createStory();
     const notifier = createMockNotifier();
     const tasks = [
@@ -319,12 +319,12 @@ describe('runStory', () => {
 
     expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Done');
     expect(notifier.notify).toHaveBeenCalledWith(
-      expect.stringContaining('一部スキップ/失敗あり'),
+      expect.stringContaining('ストーリー完了'),
       'my-story',
     );
   });
 
-  it('Done + Failed の組み合わせでもストーリーが Done に更新される', async () => {
+  it('Done + Failed の組み合わせでストーリーが Failed に更新される', async () => {
     const story = createStory();
     const notifier = createMockNotifier();
     const tasks = [
@@ -336,14 +336,14 @@ describe('runStory', () => {
 
     await runStory(story, notifier);
 
-    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Done');
+    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Failed');
     expect(notifier.notify).toHaveBeenCalledWith(
-      expect.stringContaining('一部スキップ/失敗あり'),
+      expect.stringContaining('ストーリーFailed'),
       'my-story',
     );
   });
 
-  it('Done + Skipped + Failed で全タスクが終端状態ならストーリー完了', async () => {
+  it('Done + Skipped + Failed で全タスクが終端状態ならストーリーが Failed になる', async () => {
     const story = createStory();
     const notifier = createMockNotifier();
     const tasks = [
@@ -356,7 +356,42 @@ describe('runStory', () => {
 
     await runStory(story, notifier);
 
-    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Done');
+    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Failed');
+  });
+
+  it('Cancelled タスクがある場合はストーリーが Cancelled に更新される', async () => {
+    const story = createStory();
+    const notifier = createMockNotifier();
+    const tasks = [
+      createTask('task-01', 'Done'),
+      createTask('task-02', 'Cancelled'),
+    ];
+
+    mockedGetStoryTasks.mockResolvedValue(tasks);
+
+    await runStory(story, notifier);
+
+    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Cancelled');
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('ストーリーCancelled'),
+      'my-story',
+    );
+  });
+
+  it('Cancelled + Failed の場合は Cancelled が優先される', async () => {
+    const story = createStory();
+    const notifier = createMockNotifier();
+    const tasks = [
+      createTask('task-01', 'Failed'),
+      createTask('task-02', 'Cancelled'),
+      createTask('task-03', 'Done'),
+    ];
+
+    mockedGetStoryTasks.mockResolvedValue(tasks);
+
+    await runStory(story, notifier);
+
+    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Cancelled');
   });
 
   it('タスク実行中の例外が発生してもストーリー実行が継続する', async () => {
@@ -396,8 +431,8 @@ describe('runStory', () => {
 
     // task-01 は Failed に更新される
     expect(mockedUpdateFileStatus).toHaveBeenCalledWith(todoTask1.filePath, 'Failed');
-    // ストーリーは完了する（全タスクが終端状態）
-    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Done');
+    // ストーリーは Failed になる（Failed タスクがあるため）
+    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Failed');
 
     consoleErrorSpy.mockRestore();
   });
@@ -1305,5 +1340,70 @@ describe('runTask - マージ後ステータス更新フロー', () => {
       expect.stringContaining('マージ完了'),
       story.slug,
     );
+  });
+});
+
+describe('deriveStoryStatus', () => {
+  it('全タスク Done → Done', () => {
+    const tasks = [createTask('t1', 'Done'), createTask('t2', 'Done')];
+    expect(deriveStoryStatus(tasks)).toBe('Done');
+  });
+
+  it('Done + Skipped → Done', () => {
+    const tasks = [createTask('t1', 'Done'), createTask('t2', 'Skipped')];
+    expect(deriveStoryStatus(tasks)).toBe('Done');
+  });
+
+  it('Failed が1つ以上 → Failed', () => {
+    const tasks = [createTask('t1', 'Done'), createTask('t2', 'Failed')];
+    expect(deriveStoryStatus(tasks)).toBe('Failed');
+  });
+
+  it('Cancelled が1つ以上 → Cancelled', () => {
+    const tasks = [createTask('t1', 'Done'), createTask('t2', 'Cancelled')];
+    expect(deriveStoryStatus(tasks)).toBe('Cancelled');
+  });
+
+  it('Cancelled + Failed → Cancelled（Cancelled が優先）', () => {
+    const tasks = [
+      createTask('t1', 'Failed'),
+      createTask('t2', 'Cancelled'),
+      createTask('t3', 'Done'),
+    ];
+    expect(deriveStoryStatus(tasks)).toBe('Cancelled');
+  });
+
+  it('全タスク Skipped → Done', () => {
+    const tasks = [createTask('t1', 'Skipped'), createTask('t2', 'Skipped')];
+    expect(deriveStoryStatus(tasks)).toBe('Done');
+  });
+
+  it('空配列 → Done', () => {
+    expect(deriveStoryStatus([])).toBe('Done');
+  });
+
+  it('Cancelled のみ（Done なし） → Cancelled', () => {
+    const tasks = [createTask('t1', 'Cancelled'), createTask('t2', 'Cancelled')];
+    expect(deriveStoryStatus(tasks)).toBe('Cancelled');
+  });
+
+  it('Failed のみ（Done なし） → Failed', () => {
+    const tasks = [createTask('t1', 'Failed'), createTask('t2', 'Failed')];
+    expect(deriveStoryStatus(tasks)).toBe('Failed');
+  });
+
+  it('非終端ステータス Todo が含まれる場合はエラー', () => {
+    const tasks = [createTask('t1', 'Done'), createTask('t2', 'Todo')];
+    expect(() => deriveStoryStatus(tasks)).toThrow('non-terminal tasks found: t2(Todo)');
+  });
+
+  it('非終端ステータス Doing が含まれる場合はエラー', () => {
+    const tasks = [createTask('t1', 'Doing'), createTask('t2', 'Done')];
+    expect(() => deriveStoryStatus(tasks)).toThrow('non-terminal tasks found: t1(Doing)');
+  });
+
+  it('Todo と Doing が混在する場合はエラー', () => {
+    const tasks = [createTask('t1', 'Todo'), createTask('t2', 'Doing'), createTask('t3', 'Done')];
+    expect(() => deriveStoryStatus(tasks)).toThrow('non-terminal tasks found');
   });
 });

@@ -782,7 +782,7 @@ describe('異常系ワークフロー結合テスト', () => {
     const STORY_SLUG = 'partial-failure-story';
 
     it(
-      '3タスク中1つが Failed → ストーリーは Done (一部失敗あり)、残りは Skipped',
+      '3タスク中1つが Failed → ストーリーは Failed、残りは Skipped',
       withVault(async (vault) => {
         const notifier = new FakeNotifier();
         // 承認キュー:
@@ -817,16 +817,15 @@ describe('異常系ワークフロー結合テスト', () => {
         expect(statusMap[`${STORY_SLUG}-02-task`]).toBe('Skipped');
         expect(statusMap[`${STORY_SLUG}-03-task`]).toBe('Skipped');
 
-        // ストーリーは全タスクが terminal なので Done（一部失敗/スキップあり）
+        // ストーリーは Failed タスクがあるので Failed
         const storyFm = readFrontmatter(vault.storyFilePath);
-        expect(storyFm.status).toBe('Done');
+        expect(storyFm.status).toBe('Failed');
 
-        // 完了通知に失敗/スキップの情報が含まれている
+        // 完了通知に Failed の情報が含まれている
         const completionNotification = notifier.notifications.find((n) =>
-          n.message.includes('ストーリー完了'),
+          n.message.includes('ストーリーFailed'),
         );
         expect(completionNotification).toBeDefined();
-        expect(completionNotification!.message).toContain('一部スキップ/失敗あり');
       }, {
         project: PROJECT,
         story: { slug: STORY_SLUG, status: 'Doing' },
@@ -896,7 +895,7 @@ describe('異常系ワークフロー結合テスト', () => {
     );
 
     it(
-      '失敗タスク以外が正常完了した場合もストーリーは Done',
+      '失敗タスク以外が正常完了した場合もストーリーは Failed',
       withVault(async (vault) => {
         const notifier = new FakeNotifier();
         // 承認キュー（手動マージフロー: マージ承認なし）:
@@ -927,16 +926,15 @@ describe('異常系ワークフロー結合テスト', () => {
         expect(statusMap[`${STORY_SLUG}-02-task`]).toBe('Done');
         expect(statusMap[`${STORY_SLUG}-03-task`]).toBe('Done');
 
-        // ストーリーは Done（全タスクが terminal）
+        // ストーリーは Failed タスクがあるので Failed
         const storyFm = readFrontmatter(vault.storyFilePath);
-        expect(storyFm.status).toBe('Done');
+        expect(storyFm.status).toBe('Failed');
 
-        // 完了通知に一部失敗の情報が含まれる
+        // 完了通知に Failed の情報が含まれる
         const completionNotification = notifier.notifications.find((n) =>
-          n.message.includes('ストーリー完了'),
+          n.message.includes('ストーリーFailed'),
         );
         expect(completionNotification).toBeDefined();
-        expect(completionNotification!.message).toContain('一部スキップ/失敗あり');
         expect(completionNotification!.message).toContain('Failed');
       }, {
         project: PROJECT,

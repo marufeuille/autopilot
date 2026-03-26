@@ -50,7 +50,7 @@ describe('vault/reader', () => {
       expect(story.content).toContain('テストストーリー');
     });
 
-    it('status が未設定の場合は空文字を返す', () => {
+    it('status が未設定の場合は Todo を返す', () => {
       vault = createFakeVault({
         project: 'test-project',
         story: { slug: 'no-status' },
@@ -64,7 +64,7 @@ describe('vault/reader', () => {
       fs.writeFileSync(vault.storyFilePath, rewritten);
 
       const story = readStoryFile(vault.storyFilePath);
-      expect(story.status).toBe('');
+      expect(story.status).toBe('Todo');
     });
 
     it('project を filePath の Projects/ セグメントから抽出する', () => {

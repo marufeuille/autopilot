@@ -1,4 +1,4 @@
-import { StoryFile, TaskFile, TaskStatus } from './vault/reader';
+import { StoryFile, StoryStatus, TaskFile, TaskStatus } from './vault/reader';
 import { TaskDraft } from './vault/writer';
 import {
   NotificationBackend,
@@ -147,6 +147,34 @@ async function tryDocUpdateAndNotify(
   }
 }
 
+/**
+ * 全タスクのステータスからストーリーの最終ステータスを算出する。
+ * 優先度: Cancelled > Failed > Done
+ * - Cancelled タスクが1つ以上 → Cancelled
+ * - Failed タスクが1つ以上 → Failed
+ * - 全タスクが Done or Skipped → Done
+ *
+ * 前提条件: 全タスクが終端ステータス（Done/Skipped/Failed/Cancelled）であること。
+ * 非終端ステータス（Todo/Doing）のタスクが含まれている場合は Error をスローする。
+ *
+ * @param tasks タスク配列。空配列の場合は 'Done' を返す。
+ * @throws {Error} 非終端ステータスのタスクが含まれている場合
+ */
+export function deriveStoryStatus(tasks: TaskFile[]): StoryStatus {
+  if (tasks.length === 0) return 'Done';
+
+  const terminalStatuses: TaskStatus[] = ['Done', 'Skipped', 'Failed', 'Cancelled'];
+  const nonTerminal = tasks.filter((t) => !terminalStatuses.includes(t.status));
+  if (nonTerminal.length > 0) {
+    const details = nonTerminal.map((t) => `${t.slug}(${t.status})`).join(', ');
+    throw new Error(`deriveStoryStatus: non-terminal tasks found: ${details}`);
+  }
+
+  if (tasks.some((t) => t.status === 'Cancelled')) return 'Cancelled';
+  if (tasks.some((t) => t.status === 'Failed')) return 'Failed';
+  return 'Done';
+}
+
 export async function runStory(
   story: StoryFile,
   notifier: NotificationBackend,
@@ -186,31 +214,32 @@ export async function runStory(
   }
 
   // 全タスクの最新状態を取得してストーリー完了判定
-  const terminalStatuses: TaskStatus[] = ['Done', 'Skipped', 'Failed'];
+  const terminalStatuses: TaskStatus[] = ['Done', 'Skipped', 'Failed', 'Cancelled'];
   const allTasks = todoTasks.length > 0
     ? await d.getStoryTasks(story.project, story.slug)
     : allCurrentTasks;
   const allTerminal = allTasks.length > 0 && allTasks.every((t) => terminalStatuses.includes(t.status));
-  const allDone = allTasks.length > 0 && allTasks.every((t) => t.status === 'Done');
 
-  if (allDone) {
-    // 全タスク Done → README 更新を試みてからストーリーを Done にする
-    await tryDocUpdateAndNotify(story, allTasks, repoPath, notifier, d);
-
-    d.updateFileStatus(story.filePath, 'Done');
-    await notifier.notify(`✅ ストーリー完了: ${story.slug}`, story.slug);
-    console.log(`[runner] story done: ${story.slug}`);
-  } else if (allTerminal) {
-    // 一部 Skipped/Failed あり → Done タスクがあれば README 更新を試みる
+  if (allTerminal) {
+    // Done タスクがあれば README 更新を試みる
     const doneTasks = allTasks.filter((t) => t.status === 'Done');
     if (doneTasks.length > 0) {
       await tryDocUpdateAndNotify(story, doneTasks, repoPath, notifier, d);
     }
 
-    d.updateFileStatus(story.filePath, 'Done');
-    const summary = allTasks.map((t) => `${t.slug}(${t.status})`).join(', ');
-    await notifier.notify(`✅ ストーリー完了 (一部スキップ/失敗あり): ${story.slug}\n${summary}`, story.slug);
-    console.log(`[runner] story done with skipped/failed tasks: ${story.slug}, ${summary}`);
+    // ストーリーの最終ステータスを算出（優先度: Cancelled > Failed > Done）
+    const storyStatus = deriveStoryStatus(allTasks);
+    d.updateFileStatus(story.filePath, storyStatus);
+
+    if (storyStatus === 'Done') {
+      await notifier.notify(`✅ ストーリー完了: ${story.slug}`, story.slug);
+      console.log(`[runner] story done: ${story.slug}`);
+    } else {
+      const summary = allTasks.map((t) => `${t.slug}(${t.status})`).join(', ');
+      const icon = storyStatus === 'Cancelled' ? '🚫' : '❌';
+      await notifier.notify(`${icon} ストーリー${storyStatus}: ${story.slug}\n${summary}`, story.slug);
+      console.log(`[runner] story ${storyStatus}: ${story.slug}, ${summary}`);
+    }
   } else if (todoTasks.length === 0) {
     const remaining = allTasks.filter((t) => !terminalStatuses.includes(t.status));
     console.log(

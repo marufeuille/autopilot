@@ -5,12 +5,26 @@ import { glob } from 'glob';
 import { vaultProjectPath, vaultTasksPath } from '../config';
 
 export type TaskStatus = 'Todo' | 'Doing' | 'Done' | 'Failed' | 'Skipped' | 'Cancelled';
+export type StoryStatus = 'Todo' | 'Doing' | 'Done' | 'Failed' | 'Cancelled';
+
+const VALID_TASK_STATUSES: ReadonlySet<string> = new Set<TaskStatus>(['Todo', 'Doing', 'Done', 'Failed', 'Skipped', 'Cancelled']);
+const VALID_STORY_STATUSES: ReadonlySet<string> = new Set<StoryStatus>(['Todo', 'Doing', 'Done', 'Failed', 'Cancelled']);
+
+function parseTaskStatus(value: unknown): TaskStatus {
+  if (typeof value === 'string' && VALID_TASK_STATUSES.has(value)) return value as TaskStatus;
+  return 'Todo';
+}
+
+function parseStoryStatus(value: unknown): StoryStatus {
+  if (typeof value === 'string' && VALID_STORY_STATUSES.has(value)) return value as StoryStatus;
+  return 'Todo';
+}
 
 export interface StoryFile {
   filePath: string;
   project: string;
   slug: string;
-  status: string;
+  status: StoryStatus;
   frontmatter: Record<string, unknown>;
   content: string;
 }
@@ -35,7 +49,7 @@ export function readStoryFile(filePath: string): StoryFile {
     filePath,
     project,
     slug: path.basename(filePath, '.md'),
-    status: data.status ?? '',
+    status: parseStoryStatus(data.status),
     frontmatter: data,
     content,
   };
@@ -54,7 +68,7 @@ export async function getStoryTasks(project: string, storySlug: string): Promise
       project,
       storySlug,
       slug: path.basename(filePath, '.md'),
-      status: (data.status as TaskStatus) ?? 'Todo',
+      status: parseTaskStatus(data.status),
       frontmatter: data,
       content,
     });
