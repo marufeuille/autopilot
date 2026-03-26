@@ -5,7 +5,7 @@ import {
   generateApprovalId,
   buildThreadOriginMessage,
 } from './notification';
-import { GitSyncError, detectNoRemote } from './git';
+import { detectNoRemote } from './git';
 import { resolveRepoPath } from './config';
 import { RunnerDeps, createDefaultRunnerDeps } from './runner-deps';
 import { createTaskContext } from './pipeline/runner';
@@ -53,9 +53,6 @@ export async function runTask(
     }
   } catch (error) {
     d.updateFileStatus(task.filePath, 'Failed');
-    if (error instanceof GitSyncError) {
-      return;
-    }
     throw error;
   }
 }
