@@ -193,7 +193,7 @@ describe('FakeNotifier', () => {
       allPassed: true,
       conditions: [{ condition: 'テスト通過', passed: true, reason: 'OK' }],
     });
-    expect(result).toEqual({ action: 'done' });
+    expect(result).toEqual(expect.objectContaining({ action: 'done' }));
   });
 
   it('requestAcceptanceGateAction の呼び出しが記録される', async () => {
@@ -207,7 +207,7 @@ describe('FakeNotifier', () => {
     expect(notifier.acceptanceGateRequests).toHaveLength(1);
     expect(notifier.acceptanceGateRequests[0].storySlug).toBe('story-01');
     expect(notifier.acceptanceGateRequests[0].checkResult).toBe(checkResult);
-    expect(notifier.acceptanceGateRequests[0].response).toEqual({ action: 'done' });
+    expect(notifier.acceptanceGateRequests[0].response).toEqual(expect.objectContaining({ action: 'done' }));
   });
 
   it('acceptanceGateResponses キューから順に応答を返す', async () => {
@@ -222,9 +222,9 @@ describe('FakeNotifier', () => {
     const result2 = await notifier.requestAcceptanceGateAction('s1', { allPassed: false, conditions: [] });
     const result3 = await notifier.requestAcceptanceGateAction('s1', { allPassed: true, conditions: [] });
 
-    expect(result1).toEqual({ action: 'force_done' });
+    expect(result1).toEqual(expect.objectContaining({ action: 'force_done' }));
     expect(result2).toEqual({ action: 'comment', text: '修正が必要' });
-    expect(result3).toEqual({ action: 'done' }); // default
+    expect(result3).toEqual(expect.objectContaining({ action: 'done' })); // default
   });
 
   it('enqueueAcceptanceGateResponse でキューに追加できる', async () => {
@@ -238,7 +238,7 @@ describe('FakeNotifier', () => {
     const result2 = await notifier.requestAcceptanceGateAction('s1', { allPassed: false, conditions: [] });
 
     expect(result1).toEqual({ action: 'comment', text: 'テスト' });
-    expect(result2).toEqual({ action: 'force_done' });
+    expect(result2).toEqual(expect.objectContaining({ action: 'force_done' }));
   });
 
   it('reset で acceptanceGateRequests もクリアされる', async () => {
@@ -252,6 +252,41 @@ describe('FakeNotifier', () => {
     expect(notifier.acceptanceGateRequests).toHaveLength(0);
     // キューもリセットされるのでデフォルト done
     const result = await notifier.requestAcceptanceGateAction('s1', { allPassed: true, conditions: [] });
-    expect(result).toEqual({ action: 'done' });
+    expect(result).toEqual(expect.objectContaining({ action: 'done' }));
+  });
+
+  it('done/force_done レスポンスに messageTs が自動付与される', async () => {
+    const notifier = new FakeNotifier({
+      acceptanceGateResponses: [
+        { action: 'done' },
+        { action: 'force_done' },
+        { action: 'comment', text: 'test' },
+      ],
+    });
+
+    const r1 = await notifier.requestAcceptanceGateAction('s1', { allPassed: true, conditions: [] });
+    const r2 = await notifier.requestAcceptanceGateAction('s1', { allPassed: false, conditions: [] });
+    const r3 = await notifier.requestAcceptanceGateAction('s1', { allPassed: false, conditions: [] });
+
+    expect(r1.action).toBe('done');
+    expect(r1.action === 'done' && r1.messageTs).toBeTruthy();
+    expect(r2.action).toBe('force_done');
+    expect(r2.action === 'force_done' && r2.messageTs).toBeTruthy();
+    expect(r3.action).toBe('comment');
+  });
+
+  it('notifyUpdate でメッセージ更新が記録される', async () => {
+    const notifier = new FakeNotifier();
+    await notifier.notifyUpdate('some-ts', '✅ 完了', 'story-01');
+
+    expect(notifier.updatedMessages).toHaveLength(1);
+    expect(notifier.updatedMessages[0]).toEqual({
+      messageTs: 'some-ts',
+      message: '✅ 完了',
+      storySlug: 'story-01',
+    });
+    // notifyUpdate は notifications にも記録される
+    expect(notifier.notifications).toHaveLength(1);
+    expect(notifier.notifications[0].message).toBe('✅ 完了');
   });
 });

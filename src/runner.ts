@@ -105,7 +105,7 @@ async function runAcceptanceGate(
   repoPath: string,
   notifier: NotificationBackend,
   deps: RunnerDeps,
-): Promise<'done' | 'continue'> {
+): Promise<{ result: 'done'; messageTs?: string } | { result: 'continue' }> {
   // 1. 受け入れ条件チェック
   console.log(`[runner] checking acceptance criteria: ${story.slug}`);
   const checkResult = await deps.checkAcceptanceCriteria(story, allTasks, repoPath);
@@ -113,7 +113,7 @@ async function runAcceptanceGate(
   // 2. 受け入れ条件セクションがない場合はスキップ
   if (checkResult.skipped) {
     console.warn(`[runner] acceptance criteria skipped (no section): ${story.slug}`);
-    return 'done';
+    return { result: 'done' };
   }
 
   // 3. 結果を通知形式に変換してユーザーに提示
@@ -123,12 +123,12 @@ async function runAcceptanceGate(
   // 4. ユーザーの選択に応じて処理
   if (gateAction.action === 'done') {
     console.log(`[runner] acceptance gate: user approved Done: ${story.slug}`);
-    return 'done';
+    return { result: 'done', messageTs: gateAction.messageTs };
   }
 
   if (gateAction.action === 'force_done') {
     console.log(`[runner] acceptance gate: user force-done: ${story.slug}`);
-    return 'done';
+    return { result: 'done', messageTs: gateAction.messageTs };
   }
 
   // 5. コメント入力 → 追加タスク生成
@@ -141,7 +141,7 @@ async function runAcceptanceGate(
   // 「追加タスク不要」と判断された場合
   if (additionalDrafts.length === 0) {
     console.log(`[runner] acceptance gate: no additional tasks generated, marking done: ${story.slug}`);
-    return 'done';
+    return { result: 'done' };
   }
 
   // 6. 追加タスク案の承認ゲート（タスク分解と同様）
@@ -153,7 +153,7 @@ async function runAcceptanceGate(
 
     if (draftsToApprove.length === 0) {
       console.log(`[runner] acceptance gate: regeneration produced no tasks, marking done: ${story.slug}`);
-      return 'done';
+      return { result: 'done' };
     }
 
     const id = generateApprovalId(story.slug, 'additional-tasks');
@@ -169,12 +169,12 @@ async function runAcceptanceGate(
         deps.createTaskFile(story.project, story.slug, draft);
         console.log(`[runner] additional task file created: ${draft.slug}`);
       }
-      return 'continue';
+      return { result: 'continue' };
     }
 
     if (approvalResult.action === 'cancel') {
       console.log(`[runner] acceptance gate: additional tasks cancelled, marking done: ${story.slug}`);
-      return 'done';
+      return { result: 'done' };
     }
 
     retryReason = approvalResult.reason;
@@ -449,7 +449,7 @@ export async function runStory(
     // 全タスク Done/Skipped → 受け入れ条件ゲートを実行
     const gateResult = await runAcceptanceGate(story, allTasks, repoPath, notifier, d);
 
-    if (gateResult === 'done') {
+    if (gateResult.result === 'done') {
       // Done タスクがあれば README 更新を試みる
       const doneTasks = allTasks.filter((t) => t.status === 'Done');
       if (doneTasks.length > 0) {
@@ -457,12 +457,19 @@ export async function runStory(
       }
 
       d.updateFileStatus(story.filePath, 'Done');
-      await notifier.notify(`✅ ストーリー完了: ${story.slug}`, story.slug);
+
+      // 「⏳ 処理中...」メッセージがあれば「✅ ストーリー完了」で上書き、なければ新規通知
+      const completionMessage = `✅ ストーリー完了: ${story.slug}`;
+      if (gateResult.messageTs) {
+        await notifier.notifyUpdate(gateResult.messageTs, completionMessage, story.slug);
+      } else {
+        await notifier.notify(completionMessage, story.slug);
+      }
       console.log(`[runner] story done: ${story.slug}`);
       finalStatus = 'Done';
       acceptanceGatePassed = true;
     }
-    // gateResult === 'continue' の場合、ループの先頭に戻って追加タスクを実行
+    // gateResult.result === 'continue' の場合、ループの先頭に戻って追加タスクを実行
   }
 
   // スレッドセッション終了: メモリを解放

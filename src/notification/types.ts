@@ -36,8 +36,8 @@ export interface AcceptanceCheckResult {
 
 /** 受け入れ条件ゲートのユーザー選択結果 */
 export type AcceptanceGateAction =
-  | { action: 'done' }
-  | { action: 'force_done' }
+  | { action: 'done'; messageTs?: string }
+  | { action: 'force_done'; messageTs?: string }
   | { action: 'comment'; text: string };
 
 import type { Block, KnownBlock } from '@slack/types';
@@ -100,6 +100,18 @@ export interface NotificationBackend {
    * @param storySlug ストーリーの識別子
    */
   endSession(storySlug: string): void;
+
+  /**
+   * 既存の通知メッセージを上書き更新する
+   *
+   * Slack バックエンドではメッセージの chat.update を行い、
+   * local / ntfy では notify にフォールバックする。
+   *
+   * @param messageTs 更新対象メッセージのタイムスタンプ（Slack の ts）
+   * @param message 新しいメッセージ内容
+   * @param storySlug ストーリー識別子（指定時はスレッド内で更新）
+   */
+  notifyUpdate(messageTs: string, message: string, storySlug?: string): Promise<void>;
 
   /**
    * Task失敗時にユーザーへ判断を委ね、選択結果を返す

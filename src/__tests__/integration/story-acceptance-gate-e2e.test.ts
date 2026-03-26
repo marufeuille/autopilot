@@ -198,7 +198,7 @@ describe('受け入れ条件ゲート E2E テスト', () => {
         expect(notifier.acceptanceGateRequests).toHaveLength(1);
         expect(notifier.acceptanceGateRequests[0].storySlug).toBe(STORY_SLUG);
         expect(notifier.acceptanceGateRequests[0].checkResult.allPassed).toBe(true);
-        expect(notifier.acceptanceGateRequests[0].response).toEqual({ action: 'done' });
+        expect(notifier.acceptanceGateRequests[0].response).toMatchObject({ action: 'done' });
 
         // 完了通知が送信されている
         const doneNotification = notifier.notifications.find((n) =>
@@ -255,7 +255,7 @@ describe('受け入れ条件ゲート E2E テスト', () => {
         // 受け入れ条件ゲートリクエストが送信されている
         expect(notifier.acceptanceGateRequests).toHaveLength(1);
         expect(notifier.acceptanceGateRequests[0].checkResult.allPassed).toBe(false);
-        expect(notifier.acceptanceGateRequests[0].response).toEqual({ action: 'force_done' });
+        expect(notifier.acceptanceGateRequests[0].response).toMatchObject({ action: 'force_done' });
 
         // チェック結果に FAIL が含まれている（gate型の results で検証）
         const results = checkResult.results;
@@ -367,7 +367,7 @@ describe('受け入れ条件ゲート E2E テスト', () => {
         });
         // 2回目: 全PASS → done
         expect(notifier.acceptanceGateRequests[1].checkResult.allPassed).toBe(true);
-        expect(notifier.acceptanceGateRequests[1].response).toEqual({ action: 'done' });
+        expect(notifier.acceptanceGateRequests[1].response).toMatchObject({ action: 'done' });
 
         // 追加タスクファイルが作成された
         expect(createTaskFileMock).toHaveBeenCalledWith(

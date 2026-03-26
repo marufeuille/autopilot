@@ -363,7 +363,7 @@ export function registerAcceptanceGateHandlers(app: App): void {
     const id = metadata.id;
     const entry = pendingAcceptanceGate.get(id);
     if (entry) await updateMessageWithResult(app, entry, '⏳ Story を Done にしています...');
-    resolveAcceptanceGate(id, { action: 'done' });
+    resolveAcceptanceGate(id, { action: 'done', messageTs: entry?.ts });
   });
 
   // このまま Done にするボタン（一部FAIL時）
@@ -373,7 +373,7 @@ export function registerAcceptanceGateHandlers(app: App): void {
     const id = metadata.id;
     const entry = pendingAcceptanceGate.get(id);
     if (entry) await updateMessageWithResult(app, entry, '⏳ Story を Done にしています...');
-    resolveAcceptanceGate(id, { action: 'force_done' });
+    resolveAcceptanceGate(id, { action: 'force_done', messageTs: entry?.ts });
   });
 
   // コメントして追加タスクを作るボタン → モーダルを開く
@@ -449,6 +449,17 @@ export class SlackNotificationBackend implements NotificationBackend {
 
   endSession(storySlug: string): void {
     this.threadSession.endSession(storySlug);
+  }
+
+  async notifyUpdate(messageTs: string, message: string, storySlug?: string): Promise<void> {
+    await this.app.client.chat.update({
+      channel: config.slack.channelId,
+      ts: messageTs,
+      text: message,
+      blocks: [
+        { type: 'section', text: { type: 'mrkdwn', text: message } },
+      ],
+    });
   }
 
   async notify(message: string, storySlug?: string, options?: NotifyOptions): Promise<void> {

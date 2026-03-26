@@ -40,6 +40,13 @@ export class NtfyNotificationBackend implements NotificationBackend {
   }
 
   /**
+   * メッセージ更新（ntfy では notify にフォールバック）
+   */
+  async notifyUpdate(_messageTs: string, message: string, storySlug?: string): Promise<void> {
+    await this.notify(message, storySlug);
+  }
+
+  /**
    * スレッドセッションを開始する（ntfy では no-op）
    */
   async startThread(_storySlug: string, _message: string): Promise<void> {
