@@ -6,7 +6,7 @@
  * - "slack": Slack バックエンド
  * - 未設定: デフォルトは "local"
  */
-export { NotificationBackend, ApprovalResult, NotificationEventType, NotificationContext, NotifyOptions, TaskFailureAction, AcceptanceCheckResult, AcceptanceConditionResult, AcceptanceGateAction } from './types';
+export { NotificationBackend, ApprovalResult, NotificationEventType, NotificationContext, NotifyOptions, TaskFailureAction, QueueFailedAction, AcceptanceCheckResult, AcceptanceConditionResult, AcceptanceGateAction } from './types';
 export { LocalNotificationBackend } from './local';
 export { SlackNotificationBackend, registerPRRejectHandlers, registerTaskFailureHandlers, registerAcceptanceGateHandlers } from './slack';
 export { NtfyNotificationBackend } from './ntfy';
