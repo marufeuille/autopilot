@@ -5,10 +5,10 @@ import { glob } from 'glob';
 import { vaultProjectPath, vaultTasksPath } from '../config';
 
 export type TaskStatus = 'Todo' | 'Doing' | 'Done' | 'Failed' | 'Skipped' | 'Cancelled';
-export type StoryStatus = 'Todo' | 'Doing' | 'Done' | 'Failed' | 'Cancelled';
+export type StoryStatus = 'Draft' | 'Todo' | 'Queued' | 'Doing' | 'Done' | 'Failed' | 'Cancelled';
 
 const VALID_TASK_STATUSES: ReadonlySet<string> = new Set<TaskStatus>(['Todo', 'Doing', 'Done', 'Failed', 'Skipped', 'Cancelled']);
-const VALID_STORY_STATUSES: ReadonlySet<string> = new Set<StoryStatus>(['Todo', 'Doing', 'Done', 'Failed', 'Cancelled']);
+const VALID_STORY_STATUSES: ReadonlySet<string> = new Set<StoryStatus>(['Draft', 'Todo', 'Queued', 'Doing', 'Done', 'Failed', 'Cancelled']);
 
 function parseTaskStatus(value: unknown): TaskStatus {
   if (typeof value === 'string' && VALID_TASK_STATUSES.has(value)) return value as TaskStatus;
