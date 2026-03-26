@@ -4,7 +4,7 @@ import matter from 'gray-matter';
 import { glob } from 'glob';
 import { vaultProjectPath, vaultTasksPath } from '../config';
 
-export type TaskStatus = 'Todo' | 'Doing' | 'Done' | 'Failed' | 'Skipped';
+export type TaskStatus = 'Todo' | 'Doing' | 'Done' | 'Failed' | 'Skipped' | 'Cancelled';
 
 export interface StoryFile {
   filePath: string;
