@@ -15,6 +15,51 @@ import { runMergePollingLoop } from './merge';
 
 export { RunnerDeps, createDefaultRunnerDeps } from './runner-deps';
 
+/** Task失敗時のユーザー選択肢 */
+export type TaskFailureAction = 'retry' | 'skip' | 'cancel';
+
+/**
+ * Task失敗時にSlackのストーリースレッドへボタン付き通知を送信し、
+ * ユーザーの選択（リトライ/スキップ/キャンセル）を待つ。
+ *
+ * 既存の requestApproval インターフェースを再利用する:
+ * - approve → retry（リトライ）
+ * - reject  → skip（スキップして次へ）
+ * - cancel  → cancel（ストーリーをキャンセル）
+ */
+export async function requestTaskFailureAction(
+  task: TaskFile,
+  story: StoryFile,
+  notifier: NotificationBackend,
+  error: unknown,
+): Promise<TaskFailureAction> {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  const id = generateApprovalId(story.slug, `failure-${task.slug}`);
+  const message =
+    `❌ *タスク失敗*: \`${task.slug}\`\n` +
+    `*ストーリー*: \`${story.slug}\`\n` +
+    `*エラー*: ${errorMessage}\n\n` +
+    `対応を選択してください。`;
+
+  const result = await notifier.requestApproval(
+    id,
+    message,
+    { approve: '\u30EA\u30C8\u30E9\u30A4', reject: '\u30B9\u30AD\u30C3\u30D7\u3057\u3066\u6B21\u3078', cancel: '\u30B9\u30C8\u30FC\u30EA\u30FC\u3092\u30AD\u30E3\u30F3\u30BB\u30EB' },
+    story.slug,
+  );
+
+  switch (result.action) {
+    case 'approve':
+      return 'retry';
+    case 'reject':
+      return 'skip';
+    case 'cancel':
+      return 'cancel';
+    default:
+      throw new Error(`Unexpected approval action: ${String((result as { action: unknown }).action)}`);
+  }
+}
+
 export async function runTask(
   task: TaskFile,
   story: StoryFile,
@@ -204,12 +249,55 @@ export async function runStory(
   const todoTasks = allCurrentTasks.filter((t) => t.status === 'Todo');
 
   if (todoTasks.length > 0) {
-    for (const task of todoTasks) {
-      try {
-        await runTask(task, story, notifier, repoPath, d);
-      } catch (error) {
-        console.error(`[runner] task execution error, continuing: ${task.slug}`, error);
+    let cancelled = false;
+    let i = 0;
+    while (i < todoTasks.length) {
+      const task = todoTasks[i];
+      let retryCount = 0;
+      let succeeded = false;
+
+      while (!succeeded) {
+        try {
+          await runTask(task, story, notifier, repoPath, d);
+          succeeded = true;
+        } catch (error) {
+          console.error(`[runner] task failed: ${task.slug}`, error);
+
+          const action = await requestTaskFailureAction(task, story, notifier, error);
+
+          if (action === 'retry') {
+            retryCount++;
+            console.log(`[runner] retrying task: ${task.slug} (retry #${retryCount})`);
+            await d.updateFileStatus(task.filePath, 'Todo');
+            continue;
+          } else if (action === 'skip') {
+            console.log(`[runner] skipping task: ${task.slug}`);
+            await d.updateFileStatus(task.filePath, 'Skipped');
+            succeeded = true; // inner loop を抜けて次のタスクへ
+          } else if (action === 'cancel') {
+            console.log(`[runner] cancelling story: ${story.slug}`);
+            await d.updateFileStatus(story.filePath, 'Cancelled');
+            await notifier.notify(
+              `🚫 ストーリーがキャンセルされました: ${story.slug}`,
+              story.slug,
+            );
+            cancelled = true;
+            succeeded = true; // inner loop を抜ける
+          } else {
+            const _exhaustive: never = action;
+            throw new Error(`Unexpected task failure action: ${_exhaustive}`);
+          }
+        }
       }
+
+      if (cancelled) break;
+      i++;
+    }
+
+    if (cancelled) {
+      notifier.endSession(story.slug);
+      console.log(`[runner] thread session ended for story: ${story.slug}`);
+      return;
     }
   }
 

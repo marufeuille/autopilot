@@ -689,11 +689,12 @@ describe('異常系ワークフロー結合テスト', () => {
     const STORY_SLUG = 'agent-error-story';
 
     it(
-      'runAgent が例外を throw → タスクが Failed に遷移する',
+      'runAgent が例外を throw → ユーザーがスキップ → タスクが Skipped に遷移する',
       withVault(async (vault) => {
         const notifier = new FakeNotifier();
         notifier.enqueueApprovalResponse(
-          { action: 'approve' },  // start
+          { action: 'approve' },                  // start
+          { action: 'reject', reason: 'skip' },   // failure action → skip
         );
 
         const agentError = new Error('Agent process crashed');
@@ -704,9 +705,9 @@ describe('異常系ワークフロー結合テスト', () => {
         const story = readStoryFile(vault.storyFilePath);
         await runStory(story, notifier, deps);
 
-        // タスクが Failed
+        // タスクが Skipped（ユーザーがスキップを選択）
         const taskFm = readFrontmatter(vault.taskFilePaths[0]);
-        expect(taskFm.status).toBe('Failed');
+        expect(taskFm.status).toBe('Skipped');
       }, {
         project: PROJECT,
         story: { slug: STORY_SLUG, status: 'Doing' },
@@ -717,11 +718,12 @@ describe('異常系ワークフロー結合テスト', () => {
     );
 
     it(
-      'エージェント例外時の状態遷移が Doing → Failed の順で記録される',
+      'エージェント例外時の状態遷移が Doing → Failed → Skipped の順で記録される（ユーザーがスキップ選択時）',
       withVault(async (vault) => {
         const notifier = new FakeNotifier();
         notifier.enqueueApprovalResponse(
-          { action: 'approve' },  // start
+          { action: 'approve' },                  // start
+          { action: 'reject', reason: 'skip' },   // failure action → skip
         );
 
         const { transitions, fn: trackingFn } = createTrackingUpdateFileStatus();
@@ -738,6 +740,7 @@ describe('異常系ワークフロー結合テスト', () => {
         expect(taskTransitions).toEqual([
           { slug: taskSlug, status: 'Doing' },
           { slug: taskSlug, status: 'Failed' },
+          { slug: taskSlug, status: 'Skipped' },
         ]);
       }, {
         project: PROJECT,
@@ -753,7 +756,8 @@ describe('異常系ワークフロー結合テスト', () => {
       withVault(async (vault) => {
         const notifier = new FakeNotifier();
         notifier.enqueueApprovalResponse(
-          { action: 'approve' },  // start
+          { action: 'approve' },                  // start
+          { action: 'reject', reason: 'skip' },   // failure action → skip
         );
 
         const deps = createIntegrationDeps(vault, {
@@ -783,16 +787,18 @@ describe('異常系ワークフロー結合テスト', () => {
     const STORY_SLUG = 'partial-failure-story';
 
     it(
-      '3タスク中1つが Failed → ストーリーは Failed、残りは Skipped',
+      '3タスク中1つが失敗しスキップ → 全タスク Skipped、ストーリーは Done',
       withVault(async (vault) => {
         const notifier = new FakeNotifier();
         // 承認キュー:
         //   1. task-01 start → approve
         //   (task-01 の runAgent が throw → Failed)
-        //   2. task-02 start → reject (スキップ)
-        //   3. task-03 start → reject (スキップ)
+        //   2. task-01 failure action → reject (スキップ)
+        //   3. task-02 start → reject (スキップ)
+        //   4. task-03 start → reject (スキップ)
         notifier.enqueueApprovalResponse(
           { action: 'approve' },                  // task-01 start
+          { action: 'reject', reason: 'skip' },   // task-01 failure → skip
           { action: 'reject', reason: 'skip' },   // task-02 start → skip
           { action: 'reject', reason: 'skip' },   // task-03 start → skip
         );
@@ -814,19 +820,13 @@ describe('異常系ワークフロー結合テスト', () => {
         expect(tasks).toHaveLength(3);
 
         const statusMap = Object.fromEntries(tasks.map((t) => [t.slug, readFrontmatter(t.filePath).status]));
-        expect(statusMap[`${STORY_SLUG}-01-task`]).toBe('Failed');
+        expect(statusMap[`${STORY_SLUG}-01-task`]).toBe('Skipped');
         expect(statusMap[`${STORY_SLUG}-02-task`]).toBe('Skipped');
         expect(statusMap[`${STORY_SLUG}-03-task`]).toBe('Skipped');
 
-        // ストーリーは Failed タスクがあるので Failed
+        // 全タスクが Skipped なのでストーリーは Done
         const storyFm = readFrontmatter(vault.storyFilePath);
-        expect(storyFm.status).toBe('Failed');
-
-        // 完了通知に Failed の情報が含まれている
-        const completionNotification = notifier.notifications.find((n) =>
-          n.message.includes('ストーリーFailed'),
-        );
-        expect(completionNotification).toBeDefined();
+        expect(storyFm.status).toBe('Done');
       }, {
         project: PROJECT,
         story: { slug: STORY_SLUG, status: 'Doing' },
@@ -839,11 +839,12 @@ describe('異常系ワークフロー結合テスト', () => {
     );
 
     it(
-      '状態遷移の順序が正しく記録される（Failed + Skipped の混在）',
+      '状態遷移の順序が正しく記録される（失敗→スキップ + 開始スキップ の混在）',
       withVault(async (vault) => {
         const notifier = new FakeNotifier();
         notifier.enqueueApprovalResponse(
           { action: 'approve' },                  // task-01 start
+          { action: 'reject', reason: 'skip' },   // task-01 failure → skip
           { action: 'reject', reason: 'skip' },   // task-02 start → skip
           { action: 'reject', reason: 'skip' },   // task-03 start → skip
         );
@@ -857,11 +858,12 @@ describe('異常系ワークフロー結合テスト', () => {
         const story = readStoryFile(vault.storyFilePath);
         await runStory(story, notifier, deps);
 
-        // task-01: Doing → Failed
+        // task-01: Doing → Failed → Skipped（失敗後にユーザーがスキップ選択）
         const task01 = transitions.filter((t) => t.slug === `${STORY_SLUG}-01-task`);
         expect(task01).toEqual([
           { slug: `${STORY_SLUG}-01-task`, status: 'Doing' },
           { slug: `${STORY_SLUG}-01-task`, status: 'Failed' },
+          { slug: `${STORY_SLUG}-01-task`, status: 'Skipped' },
         ]);
 
         // task-02: Skipped
@@ -876,14 +878,14 @@ describe('異常系ワークフロー結合テスト', () => {
           { slug: `${STORY_SLUG}-03-task`, status: 'Skipped' },
         ]);
 
-        // 全体の順序: task-01 の Doing/Failed が先、task-02/03 の Skipped が後
-        const task01FailedIdx = transitions.findIndex(
-          (t) => t.slug === `${STORY_SLUG}-01-task` && t.status === 'Failed',
+        // 全体の順序: task-01 の Skipped が先、task-02/03 の Skipped が後
+        const task01SkippedIdx = transitions.findIndex(
+          (t) => t.slug === `${STORY_SLUG}-01-task` && t.status === 'Skipped',
         );
         const task02SkippedIdx = transitions.findIndex(
           (t) => t.slug === `${STORY_SLUG}-02-task` && t.status === 'Skipped',
         );
-        expect(task01FailedIdx).toBeLessThan(task02SkippedIdx);
+        expect(task01SkippedIdx).toBeLessThan(task02SkippedIdx);
       }, {
         project: PROJECT,
         story: { slug: STORY_SLUG, status: 'Doing' },
@@ -896,17 +898,19 @@ describe('異常系ワークフロー結合テスト', () => {
     );
 
     it(
-      '失敗タスク以外が正常完了した場合もストーリーは Failed',
+      '失敗タスクをスキップし残りが正常完了した場合、ストーリーは Done',
       withVault(async (vault) => {
         const notifier = new FakeNotifier();
-        // 承認キュー（手動マージフロー: マージ承認なし）:
+        // 承認キュー:
         //   1. task-01 start → approve (→ runAgent throw → Failed)
-        //   2. task-02 start → approve
-        //   3. task-03 start → approve
+        //   2. task-01 failure action → reject (スキップ)
+        //   3. task-02 start → approve
+        //   4. task-03 start → approve
         notifier.enqueueApprovalResponse(
-          { action: 'approve' },  // task-01 start
-          { action: 'approve' },  // task-02 start
-          { action: 'approve' },  // task-03 start
+          { action: 'approve' },                  // task-01 start
+          { action: 'reject', reason: 'skip' },   // task-01 failure → skip
+          { action: 'approve' },                  // task-02 start
+          { action: 'approve' },                  // task-03 start
         );
 
         const runAgentMock = vi.fn()
@@ -923,20 +927,65 @@ describe('異常系ワークフロー結合テスト', () => {
         const tasks = await readTasksFromVault(vault.tasksDir, PROJECT, STORY_SLUG);
         const statusMap = Object.fromEntries(tasks.map((t) => [t.slug, readFrontmatter(t.filePath).status]));
 
-        expect(statusMap[`${STORY_SLUG}-01-task`]).toBe('Failed');
+        expect(statusMap[`${STORY_SLUG}-01-task`]).toBe('Skipped');
         expect(statusMap[`${STORY_SLUG}-02-task`]).toBe('Done');
         expect(statusMap[`${STORY_SLUG}-03-task`]).toBe('Done');
 
-        // ストーリーは Failed タスクがあるので Failed
+        // 全タスクが Done or Skipped なのでストーリーは Done
         const storyFm = readFrontmatter(vault.storyFilePath);
-        expect(storyFm.status).toBe('Failed');
+        expect(storyFm.status).toBe('Done');
+      }, {
+        project: PROJECT,
+        story: { slug: STORY_SLUG, status: 'Doing' },
+        tasks: [
+          { slug: `${STORY_SLUG}-01-task`, status: 'Todo', priority: 'high' },
+          { slug: `${STORY_SLUG}-02-task`, status: 'Todo', priority: 'medium' },
+          { slug: `${STORY_SLUG}-03-task`, status: 'Todo', priority: 'low' },
+        ],
+      }),
+    );
 
-        // 完了通知に Failed の情報が含まれる
-        const completionNotification = notifier.notifications.find((n) =>
-          n.message.includes('ストーリーFailed'),
+    it(
+      '失敗タスクでキャンセル選択 → ストーリーが Cancelled になり後続タスクは実行されない',
+      withVault(async (vault) => {
+        const notifier = new FakeNotifier();
+        // 承認キュー:
+        //   1. task-01 start → approve (→ runAgent throw → Failed)
+        //   2. task-01 failure action → cancel
+        notifier.enqueueApprovalResponse(
+          { action: 'approve' },   // task-01 start
+          { action: 'cancel' },    // task-01 failure → cancel story
         );
-        expect(completionNotification).toBeDefined();
-        expect(completionNotification!.message).toContain('Failed');
+
+        const runAgentMock = vi.fn()
+          .mockRejectedValueOnce(new Error('task-01 crashed'))
+          .mockResolvedValue(undefined);
+
+        const deps = createIntegrationDeps(vault, {
+          runAgent: runAgentMock,
+        });
+
+        const story = readStoryFile(vault.storyFilePath);
+        await runStory(story, notifier, deps);
+
+        const tasks = await readTasksFromVault(vault.tasksDir, PROJECT, STORY_SLUG);
+        const statusMap = Object.fromEntries(tasks.map((t) => [t.slug, readFrontmatter(t.filePath).status]));
+
+        // task-01 は Failed のまま（キャンセルではタスクステータスは変えない）
+        expect(statusMap[`${STORY_SLUG}-01-task`]).toBe('Failed');
+        // task-02, task-03 は実行されていないので Todo のまま
+        expect(statusMap[`${STORY_SLUG}-02-task`]).toBe('Todo');
+        expect(statusMap[`${STORY_SLUG}-03-task`]).toBe('Todo');
+
+        // ストーリーは Cancelled
+        const storyFm = readFrontmatter(vault.storyFilePath);
+        expect(storyFm.status).toBe('Cancelled');
+
+        // キャンセル通知が送信されている
+        const cancelNotification = notifier.notifications.find((n) =>
+          n.message.includes('キャンセル'),
+        );
+        expect(cancelNotification).toBeDefined();
       }, {
         project: PROJECT,
         story: { slug: STORY_SLUG, status: 'Doing' },

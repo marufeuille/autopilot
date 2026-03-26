@@ -132,7 +132,7 @@ import { getStoryTasks } from '../vault/reader';
 import { updateFileStatus, recordTaskCompletion } from '../vault/writer';
 import { decomposeTasks } from '../decomposer';
 import { syncMainBranch, GitSyncError } from '../git';
-import { runStory, runTask, deriveStoryStatus } from '../runner';
+import { runStory, runTask, deriveStoryStatus, requestTaskFailureAction } from '../runner';
 
 const mockedGetStoryTasks = vi.mocked(getStoryTasks);
 const mockedUpdateFileStatus = vi.mocked(updateFileStatus);
@@ -394,7 +394,7 @@ describe('runStory', () => {
     expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Cancelled');
   });
 
-  it('タスク実行中の例外が発生してもストーリー実行が継続する', async () => {
+  it('タスク失敗時にスキップ選択で次のタスクへ進む', async () => {
     const story = createStory();
     const notifier = createMockNotifier();
     const todoTask1 = createTask('task-01', 'Todo');
@@ -419,9 +419,15 @@ describe('runStory', () => {
         }),
       }));
 
+    // 承認キュー: task-01 start → approve, task-01 failure → skip, task-02 start → approve
+    (notifier.requestApproval as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ action: 'approve' })  // task-01 start
+      .mockResolvedValueOnce({ action: 'reject', reason: 'skip' })  // task-01 failure → skip
+      .mockResolvedValueOnce({ action: 'approve' }); // task-02 start
+
     // 3回目: 完了判定用
     mockedGetStoryTasks.mockResolvedValueOnce([
-      createTask('task-01', 'Failed'),
+      createTask('task-01', 'Skipped'),
       createTask('task-02', 'Done'),
     ]);
 
@@ -429,12 +435,108 @@ describe('runStory', () => {
 
     await runStory(story, notifier);
 
-    // task-01 は Failed に更新される
+    // task-01 は Failed → Skipped に更新される
     expect(mockedUpdateFileStatus).toHaveBeenCalledWith(todoTask1.filePath, 'Failed');
-    // ストーリーは Failed になる（Failed タスクがあるため）
-    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Failed');
+    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(todoTask1.filePath, 'Skipped');
+    // ストーリーは Done になる（Skipped + Done）
+    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Done');
 
     consoleErrorSpy.mockRestore();
+  });
+
+  it('タスク失敗時にキャンセル選択でストーリーが Cancelled になり終了する', async () => {
+    const story = createStory();
+    const notifier = createMockNotifier();
+    const todoTask1 = createTask('task-01', 'Todo');
+    const todoTask2 = createTask('task-02', 'Todo');
+
+    // 1回目: タスク存在チェック
+    mockedGetStoryTasks.mockResolvedValueOnce([todoTask1, todoTask2]);
+    // 2回目: Todo フィルタ用
+    mockedGetStoryTasks.mockResolvedValueOnce([todoTask1, todoTask2]);
+
+    // task-01 の実行で Claude agent がエラーを投げる
+    mockQuery
+      .mockImplementationOnce(() => ({
+        [Symbol.asyncIterator]: () => ({
+          next: () => Promise.reject(new Error('agent crash')),
+        }),
+      }));
+
+    // 承認キュー: task-01 start → approve, task-01 failure → cancel
+    (notifier.requestApproval as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ action: 'approve' })  // task-01 start
+      .mockResolvedValueOnce({ action: 'cancel' });   // task-01 failure → cancel
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await runStory(story, notifier);
+
+    // task-01 は Failed に更新される
+    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(todoTask1.filePath, 'Failed');
+    // ストーリーが Cancelled に更新される
+    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Cancelled');
+    // task-02 は実行されない（mockQuery は1回のみ）
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    // キャンセル通知が送信される
+    expect(notifier.notify).toHaveBeenCalledWith(
+      expect.stringContaining('キャンセル'),
+      'my-story',
+    );
+
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('タスク失敗時にリトライ選択でタスクが再実行される', async () => {
+    const story = createStory();
+    const notifier = createMockNotifier();
+    const todoTask1 = createTask('task-01', 'Todo');
+
+    // 1回目: タスク存在チェック
+    mockedGetStoryTasks.mockResolvedValueOnce([todoTask1]);
+    // 2回目: Todo フィルタ用
+    mockedGetStoryTasks.mockResolvedValueOnce([todoTask1]);
+
+    // 1回目: agent がエラーを投げる, 2回目: 正常
+    mockQuery
+      .mockImplementationOnce(() => ({
+        [Symbol.asyncIterator]: () => ({
+          next: () => Promise.reject(new Error('agent crash')),
+        }),
+      }))
+      .mockImplementationOnce(() => ({
+        [Symbol.asyncIterator]: () => ({
+          next: () => Promise.resolve({ done: true, value: undefined }),
+        }),
+      }));
+
+    // 承認キュー: task-01 start → approve, failure → retry, task-01 start (2nd) → approve
+    (notifier.requestApproval as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ action: 'approve' })  // task-01 start
+      .mockResolvedValueOnce({ action: 'approve' })  // task-01 failure → retry
+      .mockResolvedValueOnce({ action: 'approve' }); // task-01 start (2nd)
+
+    // 3回目: 完了判定用
+    mockedGetStoryTasks.mockResolvedValueOnce([
+      createTask('task-01', 'Done'),
+    ]);
+
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await runStory(story, notifier);
+
+    // task-01 が Todo に戻される（リトライ）
+    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(todoTask1.filePath, 'Todo');
+    // リトライログが出力される
+    expect(consoleLogSpy).toHaveBeenCalledWith(
+      expect.stringContaining('retrying task: task-01 (retry #1)'),
+    );
+    // ストーリーが Done に更新される
+    expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Done');
+
+    consoleErrorSpy.mockRestore();
+    consoleLogSpy.mockRestore();
   });
 
   describe('Story完了時のREADME更新', () => {
@@ -1339,6 +1441,84 @@ describe('runTask - マージ後ステータス更新フロー', () => {
     expect(notifier.notify).toHaveBeenCalledWith(
       expect.stringContaining('マージ完了'),
       story.slug,
+    );
+  });
+});
+
+describe('requestTaskFailureAction', () => {
+  it('approve → retry を返す', async () => {
+    const task = createTask('task-01', 'Failed');
+    const story = createStory();
+    const notifier = createMockNotifier('approve');
+
+    const action = await requestTaskFailureAction(task, story, notifier, new Error('test error'));
+
+    expect(action).toBe('retry');
+    expect(notifier.requestApproval).toHaveBeenCalledWith(
+      expect.stringContaining('failure-task-01'),
+      expect.stringContaining('タスク失敗'),
+      expect.objectContaining({ approve: expect.any(String), reject: expect.any(String), cancel: expect.any(String) }),
+      'my-story',
+    );
+  });
+
+  it('reject → skip を返す', async () => {
+    const task = createTask('task-01', 'Failed');
+    const story = createStory();
+    const notifier: NotificationBackend = {
+      notify: vi.fn().mockResolvedValue(undefined),
+      requestApproval: vi.fn().mockResolvedValue({ action: 'reject', reason: 'skip' }),
+      startThread: vi.fn().mockResolvedValue(undefined),
+      getThreadTs: vi.fn().mockReturnValue(undefined),
+      endSession: vi.fn(),
+    };
+
+    const action = await requestTaskFailureAction(task, story, notifier, new Error('test error'));
+    expect(action).toBe('skip');
+  });
+
+  it('cancel → cancel を返す', async () => {
+    const task = createTask('task-01', 'Failed');
+    const story = createStory();
+    const notifier: NotificationBackend = {
+      notify: vi.fn().mockResolvedValue(undefined),
+      requestApproval: vi.fn().mockResolvedValue({ action: 'cancel' }),
+      startThread: vi.fn().mockResolvedValue(undefined),
+      getThreadTs: vi.fn().mockReturnValue(undefined),
+      endSession: vi.fn(),
+    };
+
+    const action = await requestTaskFailureAction(task, story, notifier, new Error('test error'));
+    expect(action).toBe('cancel');
+  });
+
+  it('エラーメッセージが通知に含まれる', async () => {
+    const task = createTask('task-01', 'Failed');
+    const story = createStory();
+    const notifier = createMockNotifier('approve');
+
+    await requestTaskFailureAction(task, story, notifier, new Error('something broke'));
+
+    expect(notifier.requestApproval).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('something broke'),
+      expect.any(Object),
+      'my-story',
+    );
+  });
+
+  it('非Errorオブジェクトもエラーメッセージとして扱われる', async () => {
+    const task = createTask('task-01', 'Failed');
+    const story = createStory();
+    const notifier = createMockNotifier('approve');
+
+    await requestTaskFailureAction(task, story, notifier, 'string error');
+
+    expect(notifier.requestApproval).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.stringContaining('string error'),
+      expect.any(Object),
+      'my-story',
     );
   });
 });
