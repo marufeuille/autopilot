@@ -43,6 +43,7 @@ function buildApprovalBlocks(
     elements.push({
       type: 'button',
       text: { type: 'plain_text', text: buttons.cancel },
+      style: 'danger',
       action_id: 'cwk_cancel',
       value: id,
     });

@@ -1017,7 +1017,7 @@ describe('キャンセルボタン機能', () => {
       void promise;
     });
 
-    it('キャンセルボタンに danger スタイルが設定されていない（デフォルトスタイル）', async () => {
+    it('キャンセルボタンに danger スタイルが設定されている', async () => {
       const promise = backend.requestApproval('cancel-style-test', 'テスト', {
         approve: '開始',
         reject: 'スキップ',
@@ -1027,7 +1027,7 @@ describe('キャンセルボタン機能', () => {
       const callArgs = mockApp.client.chat.postMessage.mock.calls[0][0];
       const actions = callArgs.blocks.find((b: any) => b.type === 'actions');
       const cancelBtn = actions.elements.find((e: any) => e.action_id === 'cwk_cancel');
-      expect(cancelBtn.style).toBeUndefined();
+      expect(cancelBtn.style).toBe('danger');
 
       void promise;
     });
@@ -1041,9 +1041,10 @@ describe('キャンセルボタン機能', () => {
         cancel: 'キャンセル',
       });
 
+      const ack = vi.fn();
       const cancelHandler = mockApp._actionHandlers.get('cwk_cancel');
       await cancelHandler({
-        ack: vi.fn(),
+        ack,
         body: {
           actions: [
             {
@@ -1054,6 +1055,7 @@ describe('キャンセルボタン機能', () => {
         },
       });
 
+      expect(ack).toHaveBeenCalled();
       const result = await approvalPromise;
       expect(result).toEqual({ action: 'cancel' });
     });
@@ -1065,9 +1067,10 @@ describe('キャンセルボタン機能', () => {
         cancel: '中止',
       });
 
+      const ack = vi.fn();
       const cancelHandler = mockApp._actionHandlers.get('cwk_cancel');
       await cancelHandler({
-        ack: vi.fn(),
+        ack,
         body: {
           actions: [
             {
@@ -1077,6 +1080,8 @@ describe('キャンセルボタン機能', () => {
           ],
         },
       });
+
+      expect(ack).toHaveBeenCalled();
 
       await approvalPromise;
 
@@ -1090,9 +1095,10 @@ describe('キャンセルボタン機能', () => {
     });
 
     it('entry が存在しない場合は早期リターンし resolveApproval が呼ばれない', async () => {
+      const ack = vi.fn();
       const cancelHandler = mockApp._actionHandlers.get('cwk_cancel');
       await cancelHandler({
-        ack: vi.fn(),
+        ack,
         body: {
           actions: [
             {
@@ -1103,6 +1109,7 @@ describe('キャンセルボタン機能', () => {
         },
       });
 
+      expect(ack).toHaveBeenCalled();
       // メッセージ更新が呼ばれていないことを確認
       expect(mockApp.client.chat.update).not.toHaveBeenCalled();
     });
