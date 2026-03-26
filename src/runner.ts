@@ -50,7 +50,7 @@ async function runDecomposition(
   story: StoryFile,
   notifier: NotificationBackend,
   deps: RunnerDeps,
-): Promise<boolean> {
+): Promise<'approved' | 'cancelled'> {
   let retryReason: string | undefined;
 
   while (true) {
@@ -70,14 +70,14 @@ async function runDecomposition(
         deps.createTaskFile(story.project, story.slug, draft);
         console.log(`[runner] task file created: ${draft.slug}`);
       }
-      return true;
+      return 'approved';
     }
 
     if (result.action === 'cancel') {
       deps.updateFileStatus(story.filePath, 'Cancelled');
       await notifier.notify(`🚫 ストーリーがキャンセルされました: ${story.slug}`, story.slug);
       console.log(`[runner] story cancelled: ${story.slug}`);
-      return false;
+      return 'cancelled';
     }
 
     retryReason = result.reason;
@@ -164,8 +164,8 @@ export async function runStory(
   console.log(`[runner] thread session started for story: ${story.slug}`);
 
   if (tasks.length === 0) {
-    const continued = await runDecomposition(story, notifier, d);
-    if (!continued) {
+    const decompositionResult = await runDecomposition(story, notifier, d);
+    if (decompositionResult === 'cancelled') {
       notifier.endSession(story.slug);
       console.log(`[runner] thread session ended for story: ${story.slug}`);
       return;
