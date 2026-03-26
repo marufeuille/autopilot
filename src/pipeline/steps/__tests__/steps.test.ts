@@ -467,6 +467,23 @@ describe('handleImplementation', () => {
     expect(prompt).toContain('ワークツリーは既に feature/test-task ブランチで作成済みです');
     expect(prompt).not.toContain('git checkout feature/test-task');
   });
+
+  it('初回プロンプトに既存テストスイート実行・確認のルールが含まれる', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({ depsOverrides: { runAgent } });
+    await handleImplementation(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).toContain('実装完了前に既存のテストスイートを実行し、既存テストが壊れていないことを確認すること');
+  });
+
+  it('リトライプロンプトにも既存テストスイート実行・確認のルールが含まれる', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({ depsOverrides: { runAgent } });
+    ctx.setRetryReason('CIが失敗しました');
+    await handleImplementation(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).toContain('実装完了前に既存のテストスイートを実行し、既存テストが壊れていないことを確認すること');
+  });
 });
 
 // -------- handlePRLifecycle --------
