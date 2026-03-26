@@ -138,6 +138,47 @@ describe('FakeNotifier', () => {
     expect(result).toEqual({ action: 'approve' });
   });
 
+  it('requestTaskFailureAction でデフォルトは retry を返す', async () => {
+    const notifier = new FakeNotifier();
+    const result = await notifier.requestTaskFailureAction('task-01', 'story-01', 'error');
+    expect(result).toBe('retry');
+  });
+
+  it('requestTaskFailureAction の呼び出しが記録される', async () => {
+    const notifier = new FakeNotifier();
+    await notifier.requestTaskFailureAction('task-01', 'story-01', 'error msg');
+
+    expect(notifier.taskFailureRequests).toHaveLength(1);
+    expect(notifier.taskFailureRequests[0].taskSlug).toBe('task-01');
+    expect(notifier.taskFailureRequests[0].storySlug).toBe('story-01');
+    expect(notifier.taskFailureRequests[0].errorSummary).toBe('error msg');
+    expect(notifier.taskFailureRequests[0].response).toBe('retry');
+  });
+
+  it('taskFailureResponses キューから順に応答を返す', async () => {
+    const notifier = new FakeNotifier({
+      taskFailureResponses: ['skip', 'cancel'],
+    });
+
+    const result1 = await notifier.requestTaskFailureAction('t1', 's1', 'e1');
+    const result2 = await notifier.requestTaskFailureAction('t2', 's1', 'e2');
+    const result3 = await notifier.requestTaskFailureAction('t3', 's1', 'e3');
+
+    expect(result1).toBe('skip');
+    expect(result2).toBe('cancel');
+    expect(result3).toBe('retry'); // default
+  });
+
+  it('enqueueTaskFailureResponse でキューに追加できる', async () => {
+    const notifier = new FakeNotifier();
+    notifier.enqueueTaskFailureResponse('cancel', 'skip');
+
+    const result1 = await notifier.requestTaskFailureAction('t1', 's1', 'e1');
+    const result2 = await notifier.requestTaskFailureAction('t2', 's1', 'e2');
+    expect(result1).toBe('cancel');
+    expect(result2).toBe('skip');
+  });
+
   it('イベントにタイムスタンプが記録される', async () => {
     const notifier = new FakeNotifier();
 

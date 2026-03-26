@@ -2,21 +2,32 @@ import { App } from '@slack/bolt';
 import type { BlockAction, ButtonAction } from '@slack/bolt';
 import type { Block, KnownBlock, Button, ActionsBlock } from '@slack/types';
 import { config } from '../config';
-import type { NotificationBackend, ApprovalResult, NotifyOptions } from './types';
-import { buildRejectModal } from './message-builder';
+import type { NotificationBackend, ApprovalResult, NotifyOptions, TaskFailureAction } from './types';
+import { buildRejectModal, buildTaskFailureBlocks } from './message-builder';
+import { generateApprovalId } from './approval-id';
 import { signalRejection } from '../merge/rejection-registry';
 import { logError, logWarn } from '../logger';
 import { ThreadSessionManager } from './thread-session';
 
-interface PendingApproval {
-  resolve: (result: ApprovalResult) => void;
+/** メッセージ更新に必要な共通フィールド */
+interface PendingMessage {
   channel: string;
   ts: string;
   message: string;
+}
+
+interface PendingApproval extends PendingMessage {
+  resolve: (result: ApprovalResult) => void;
+  originalBlocks: (Block | KnownBlock)[];
+}
+
+interface PendingTaskFailure extends PendingMessage {
+  resolve: (action: TaskFailureAction) => void;
   originalBlocks: (Block | KnownBlock)[];
 }
 
 const pending = new Map<string, PendingApproval>();
+const pendingTaskFailure = new Map<string, PendingTaskFailure>();
 
 function buildApprovalBlocks(
   id: string,
@@ -63,7 +74,7 @@ function buildApprovalBlocks(
 
 async function updateMessageWithResult(
   app: App,
-  entry: PendingApproval,
+  entry: PendingMessage,
   resultText: string,
 ): Promise<void> {
   await app.client.chat.update({
@@ -236,6 +247,49 @@ export function registerPRRejectHandlers(app: App): void {
 }
 
 /**
+ * Task失敗時の Slack アクションハンドラーを登録する
+ *
+ * cwk_task_retry / cwk_task_skip / cwk_task_cancel の3つのボタンに対応し、
+ * 各ボタン押下時に Promise を resolve して結果を返す。
+ */
+export function registerTaskFailureHandlers(app: App): void {
+  // リトライボタン
+  app.action<BlockAction<ButtonAction>>('cwk_task_retry', async ({ body, ack }) => {
+    await ack();
+    const metadata = JSON.parse(body.actions[0].value as string);
+    const id = metadata.id;
+    const entry = pendingTaskFailure.get(id);
+    if (entry) await updateMessageWithResult(app, entry, '🔄 リトライ');
+    resolveTaskFailure(id, 'retry');
+  });
+
+  // スキップボタン
+  app.action<BlockAction<ButtonAction>>('cwk_task_skip', async ({ body, ack }) => {
+    await ack();
+    const metadata = JSON.parse(body.actions[0].value as string);
+    const id = metadata.id;
+    const entry = pendingTaskFailure.get(id);
+    if (entry) await updateMessageWithResult(app, entry, '⏭️ スキップして次へ');
+    resolveTaskFailure(id, 'skip');
+  });
+
+  // キャンセルボタン
+  app.action<BlockAction<ButtonAction>>('cwk_task_cancel', async ({ body, ack }) => {
+    await ack();
+    const metadata = JSON.parse(body.actions[0].value as string);
+    const id = metadata.id;
+    const entry = pendingTaskFailure.get(id);
+    if (entry) await updateMessageWithResult(app, entry, '🚫 ストーリーをキャンセル');
+    resolveTaskFailure(id, 'cancel');
+  });
+}
+
+function resolveTaskFailure(id: string, action: TaskFailureAction): void {
+  pendingTaskFailure.get(id)?.resolve(action);
+  pendingTaskFailure.delete(id);
+}
+
+/**
  * Slack 通知バックエンド
  *
  * NotificationBackend インターフェースを実装し、Slack API 経由で
@@ -281,6 +335,38 @@ export class SlackNotificationBackend implements NotificationBackend {
     storySlug?: string,
   ): Promise<ApprovalResult> {
     return this._postApprovalRequest(id, message, buttons, storySlug);
+  }
+
+  async requestTaskFailureAction(
+    taskSlug: string,
+    storySlug: string,
+    errorSummary: string,
+  ): Promise<TaskFailureAction> {
+    const id = generateApprovalId(storySlug, `failure-${taskSlug}`);
+    const threadTs = this.threadSession.getThreadTs(storySlug);
+    const message =
+      `❌ *タスク失敗*: \`${taskSlug}\`\n` +
+      `*ストーリー*: \`${storySlug}\`\n` +
+      `*エラー*: ${errorSummary}\n\n` +
+      `対応を選択してください。`;
+    const blocks = buildTaskFailureBlocks(id, taskSlug, storySlug, errorSummary);
+
+    const res = await this.app.client.chat.postMessage({
+      channel: config.slack.channelId,
+      text: message,
+      blocks,
+      ...(threadTs ? { thread_ts: threadTs } : {}),
+    });
+
+    return new Promise((resolve) =>
+      pendingTaskFailure.set(id, {
+        resolve,
+        channel: config.slack.channelId,
+        ts: res.ts as string,
+        message,
+        originalBlocks: blocks,
+      }),
+    );
   }
 
   /** 承認リクエストを Slack に投稿し、結果を待つ */

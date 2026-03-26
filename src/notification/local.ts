@@ -1,6 +1,6 @@
 import { execFile } from 'child_process';
 import * as readline from 'readline';
-import { NotificationBackend, ApprovalResult } from './types';
+import { NotificationBackend, ApprovalResult, TaskFailureAction } from './types';
 
 /**
  * ローカル通知バックエンド
@@ -50,6 +50,38 @@ export class LocalNotificationBackend implements NotificationBackend {
     await this.notify(`承認リクエスト: ${stripMarkdown(message).slice(0, 100)}`);
 
     return this.promptTerminal(message, buttons);
+  }
+
+  /**
+   * Task失敗時にターミナルで判断を受け付ける
+   *
+   * requestApproval を再利用し、ApprovalResult → TaskFailureAction にマッピングする。
+   */
+  async requestTaskFailureAction(
+    taskSlug: string,
+    storySlug: string,
+    errorSummary: string,
+  ): Promise<TaskFailureAction> {
+    const message =
+      `❌ *タスク失敗*: \`${taskSlug}\`\n` +
+      `*ストーリー*: \`${storySlug}\`\n` +
+      `*エラー*: ${errorSummary}\n\n` +
+      `対応を選択してください。`;
+
+    const result = await this.requestApproval(
+      `failure-${taskSlug}`,
+      message,
+      { approve: 'リトライ', reject: 'スキップして次へ', cancel: 'ストーリーをキャンセル' },
+    );
+
+    switch (result.action) {
+      case 'approve':
+        return 'retry';
+      case 'reject':
+        return 'skip';
+      case 'cancel':
+        return 'cancel';
+    }
   }
 
   /**

@@ -1,4 +1,4 @@
-import { NotificationBackend, ApprovalResult } from './types';
+import { NotificationBackend, ApprovalResult, TaskFailureAction } from './types';
 
 /**
  * ntfy.sh 通知バックエンド
@@ -58,6 +58,20 @@ export class NtfyNotificationBackend implements NotificationBackend {
    */
   endSession(_storySlug: string): void {
     // ntfy バックエンドではスレッドの概念がないため何もしない
+  }
+
+  /**
+   * Task失敗時のアクション選択（未実装）
+   */
+  async requestTaskFailureAction(
+    _taskSlug: string,
+    _storySlug: string,
+    _errorSummary: string,
+  ): Promise<TaskFailureAction> {
+    throw new Error(
+      '[ntfy] requestTaskFailureAction is not yet implemented. ' +
+      'Will be available after HTTP callback endpoint is added.',
+    );
   }
 
   /**

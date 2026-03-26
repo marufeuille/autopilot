@@ -10,6 +10,9 @@ export type ApprovalResult =
   | { action: 'reject'; reason: string }
   | { action: 'cancel' };
 
+/** Task失敗時のユーザー選択肢 */
+export type TaskFailureAction = 'retry' | 'skip' | 'cancel';
+
 import type { Block, KnownBlock } from '@slack/types';
 
 /** notify のオプション */
@@ -70,6 +73,23 @@ export interface NotificationBackend {
    * @param storySlug ストーリーの識別子
    */
   endSession(storySlug: string): void;
+
+  /**
+   * Task失敗時にユーザーへ判断を委ね、選択結果を返す
+   *
+   * ストーリースレッドにボタン付き通知を送信し、
+   * 「リトライ / スキップして次へ / ストーリーをキャンセル」の選択を待つ。
+   *
+   * @param taskSlug 失敗したタスクの識別子
+   * @param storySlug ストーリーの識別子
+   * @param errorSummary エラーの概要
+   * @returns ユーザーが選択したアクション
+   */
+  requestTaskFailureAction(
+    taskSlug: string,
+    storySlug: string,
+    errorSummary: string,
+  ): Promise<TaskFailureAction>;
 }
 
 /**

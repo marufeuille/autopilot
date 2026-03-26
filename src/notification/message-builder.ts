@@ -310,6 +310,64 @@ export function buildRejectModal(prUrl: string): ModalView {
 }
 
 /**
+ * Task失敗時の Block Kit ブロックを生成する
+ *
+ * ストーリースレッドに投稿するボタン付きメッセージ。
+ * 3つのボタン（リトライ / スキップして次へ / ストーリーをキャンセル）を含む。
+ *
+ * @param id ボタン value に埋め込む一意識別子（pending map のキー）
+ * @param taskSlug 失敗したタスクの識別子
+ * @param storySlug ストーリーの識別子
+ * @param errorSummary エラーの概要
+ */
+export function buildTaskFailureBlocks(
+  id: string,
+  taskSlug: string,
+  storySlug: string,
+  errorSummary: string,
+): KnownBlock[] {
+  const metadata = JSON.stringify({ id, taskSlug, storySlug });
+  return [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text:
+          `❌ *タスク失敗*: \`${taskSlug}\`\n` +
+          `*ストーリー*: \`${storySlug}\`\n` +
+          `*エラー*: ${errorSummary}\n\n` +
+          `対応を選択してください。`,
+      },
+    },
+    {
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: 'リトライ' },
+          style: 'primary',
+          action_id: 'cwk_task_retry',
+          value: metadata,
+        },
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: 'スキップして次へ' },
+          action_id: 'cwk_task_skip',
+          value: metadata,
+        },
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: 'ストーリーをキャンセル' },
+          style: 'danger',
+          action_id: 'cwk_task_cancel',
+          value: metadata,
+        },
+      ],
+    },
+  ];
+}
+
+/**
  * 通知コンテキストからイベント種別に応じたメッセージを生成する
  */
 export function buildNotificationMessage(ctx: NotificationContext): string {

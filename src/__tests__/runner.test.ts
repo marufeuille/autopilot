@@ -179,6 +179,7 @@ function createMockNotifier(
         ? { action: 'approve' }
         : { action: 'reject', reason: 'テスト拒否' },
     ),
+    requestTaskFailureAction: vi.fn().mockResolvedValue('retry'),
     startThread: vi.fn().mockResolvedValue(undefined),
     getThreadTs: vi.fn().mockReturnValue(undefined),
     endSession: vi.fn(),
@@ -419,11 +420,13 @@ describe('runStory', () => {
         }),
       }));
 
-    // 承認キュー: task-01 start → approve, task-01 failure → skip, task-02 start → approve
+    // 承認キュー: task-01 start → approve, task-02 start → approve
     (notifier.requestApproval as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce({ action: 'approve' })  // task-01 start
-      .mockResolvedValueOnce({ action: 'reject', reason: 'skip' })  // task-01 failure → skip
       .mockResolvedValueOnce({ action: 'approve' }); // task-02 start
+    // task-01 failure → skip
+    (notifier.requestTaskFailureAction as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce('skip');
 
     // 3回目: 完了判定用
     mockedGetStoryTasks.mockResolvedValueOnce([
@@ -463,10 +466,12 @@ describe('runStory', () => {
         }),
       }));
 
-    // 承認キュー: task-01 start → approve, task-01 failure → cancel
+    // 承認キュー: task-01 start → approve
     (notifier.requestApproval as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce({ action: 'approve' })  // task-01 start
-      .mockResolvedValueOnce({ action: 'cancel' });   // task-01 failure → cancel
+      .mockResolvedValueOnce({ action: 'approve' });  // task-01 start
+    // task-01 failure → cancel
+    (notifier.requestTaskFailureAction as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce('cancel');
 
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -510,11 +515,13 @@ describe('runStory', () => {
         }),
       }));
 
-    // 承認キュー: task-01 start → approve, failure → retry, task-01 start (2nd) → approve
+    // 承認キュー: task-01 start → approve, task-01 start (2nd) → approve
     (notifier.requestApproval as ReturnType<typeof vi.fn>)
       .mockResolvedValueOnce({ action: 'approve' })  // task-01 start
-      .mockResolvedValueOnce({ action: 'approve' })  // task-01 failure → retry
       .mockResolvedValueOnce({ action: 'approve' }); // task-01 start (2nd)
+    // failure → retry
+    (notifier.requestTaskFailureAction as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce('retry');
 
     // 3回目: 完了判定用
     mockedGetStoryTasks.mockResolvedValueOnce([
@@ -1446,64 +1453,53 @@ describe('runTask - マージ後ステータス更新フロー', () => {
 });
 
 describe('requestTaskFailureAction', () => {
-  it('approve → retry を返す', async () => {
+  it('notifier.requestTaskFailureAction に委譲して retry を返す', async () => {
     const task = createTask('task-01', 'Failed');
     const story = createStory();
     const notifier = createMockNotifier('approve');
+    (notifier.requestTaskFailureAction as ReturnType<typeof vi.fn>).mockResolvedValue('retry');
 
     const action = await requestTaskFailureAction(task, story, notifier, new Error('test error'));
 
     expect(action).toBe('retry');
-    expect(notifier.requestApproval).toHaveBeenCalledWith(
-      expect.stringContaining('failure-task-01'),
-      expect.stringContaining('タスク失敗'),
-      expect.objectContaining({ approve: expect.any(String), reject: expect.any(String), cancel: expect.any(String) }),
+    expect(notifier.requestTaskFailureAction).toHaveBeenCalledWith(
+      'task-01',
       'my-story',
+      'test error',
     );
   });
 
-  it('reject → skip を返す', async () => {
+  it('skip を返す', async () => {
     const task = createTask('task-01', 'Failed');
     const story = createStory();
-    const notifier: NotificationBackend = {
-      notify: vi.fn().mockResolvedValue(undefined),
-      requestApproval: vi.fn().mockResolvedValue({ action: 'reject', reason: 'skip' }),
-      startThread: vi.fn().mockResolvedValue(undefined),
-      getThreadTs: vi.fn().mockReturnValue(undefined),
-      endSession: vi.fn(),
-    };
+    const notifier = createMockNotifier('approve');
+    (notifier.requestTaskFailureAction as ReturnType<typeof vi.fn>).mockResolvedValue('skip');
 
     const action = await requestTaskFailureAction(task, story, notifier, new Error('test error'));
     expect(action).toBe('skip');
   });
 
-  it('cancel → cancel を返す', async () => {
+  it('cancel を返す', async () => {
     const task = createTask('task-01', 'Failed');
     const story = createStory();
-    const notifier: NotificationBackend = {
-      notify: vi.fn().mockResolvedValue(undefined),
-      requestApproval: vi.fn().mockResolvedValue({ action: 'cancel' }),
-      startThread: vi.fn().mockResolvedValue(undefined),
-      getThreadTs: vi.fn().mockReturnValue(undefined),
-      endSession: vi.fn(),
-    };
+    const notifier = createMockNotifier('approve');
+    (notifier.requestTaskFailureAction as ReturnType<typeof vi.fn>).mockResolvedValue('cancel');
 
     const action = await requestTaskFailureAction(task, story, notifier, new Error('test error'));
     expect(action).toBe('cancel');
   });
 
-  it('エラーメッセージが通知に含まれる', async () => {
+  it('エラーメッセージが notifier に渡される', async () => {
     const task = createTask('task-01', 'Failed');
     const story = createStory();
     const notifier = createMockNotifier('approve');
 
     await requestTaskFailureAction(task, story, notifier, new Error('something broke'));
 
-    expect(notifier.requestApproval).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.stringContaining('something broke'),
-      expect.any(Object),
+    expect(notifier.requestTaskFailureAction).toHaveBeenCalledWith(
+      'task-01',
       'my-story',
+      'something broke',
     );
   });
 
@@ -1514,11 +1510,10 @@ describe('requestTaskFailureAction', () => {
 
     await requestTaskFailureAction(task, story, notifier, 'string error');
 
-    expect(notifier.requestApproval).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.stringContaining('string error'),
-      expect.any(Object),
+    expect(notifier.requestTaskFailureAction).toHaveBeenCalledWith(
+      'task-01',
       'my-story',
+      'string error',
     );
   });
 });

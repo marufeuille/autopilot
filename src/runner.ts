@@ -15,49 +15,23 @@ import { runMergePollingLoop } from './merge';
 
 export { RunnerDeps, createDefaultRunnerDeps } from './runner-deps';
 
-/** Task失敗時のユーザー選択肢 */
-export type TaskFailureAction = 'retry' | 'skip' | 'cancel';
+/** Task失敗時のユーザー選択肢（型は notification/types.ts から再エクスポート） */
+export type { TaskFailureAction } from './notification/types';
 
 /**
  * Task失敗時にSlackのストーリースレッドへボタン付き通知を送信し、
  * ユーザーの選択（リトライ/スキップ/キャンセル）を待つ。
  *
- * 既存の requestApproval インターフェースを再利用する:
- * - approve → retry（リトライ）
- * - reject  → skip（スキップして次へ）
- * - cancel  → cancel（ストーリーをキャンセル）
+ * NotificationBackend.requestTaskFailureAction に委譲する。
  */
 export async function requestTaskFailureAction(
   task: TaskFile,
   story: StoryFile,
   notifier: NotificationBackend,
   error: unknown,
-): Promise<TaskFailureAction> {
+): Promise<import('./notification/types').TaskFailureAction> {
   const errorMessage = error instanceof Error ? error.message : String(error);
-  const id = generateApprovalId(story.slug, `failure-${task.slug}`);
-  const message =
-    `❌ *タスク失敗*: \`${task.slug}\`\n` +
-    `*ストーリー*: \`${story.slug}\`\n` +
-    `*エラー*: ${errorMessage}\n\n` +
-    `対応を選択してください。`;
-
-  const result = await notifier.requestApproval(
-    id,
-    message,
-    { approve: '\u30EA\u30C8\u30E9\u30A4', reject: '\u30B9\u30AD\u30C3\u30D7\u3057\u3066\u6B21\u3078', cancel: '\u30B9\u30C8\u30FC\u30EA\u30FC\u3092\u30AD\u30E3\u30F3\u30BB\u30EB' },
-    story.slug,
-  );
-
-  switch (result.action) {
-    case 'approve':
-      return 'retry';
-    case 'reject':
-      return 'skip';
-    case 'cancel':
-      return 'cancel';
-    default:
-      throw new Error(`Unexpected approval action: ${String((result as { action: unknown }).action)}`);
-  }
+  return notifier.requestTaskFailureAction(task.slug, story.slug, errorMessage);
 }
 
 export async function runTask(
