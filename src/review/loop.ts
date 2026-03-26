@@ -78,7 +78,6 @@ export function buildFixPrompt(
   repoPath: string,
 ): string {
   const findings = reviewResult.findings
-    .filter((f) => f.severity === 'error' || f.severity === 'warning')
     .map((f) => {
       const location = [f.file, f.line].filter(Boolean).join(':');
       const prefix = location ? `[${location}] ` : '';
