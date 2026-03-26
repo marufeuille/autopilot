@@ -164,9 +164,10 @@ describe('registerApprovalHandlers - 承認フロー', () => {
   });
 
   it('ハンドラーが正しく登録される', () => {
-    // action ハンドラー: cwk_approve, cwk_reject
+    // action ハンドラー: cwk_approve, cwk_reject, cwk_cancel
     expect(mockApp.action).toHaveBeenCalledWith('cwk_approve', expect.any(Function));
     expect(mockApp.action).toHaveBeenCalledWith('cwk_reject', expect.any(Function));
+    expect(mockApp.action).toHaveBeenCalledWith('cwk_cancel', expect.any(Function));
 
     // view ハンドラー: cwk_reject_modal (submit), cwk_reject_modal (close)
     expect(mockApp.view).toHaveBeenCalledWith('cwk_reject_modal', expect.any(Function));
@@ -966,6 +967,144 @@ describe('スレッド内承認フロー', () => {
       });
 
       await approvalPromise;
+    });
+  });
+});
+
+describe('キャンセルボタン機能', () => {
+  let mockApp: ReturnType<typeof createMockApp>;
+  let backend: SlackNotificationBackend;
+
+  beforeEach(() => {
+    mockApp = createMockApp();
+    registerApprovalHandlers(mockApp);
+    backend = new SlackNotificationBackend(mockApp);
+  });
+
+  describe('buildApprovalBlocks - キャンセルボタンの表示制御', () => {
+    it('buttons.cancel 指定時にキャンセルボタンが表示される', async () => {
+      const promise = backend.requestApproval('cancel-block-test', 'テスト', {
+        approve: '開始',
+        reject: 'スキップ',
+        cancel: 'キャンセル',
+      });
+
+      const callArgs = mockApp.client.chat.postMessage.mock.calls[0][0];
+      const actions = callArgs.blocks.find((b: any) => b.type === 'actions');
+      expect(actions.elements).toHaveLength(3);
+
+      const cancelBtn = actions.elements.find((e: any) => e.action_id === 'cwk_cancel');
+      expect(cancelBtn).toBeDefined();
+      expect(cancelBtn.text.text).toBe('キャンセル');
+      expect(cancelBtn.value).toBe('cancel-block-test');
+
+      void promise;
+    });
+
+    it('buttons.cancel 未指定時にキャンセルボタンが表示されない（後方互換）', async () => {
+      const promise = backend.requestApproval('no-cancel-test', 'テスト', {
+        approve: '開始',
+        reject: 'スキップ',
+      });
+
+      const callArgs = mockApp.client.chat.postMessage.mock.calls[0][0];
+      const actions = callArgs.blocks.find((b: any) => b.type === 'actions');
+      expect(actions.elements).toHaveLength(2);
+
+      const cancelBtn = actions.elements.find((e: any) => e.action_id === 'cwk_cancel');
+      expect(cancelBtn).toBeUndefined();
+
+      void promise;
+    });
+
+    it('キャンセルボタンに danger スタイルが設定されていない（デフォルトスタイル）', async () => {
+      const promise = backend.requestApproval('cancel-style-test', 'テスト', {
+        approve: '開始',
+        reject: 'スキップ',
+        cancel: 'キャンセル',
+      });
+
+      const callArgs = mockApp.client.chat.postMessage.mock.calls[0][0];
+      const actions = callArgs.blocks.find((b: any) => b.type === 'actions');
+      const cancelBtn = actions.elements.find((e: any) => e.action_id === 'cwk_cancel');
+      expect(cancelBtn.style).toBeUndefined();
+
+      void promise;
+    });
+  });
+
+  describe('cwk_cancel アクションハンドラー', () => {
+    it('キャンセルボタン押下で { action: "cancel" } が返る', async () => {
+      const approvalPromise = backend.requestApproval('cancel-action-test', 'テスト', {
+        approve: '開始',
+        reject: 'スキップ',
+        cancel: 'キャンセル',
+      });
+
+      const cancelHandler = mockApp._actionHandlers.get('cwk_cancel');
+      await cancelHandler({
+        ack: vi.fn(),
+        body: {
+          actions: [
+            {
+              value: 'cancel-action-test',
+              text: { type: 'plain_text', text: 'キャンセル' },
+            },
+          ],
+        },
+      });
+
+      const result = await approvalPromise;
+      expect(result).toEqual({ action: 'cancel' });
+    });
+
+    it('キャンセル時にメッセージが更新される', async () => {
+      const approvalPromise = backend.requestApproval('cancel-msg-test', 'テスト', {
+        approve: '開始',
+        reject: 'スキップ',
+        cancel: '中止',
+      });
+
+      const cancelHandler = mockApp._actionHandlers.get('cwk_cancel');
+      await cancelHandler({
+        ack: vi.fn(),
+        body: {
+          actions: [
+            {
+              value: 'cancel-msg-test',
+              text: { type: 'plain_text', text: '中止' },
+            },
+          ],
+        },
+      });
+
+      await approvalPromise;
+
+      expect(mockApp.client.chat.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: expect.any(String),
+          ts: '1234567890.123456',
+          text: '🚫 中止',
+        }),
+      );
+    });
+
+    it('entry が存在しない場合は早期リターンし resolveApproval が呼ばれない', async () => {
+      const cancelHandler = mockApp._actionHandlers.get('cwk_cancel');
+      await cancelHandler({
+        ack: vi.fn(),
+        body: {
+          actions: [
+            {
+              value: 'nonexistent-id',
+              text: { type: 'plain_text', text: 'キャンセル' },
+            },
+          ],
+        },
+      });
+
+      // メッセージ更新が呼ばれていないことを確認
+      expect(mockApp.client.chat.update).not.toHaveBeenCalled();
     });
   });
 });
