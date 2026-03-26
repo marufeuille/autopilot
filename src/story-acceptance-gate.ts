@@ -1,5 +1,7 @@
 import { query, type SDKResultSuccess } from '@anthropic-ai/claude-agent-sdk';
 import { StoryFile, TaskFile } from './vault/reader';
+import { TaskDraft } from './vault/writer';
+import { validateTaskDrafts } from './decomposer';
 
 // --- 型定義 ---
 
@@ -302,4 +304,132 @@ export async function checkAcceptanceCriteria(
     skipped: false,
     results,
   };
+}
+
+// --- 追加タスク不要判定 ---
+
+/** コメントが「追加タスク不要」等のパターンに該当するかを判定する */
+const NO_TASK_PATTERNS = [
+  /追加タスク不要/,
+  /タスク不要/,
+  /追加不要/,
+  /問題な(い|し)/,
+  /そのまま/,
+  /no\s*additional\s*tasks?/i,
+];
+
+export function isNoAdditionalTasksComment(comment: string): boolean {
+  return NO_TASK_PATTERNS.some((pattern) => pattern.test(comment));
+}
+
+// --- 追加タスク生成プロンプト構築 ---
+
+export function buildAdditionalTasksPrompt(
+  story: StoryFile,
+  existingTasks: TaskFile[],
+  comment: string,
+  failedCriteria: CriterionResult[],
+): string {
+  const existingTaskList = existingTasks
+    .map((t) => `- ${t.slug} (${t.status}): ${t.content.split('\n').find((l) => l.startsWith('# '))?.replace(/^#\s*/, '') ?? t.slug}`)
+    .join('\n');
+
+  const failedList = failedCriteria
+    .map((c) => `- [FAIL] ${c.criterion}: ${c.reason}`)
+    .join('\n');
+
+  return `あなたはソフトウェア開発のタスク設計の専門家です。以下のストーリーに対して、ユーザーのコメントを元に追加タスクを生成してください。
+
+## ストーリー
+${story.content}
+
+## 既存タスク
+${existingTaskList || '（なし）'}
+
+## 受け入れ条件チェックで FAIL だった項目
+${failedList || '（なし）'}
+
+## ユーザーコメント
+${comment}
+
+## 分解ルール
+
+- 1タスク = 1PR（独立してマージできる単位）
+- スラッグは kebab-case（英小文字・ハイフン区切り）
+- スラッグは必ず "${story.slug}-" で始める
+- 既存タスクのスラッグと重複しないこと
+- ユーザーコメントの意図を正確に反映すること
+- 不足している受け入れ条件を満たすために必要な最小限のタスクを生成すること
+
+## 出力形式
+
+以下のJSON配列のみを出力してください。説明文は不要です。
+
+\`\`\`json
+[
+  {
+    "slug": "${story.slug}-fix-example",
+    "title": "タスクタイトル（日本語）",
+    "priority": "high",
+    "effort": "low",
+    "purpose": "このタスクで何を達成するか（1〜2文）",
+    "detail": "実装方針・手順など（具体的に）",
+    "criteria": [
+      "完了条件1",
+      "完了条件2"
+    ]
+  }
+]
+\`\`\`
+
+priority は "high" | "medium" | "low"、effort は "low" | "medium" | "high" のいずれかを使用してください。`;
+}
+
+// --- 追加タスク生成 ---
+
+/** 追加タスク生成の依存インターフェース */
+export interface AdditionalTasksDeps {
+  /** Claude にプロンプトを送信してテキスト応答を得る */
+  queryAI: (prompt: string) => Promise<string>;
+}
+
+/**
+ * ユーザーコメントから追加タスク案を生成する。
+ *
+ * 1. コメントが「追加タスク不要」等の場合はタスク0件を返す
+ * 2. Claude にプロンプトを送信して追加タスク案を生成する
+ * 3. 既存のタスク分解バリデーションを通して返す
+ */
+export async function generateAdditionalTasks(
+  story: StoryFile,
+  existingTasks: TaskFile[],
+  comment: string,
+  failedCriteria: CriterionResult[],
+  deps: AdditionalTasksDeps,
+): Promise<TaskDraft[]> {
+  // 「追加タスク不要」等のコメントの場合はタスク0件
+  if (isNoAdditionalTasksComment(comment)) {
+    console.log(`[acceptance-gate] コメントが「追加タスク不要」と判断されました: "${comment}"`);
+    return [];
+  }
+
+  // プロンプト構築
+  const prompt = buildAdditionalTasksPrompt(story, existingTasks, comment, failedCriteria);
+
+  // Claude に送信
+  const responseText = await deps.queryAI(prompt);
+
+  // コードブロックを除去してJSONを抽出
+  const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const jsonText = jsonMatch ? jsonMatch[1].trim() : responseText.trim();
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    throw new Error(`追加タスク生成のJSONパースに失敗しました:\n${responseText}`);
+  }
+
+  // validateTaskDrafts を再利用してバリデーション
+  return validateTaskDrafts(parsed, story.slug);
 }

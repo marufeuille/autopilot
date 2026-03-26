@@ -8,6 +8,10 @@ import {
   AcceptanceGateDeps,
   AcceptanceCheckResult,
   CriterionResult,
+  isNoAdditionalTasksComment,
+  buildAdditionalTasksPrompt,
+  generateAdditionalTasks,
+  AdditionalTasksDeps,
 } from '../story-acceptance-gate';
 import { StoryFile, TaskFile } from '../vault/reader';
 
@@ -411,5 +415,244 @@ describe('checkAcceptanceCriteria', () => {
     await expect(
       checkAcceptanceCriteria(story, tasks, '/repo', deps),
     ).rejects.toThrow('受け入れ条件チェックのAI応答パースに失敗しました');
+  });
+});
+
+// --- isNoAdditionalTasksComment ---
+
+describe('isNoAdditionalTasksComment', () => {
+  it('「追加タスク不要」を含むコメントはtrueを返す', () => {
+    expect(isNoAdditionalTasksComment('追加タスク不要です')).toBe(true);
+  });
+
+  it('「タスク不要」を含むコメントはtrueを返す', () => {
+    expect(isNoAdditionalTasksComment('タスク不要')).toBe(true);
+  });
+
+  it('「追加不要」を含むコメントはtrueを返す', () => {
+    expect(isNoAdditionalTasksComment('追加不要です')).toBe(true);
+  });
+
+  it('「問題ない」を含むコメントはtrueを返す', () => {
+    expect(isNoAdditionalTasksComment('問題ないのでDoneにしてください')).toBe(true);
+  });
+
+  it('「問題なし」を含むコメントはtrueを返す', () => {
+    expect(isNoAdditionalTasksComment('問題なし')).toBe(true);
+  });
+
+  it('「そのまま」を含むコメントはtrueを返す', () => {
+    expect(isNoAdditionalTasksComment('そのままDoneにして')).toBe(true);
+  });
+
+  it('英語の "no additional tasks" もtrueを返す', () => {
+    expect(isNoAdditionalTasksComment('no additional tasks')).toBe(true);
+    expect(isNoAdditionalTasksComment('No Additional Task')).toBe(true);
+  });
+
+  it('通常のコメントはfalseを返す', () => {
+    expect(isNoAdditionalTasksComment('テストを追加してください')).toBe(false);
+    expect(isNoAdditionalTasksComment('ログイン機能のバリデーションが足りない')).toBe(false);
+  });
+});
+
+// --- buildAdditionalTasksPrompt ---
+
+describe('buildAdditionalTasksPrompt', () => {
+  it('ストーリー・既存タスク・コメント・FAIL条件を含むプロンプトを構築する', () => {
+    const story = createStoryFile();
+    const tasks = [createTaskFile()];
+    const comment = 'テストが不足しています';
+    const failedCriteria: CriterionResult[] = [
+      { criterion: 'テストが通る', result: 'FAIL', reason: 'テスト未実装' },
+    ];
+
+    const prompt = buildAdditionalTasksPrompt(story, tasks, comment, failedCriteria);
+
+    expect(prompt).toContain('テストが不足しています');
+    expect(prompt).toContain('[FAIL] テストが通る: テスト未実装');
+    expect(prompt).toContain('test-story-01');
+    expect(prompt).toContain('"test-story-');
+  });
+
+  it('既存タスクが空の場合は「（なし）」と表示する', () => {
+    const story = createStoryFile();
+    const prompt = buildAdditionalTasksPrompt(story, [], 'コメント', []);
+
+    expect(prompt).toContain('（なし）');
+  });
+
+  it('FAIL条件が空の場合は「（なし）」と表示する', () => {
+    const story = createStoryFile();
+    const prompt = buildAdditionalTasksPrompt(story, [createTaskFile()], 'コメント', []);
+
+    expect(prompt).toContain('受け入れ条件チェックで FAIL だった項目\n（なし）');
+  });
+});
+
+// --- generateAdditionalTasks ---
+
+describe('generateAdditionalTasks', () => {
+  const story = createStoryFile();
+  const tasks = [createTaskFile()];
+  const failedCriteria: CriterionResult[] = [
+    { criterion: 'テストが通る', result: 'FAIL', reason: 'テスト未実装' },
+  ];
+
+  function createFakeAdditionalDeps(overrides: Partial<AdditionalTasksDeps> = {}): AdditionalTasksDeps {
+    return {
+      queryAI: vi.fn().mockResolvedValue('[]'),
+      ...overrides,
+    };
+  }
+
+  it('「追加タスク不要」コメントの場合、空配列を返しAIを呼ばない', async () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const deps = createFakeAdditionalDeps();
+
+    const result = await generateAdditionalTasks(story, tasks, '追加タスク不要です', failedCriteria, deps);
+
+    expect(result).toEqual([]);
+    expect(deps.queryAI).not.toHaveBeenCalled();
+    consoleSpy.mockRestore();
+  });
+
+  it('Claudeが生成したタスク案をバリデーションして返す', async () => {
+    const aiResponse = JSON.stringify([
+      {
+        slug: 'test-story-fix-tests',
+        title: 'テストの追加',
+        priority: 'high',
+        effort: 'medium',
+        purpose: '不足しているテストを追加する',
+        detail: 'ログインAPIのユニットテストを追加する',
+        criteria: ['テストが通る', 'カバレッジ80%以上'],
+      },
+    ]);
+
+    const deps = createFakeAdditionalDeps({
+      queryAI: vi.fn().mockResolvedValue(aiResponse),
+    });
+
+    const result = await generateAdditionalTasks(story, tasks, 'テストを追加してください', failedCriteria, deps);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].slug).toBe('test-story-fix-tests');
+    expect(result[0].title).toBe('テストの追加');
+    expect(result[0].priority).toBe('high');
+    expect(result[0].effort).toBe('medium');
+    expect(result[0].criteria).toEqual(['テストが通る', 'カバレッジ80%以上']);
+  });
+
+  it('コードブロック付きの応答もパースできる', async () => {
+    const aiResponse = '```json\n' + JSON.stringify([
+      {
+        slug: 'test-story-fix-01',
+        title: '修正タスク',
+        priority: 'medium',
+        effort: 'low',
+        purpose: '修正する',
+        detail: '修正の詳細',
+        criteria: ['修正完了'],
+      },
+    ]) + '\n```';
+
+    const deps = createFakeAdditionalDeps({
+      queryAI: vi.fn().mockResolvedValue(aiResponse),
+    });
+
+    const result = await generateAdditionalTasks(story, tasks, '修正してください', failedCriteria, deps);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].slug).toBe('test-story-fix-01');
+  });
+
+  it('不正なJSONの場合はエラーをスローする', async () => {
+    const deps = createFakeAdditionalDeps({
+      queryAI: vi.fn().mockResolvedValue('不正なJSON'),
+    });
+
+    await expect(
+      generateAdditionalTasks(story, tasks, 'テストを追加', failedCriteria, deps),
+    ).rejects.toThrow('追加タスク生成のJSONパースに失敗しました');
+  });
+
+  it('バリデーションエラーの場合はvalidateTaskDraftsからのエラーがスローされる', async () => {
+    const aiResponse = JSON.stringify([
+      {
+        slug: 'invalid slug with spaces',
+        title: 'テスト',
+        priority: 'high',
+        effort: 'low',
+        purpose: '目的',
+        detail: '詳細',
+        criteria: ['条件'],
+      },
+    ]);
+
+    const deps = createFakeAdditionalDeps({
+      queryAI: vi.fn().mockResolvedValue(aiResponse),
+    });
+
+    await expect(
+      generateAdditionalTasks(story, tasks, 'テストを追加', failedCriteria, deps),
+    ).rejects.toThrow('バリデーションエラー');
+  });
+
+  it('複数タスクが生成される場合も正しくバリデーションされる', async () => {
+    const aiResponse = JSON.stringify([
+      {
+        slug: 'test-story-add-tests',
+        title: 'テスト追加',
+        priority: 'high',
+        effort: 'medium',
+        purpose: 'テストを追加する',
+        detail: 'ユニットテストの追加',
+        criteria: ['テスト追加'],
+      },
+      {
+        slug: 'test-story-update-docs',
+        title: 'ドキュメント更新',
+        priority: 'low',
+        effort: 'low',
+        purpose: 'ドキュメントを更新する',
+        detail: 'READMEの更新',
+        criteria: ['ドキュメント更新'],
+      },
+    ]);
+
+    const deps = createFakeAdditionalDeps({
+      queryAI: vi.fn().mockResolvedValue(aiResponse),
+    });
+
+    const result = await generateAdditionalTasks(story, tasks, 'テストとドキュメントを追加して', failedCriteria, deps);
+
+    expect(result).toHaveLength(2);
+    expect(result[0].slug).toBe('test-story-add-tests');
+    expect(result[1].slug).toBe('test-story-update-docs');
+  });
+
+  it('FAIL条件とコメントがプロンプトに含まれることを確認', async () => {
+    const queryAI = vi.fn().mockResolvedValue(JSON.stringify([
+      {
+        slug: 'test-story-fix-01',
+        title: '修正',
+        priority: 'high',
+        effort: 'low',
+        purpose: '修正する',
+        detail: '詳細',
+        criteria: ['完了'],
+      },
+    ]));
+
+    const deps = createFakeAdditionalDeps({ queryAI });
+    const userComment = 'バリデーションが不足しているので追加してください';
+
+    await generateAdditionalTasks(story, tasks, userComment, failedCriteria, deps);
+
+    expect(queryAI).toHaveBeenCalledOnce();
+    const prompt = queryAI.mock.calls[0][0];
+    expect(prompt).toContain(userComment);
+    expect(prompt).toContain('[FAIL] テストが通る');
   });
 });
