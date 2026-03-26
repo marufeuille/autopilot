@@ -1,0 +1,9 @@
+#!/bin/sh
+# mainブランチへの直接コミットを禁止する
+branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+if [ "$branch" = "main" ]; then
+  echo "ERROR: mainブランチへの直接コミットは禁止されています。"
+  echo "  ブランチを作成してからコミットしてください:"
+  echo "    git checkout -b <branch-name>"
+  exit 1
+fi
