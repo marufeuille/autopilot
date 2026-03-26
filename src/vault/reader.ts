@@ -4,6 +4,9 @@ import matter from 'gray-matter';
 import { glob } from 'glob';
 import { config, vaultProjectPath, vaultStoriesPath, vaultTasksPath } from '../config';
 
+/** slug として許可する文字パターン（英数字・ハイフン・アンダースコアのみ） */
+const VALID_SLUG_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
 export type TaskStatus = 'Todo' | 'Doing' | 'Done' | 'Failed' | 'Skipped' | 'Cancelled';
 export type StoryStatus = 'Draft' | 'Todo' | 'Queued' | 'Doing' | 'Done' | 'Failed' | 'Cancelled';
 
@@ -83,10 +86,15 @@ export async function getStoryTasks(project: string, storySlug: string): Promise
  * ファイルが存在しない場合はエラーを throw する。
  */
 export function readStoryBySlug(storySlug: string): StoryFile {
+  // パストラバーサル防止: slug に許可されない文字が含まれる場合は拒否
+  if (!VALID_SLUG_PATTERN.test(storySlug)) {
+    throw new Error(`不正なストーリースラッグです: "${storySlug}"`);
+  }
+
   const project = config.watchProject;
   const filePath = path.join(vaultStoriesPath(project), `${storySlug}.md`);
   if (!fs.existsSync(filePath)) {
-    throw new Error(`Story "${storySlug}" が見つかりません: ${filePath}`);
+    throw new Error(`Story "${storySlug}" が見つかりません`);
   }
   return readStoryFile(filePath);
 }

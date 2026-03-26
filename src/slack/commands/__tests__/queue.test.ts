@@ -138,6 +138,26 @@ describe('createQueueHandler', () => {
       expect(qm.list()).toHaveLength(0);
     });
 
+    it('パストラバーサルを含む slug を指定するとエラーメッセージを返す', async () => {
+      const handler = createQueueHandler(qm);
+      await handler(['add', '../../etc/passwd'], respond);
+
+      expect(respond).toHaveBeenCalledWith(
+        expect.stringContaining('不正なストーリースラッグです'),
+      );
+      expect(qm.list()).toHaveLength(0);
+    });
+
+    it('ドットを含む slug を指定するとエラーメッセージを返す', async () => {
+      const handler = createQueueHandler(qm);
+      await handler(['add', '../secret'], respond);
+
+      expect(respond).toHaveBeenCalledWith(
+        expect.stringContaining('不正なストーリースラッグです'),
+      );
+      expect(qm.list()).toHaveLength(0);
+    });
+
     it('Draft ステータスの Story はエラーになる', async () => {
       const handler = createQueueHandler(qm);
       await handler(['add', 'draft-story'], respond);
@@ -197,6 +217,15 @@ describe('createQueueHandler', () => {
 
       expect(respond).toHaveBeenCalledWith(
         expect.stringContaining('ストーリースラッグを指定してください'),
+      );
+    });
+
+    it('パストラバーサルを含む slug で cancel するとエラーメッセージを返す', async () => {
+      const handler = createQueueHandler(qm);
+      await handler(['cancel', '../../etc/passwd'], respond);
+
+      expect(respond).toHaveBeenCalledWith(
+        expect.stringContaining('不正なストーリースラッグです'),
       );
     });
 

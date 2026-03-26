@@ -1,6 +1,9 @@
 import type { StoryQueueManager } from '../../queue/queue-manager';
 import type { SubcommandHandler } from '../slash-commands';
 
+/** slug として許可する文字パターン（英数字・ハイフン・アンダースコアのみ） */
+const VALID_SLUG_PATTERN = /^[a-zA-Z0-9_-]+$/;
+
 /**
  * /ap queue サブコマンドのハンドラーを生成する。
  *
@@ -58,6 +61,11 @@ async function handleQueueAdd(
     return;
   }
 
+  if (!VALID_SLUG_PATTERN.test(storySlug)) {
+    await respond('⚠️ 不正なストーリースラッグです。英数字・ハイフン・アンダースコアのみ使用できます。');
+    return;
+  }
+
   const story = queueManager.add(storySlug);
   const position = queueManager.list().length;
   await respond(
@@ -76,6 +84,11 @@ async function handleQueueCancel(
   const storySlug = args[0];
   if (!storySlug) {
     await respond('⚠️ ストーリースラッグを指定してください。\n使い方: `/ap queue cancel <story-slug>`');
+    return;
+  }
+
+  if (!VALID_SLUG_PATTERN.test(storySlug)) {
+    await respond('⚠️ 不正なストーリースラッグです。英数字・ハイフン・アンダースコアのみ使用できます。');
     return;
   }
 
