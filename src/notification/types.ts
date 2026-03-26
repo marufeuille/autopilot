@@ -13,6 +13,9 @@ export type ApprovalResult =
 /** Task失敗時のユーザー選択肢 */
 export type TaskFailureAction = 'retry' | 'skip' | 'cancel';
 
+/** Story失敗時のキュー操作アクション */
+export type QueueFailedAction = 'resume' | 'retry' | 'clear';
+
 /** 受け入れ条件チェックの個別結果 */
 export interface AcceptanceConditionResult {
   /** 条件テキスト */
