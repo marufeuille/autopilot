@@ -291,7 +291,7 @@ describe('buildFixPrompt', () => {
     expect(prompt).toContain('src/foo.ts:10');
   });
 
-  it('info レベルの指摘はプロンプトに含まれない', () => {
+  it('info レベルの指摘も修正プロンプトに含まれる', () => {
     const review: ReviewResult = {
       verdict: 'NG',
       summary: 'Issues',
@@ -302,8 +302,10 @@ describe('buildFixPrompt', () => {
     };
     const prompt = buildFixPrompt(review, 'task', '/repo');
 
-    expect(prompt).not.toContain('Just FYI');
+    expect(prompt).toContain('Just FYI');
+    expect(prompt).toContain('[INFO]');
     expect(prompt).toContain('Must fix');
+    expect(prompt).toContain('[ERROR]');
   });
 });
 

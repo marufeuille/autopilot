@@ -55,7 +55,7 @@ ${params.diff}
 }
 \`\`\`
 
-- \`verdict\`: severity が "error" の指摘が1つでもあれば "NG"、なければ "OK"
+- \`verdict\`: severity が "error" または "warning" の指摘が1つでもあれば "NG"、なければ "OK"（"info" のみの場合は "OK"）
 - \`findings\` が空配列でも構いません（問題がない場合）
 - JSON のみを出力し、マークダウンのコードフェンスで囲まないでください
 `;
