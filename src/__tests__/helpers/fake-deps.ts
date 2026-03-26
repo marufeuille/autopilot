@@ -116,6 +116,7 @@ export function createFakeDeps(overrides?: FakeDepsOverrides): RunnerDeps {
       skipped: false,
       results: [],
     }),
+    generateAdditionalTasks: vi.fn().mockResolvedValue([]),
   };
 
   // overrides を適用（vi.fn() でラップ済みの場合はそのまま使う）

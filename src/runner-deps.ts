@@ -6,7 +6,7 @@ import { decomposeTasks } from './decomposer';
 import { syncMainBranch, createWorktree, removeWorktree } from './git';
 import { runReviewLoop, ReviewLoopResult } from './review';
 import { runCIPollingLoop, CIPollingResult } from './ci';
-import { checkAcceptanceCriteria, AcceptanceCheckResult, AcceptanceGateDeps, defaultQueryAI } from './story-acceptance-gate';
+import { checkAcceptanceCriteria, AcceptanceCheckResult, AcceptanceGateDeps, CriterionResult, generateAdditionalTasks, AdditionalTasksDeps, defaultQueryAI } from './story-acceptance-gate';
 
 /**
  * runner の外部依存を表すインターフェース。
@@ -54,6 +54,9 @@ export interface RunnerDeps {
 
   /** ストーリーの受け入れ条件をチェックする */
   checkAcceptanceCriteria: (story: StoryFile, tasks: TaskFile[], repoPath: string) => Promise<AcceptanceCheckResult>;
+
+  /** ユーザーコメントから追加タスク案を生成する */
+  generateAdditionalTasks: (story: StoryFile, existingTasks: TaskFile[], comment: string, failedCriteria: CriterionResult[]) => Promise<TaskDraft[]>;
 }
 
 /**
@@ -127,6 +130,12 @@ export function createDefaultRunnerDeps(): RunnerDeps {
         queryAI: defaultQueryAI,
       };
       return checkAcceptanceCriteria(story, tasks, repoPath, gateDeps);
+    },
+    generateAdditionalTasks: (story: StoryFile, existingTasks: TaskFile[], comment: string, failedCriteria: CriterionResult[]) => {
+      const additionalDeps: AdditionalTasksDeps = {
+        queryAI: defaultQueryAI,
+      };
+      return generateAdditionalTasks(story, existingTasks, comment, failedCriteria, additionalDeps);
     },
   };
 }
