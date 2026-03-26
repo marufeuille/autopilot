@@ -1,6 +1,6 @@
 import { execFile } from 'child_process';
 import * as readline from 'readline';
-import { NotificationBackend, ApprovalResult, TaskFailureAction } from './types';
+import { NotificationBackend, ApprovalResult, TaskFailureAction, AcceptanceCheckResult, AcceptanceGateAction } from './types';
 
 /**
  * ローカル通知バックエンド
@@ -82,6 +82,54 @@ export class LocalNotificationBackend implements NotificationBackend {
       case 'cancel':
         return 'cancel';
     }
+  }
+
+  /**
+   * 受け入れ条件ゲートのアクション選択
+   *
+   * requestApproval を再利用し、ApprovalResult → AcceptanceGateAction にマッピングする。
+   * allPassed の場合は approve → done、reject は不使用。
+   * 一部FAIL の場合は approve → force_done、reject → comment（理由をテキストとして返す）。
+   */
+  async requestAcceptanceGateAction(
+    storySlug: string,
+    checkResult: AcceptanceCheckResult,
+  ): Promise<AcceptanceGateAction> {
+    const conditionLines = checkResult.conditions.map((c) => {
+      const icon = c.passed ? '✅' : '❌';
+      return `${icon} ${c.condition}: ${c.reason}`;
+    });
+
+    const headerText = checkResult.allPassed
+      ? '受け入れ条件チェック: 全条件 PASS'
+      : '受け入れ条件チェック: 一部 FAIL';
+
+    const message =
+      `*${headerText}*\n*ストーリー*: \`${storySlug}\`\n\n` +
+      conditionLines.join('\n');
+
+    if (checkResult.allPassed) {
+      const result = await this.requestApproval(
+        `acceptance-${storySlug}`,
+        message,
+        { approve: 'Story を Done にする', reject: 'キャンセル' },
+      );
+      if (result.action === 'approve') {
+        return { action: 'done' };
+      }
+      throw new Error('受け入れゲートがキャンセルされました');
+    }
+
+    const result = await this.requestApproval(
+      `acceptance-${storySlug}`,
+      message,
+      { approve: 'このまま Done にする', reject: 'コメントして追加タスクを作る' },
+    );
+
+    if (result.action === 'approve') {
+      return { action: 'force_done' };
+    }
+    return { action: 'comment', text: result.action === 'reject' ? result.reason : '' };
   }
 
   /**

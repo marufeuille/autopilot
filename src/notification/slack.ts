@@ -2,8 +2,8 @@ import { App } from '@slack/bolt';
 import type { BlockAction, ButtonAction } from '@slack/bolt';
 import type { Block, KnownBlock, Button, ActionsBlock } from '@slack/types';
 import { config } from '../config';
-import type { NotificationBackend, ApprovalResult, NotifyOptions, TaskFailureAction } from './types';
-import { buildRejectModal, buildTaskFailureBlocks } from './message-builder';
+import type { NotificationBackend, ApprovalResult, NotifyOptions, TaskFailureAction, AcceptanceCheckResult, AcceptanceGateAction } from './types';
+import { buildRejectModal, buildTaskFailureBlocks, buildAcceptanceGateBlocks, buildAcceptanceCommentModal } from './message-builder';
 import { generateApprovalId } from './approval-id';
 import { signalRejection } from '../merge/rejection-registry';
 import { logError, logWarn } from '../logger';
@@ -26,8 +26,14 @@ interface PendingTaskFailure extends PendingMessage {
   originalBlocks: (Block | KnownBlock)[];
 }
 
+interface PendingAcceptanceGate extends PendingMessage {
+  resolve: (action: AcceptanceGateAction) => void;
+  originalBlocks: (Block | KnownBlock)[];
+}
+
 const pending = new Map<string, PendingApproval>();
 const pendingTaskFailure = new Map<string, PendingTaskFailure>();
+const pendingAcceptanceGate = new Map<string, PendingAcceptanceGate>();
 
 function buildApprovalBlocks(
   id: string,
@@ -289,6 +295,84 @@ function resolveTaskFailure(id: string, action: TaskFailureAction): void {
   pendingTaskFailure.delete(id);
 }
 
+function resolveAcceptanceGate(id: string, action: AcceptanceGateAction): void {
+  pendingAcceptanceGate.get(id)?.resolve(action);
+  pendingAcceptanceGate.delete(id);
+}
+
+/**
+ * 受け入れ条件ゲートの Slack アクションハンドラーを登録する
+ *
+ * cwk_acceptance_done / cwk_acceptance_force_done / cwk_acceptance_comment の
+ * 3つのボタンとコメント入力モーダルに対応する。
+ */
+export function registerAcceptanceGateHandlers(app: App): void {
+  // Done ボタン（全条件PASS時）
+  app.action<BlockAction<ButtonAction>>('cwk_acceptance_done', async ({ body, ack }) => {
+    await ack();
+    const metadata = JSON.parse(body.actions[0].value as string);
+    const id = metadata.id;
+    const entry = pendingAcceptanceGate.get(id);
+    if (entry) await updateMessageWithResult(app, entry, '✅ Story を Done にしました');
+    resolveAcceptanceGate(id, { action: 'done' });
+  });
+
+  // このまま Done にするボタン（一部FAIL時）
+  app.action<BlockAction<ButtonAction>>('cwk_acceptance_force_done', async ({ body, ack }) => {
+    await ack();
+    const metadata = JSON.parse(body.actions[0].value as string);
+    const id = metadata.id;
+    const entry = pendingAcceptanceGate.get(id);
+    if (entry) await updateMessageWithResult(app, entry, '⚠️ FAIL を無視して Done にしました');
+    resolveAcceptanceGate(id, { action: 'force_done' });
+  });
+
+  // コメントして追加タスクを作るボタン → モーダルを開く
+  app.action<BlockAction<ButtonAction>>('cwk_acceptance_comment', async ({ body, ack, client }) => {
+    await ack();
+    const metadata = JSON.parse(body.actions[0].value as string);
+    const id = metadata.id;
+    const storySlug = metadata.storySlug;
+    const entry = pendingAcceptanceGate.get(id);
+    if (entry) await updateMessageWithResult(app, entry, '⏳ コメントを入力中...');
+    await client.views.open({
+      trigger_id: body.trigger_id,
+      view: buildAcceptanceCommentModal(id, storySlug),
+    });
+  });
+
+  // コメントモーダル送信
+  app.view('cwk_acceptance_comment_modal', async ({ ack, view }) => {
+    await ack();
+    const { id } = JSON.parse(view.private_metadata);
+    const comment = view.state.values['comment_block']['comment_input'].value ?? '';
+    const entry = pendingAcceptanceGate.get(id);
+    if (entry) await updateMessageWithResult(app, entry, `💬 コメント: ${comment}`);
+    resolveAcceptanceGate(id, { action: 'comment', text: comment });
+  });
+
+  // コメントモーダルキャンセル → 元のボタンを復元し、pending を解放しない（ボタン再押下を許可）
+  app.view({ callback_id: 'cwk_acceptance_comment_modal', type: 'view_closed' }, async ({ ack, view }) => {
+    await ack();
+    const { id } = JSON.parse(view.private_metadata);
+    const entry = pendingAcceptanceGate.get(id);
+    if (!entry) return;
+    // originalBlocks を復元してボタンを再表示する
+    // ユーザーは再度ボタンを押して別のアクションを選択できる
+    try {
+      await app.client.chat.update({
+        channel: entry.channel,
+        ts: entry.ts,
+        blocks: entry.originalBlocks,
+        text: '',
+      });
+    } catch {
+      // メッセージ更新に失敗した場合は pending を解放して処理を終了する
+      resolveAcceptanceGate(id, { action: 'comment', text: '' });
+    }
+  });
+}
+
 /**
  * Slack 通知バックエンド
  *
@@ -360,6 +444,35 @@ export class SlackNotificationBackend implements NotificationBackend {
 
     return new Promise((resolve) =>
       pendingTaskFailure.set(id, {
+        resolve,
+        channel: config.slack.channelId,
+        ts: res.ts as string,
+        message,
+        originalBlocks: blocks,
+      }),
+    );
+  }
+
+  async requestAcceptanceGateAction(
+    storySlug: string,
+    checkResult: AcceptanceCheckResult,
+  ): Promise<AcceptanceGateAction> {
+    const id = generateApprovalId(storySlug, 'acceptance-gate');
+    const threadTs = this.threadSession.getThreadTs(storySlug);
+    const blocks = buildAcceptanceGateBlocks(id, storySlug, checkResult);
+
+    const headerIcon = checkResult.allPassed ? '✅' : '⚠️';
+    const message = `${headerIcon} 受け入れ条件チェック結果: \`${storySlug}\``;
+
+    const res = await this.app.client.chat.postMessage({
+      channel: config.slack.channelId,
+      text: message,
+      blocks,
+      ...(threadTs ? { thread_ts: threadTs } : {}),
+    });
+
+    return new Promise((resolve) =>
+      pendingAcceptanceGate.set(id, {
         resolve,
         channel: config.slack.channelId,
         ts: res.ts as string,

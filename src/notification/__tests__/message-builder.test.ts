@@ -7,6 +7,8 @@ import {
   buildCIEscalationMessage,
   buildNotificationMessage,
   buildTaskFailureBlocks,
+  buildAcceptanceGateBlocks,
+  buildAcceptanceCommentModal,
 } from '../message-builder';
 import type { NotificationContext } from '../types';
 
@@ -321,5 +323,127 @@ describe('buildTaskFailureBlocks', () => {
       expect(parsed.taskSlug).toBe(taskSlug);
       expect(parsed.storySlug).toBe(storySlug);
     }
+  });
+});
+
+describe('buildAcceptanceGateBlocks', () => {
+  const id = 'test-story--acceptance-gate--123';
+  const storySlug = 'test-story';
+
+  describe('全条件PASSの場合', () => {
+    const checkResult = {
+      allPassed: true,
+      conditions: [
+        { condition: 'ログインAPIが動作する', passed: true, reason: 'テスト通過' },
+        { condition: 'テストが通る', passed: true, reason: '全テスト通過' },
+      ],
+    };
+
+    it('section ブロックにストーリー名と全条件 PASS が含まれる', () => {
+      const blocks = buildAcceptanceGateBlocks(id, storySlug, checkResult);
+      const section = blocks.find((b) => b.type === 'section') as any;
+      expect(section).toBeDefined();
+      expect(section.text.text).toContain(storySlug);
+      expect(section.text.text).toContain('全条件 PASS');
+      expect(section.text.text).toContain('✅');
+    });
+
+    it('各条件のPASS表示が含まれる', () => {
+      const blocks = buildAcceptanceGateBlocks(id, storySlug, checkResult);
+      const section = blocks.find((b) => b.type === 'section') as any;
+      expect(section.text.text).toContain('✅ ログインAPIが動作する');
+      expect(section.text.text).toContain('テスト通過');
+      expect(section.text.text).toContain('✅ テストが通る');
+      expect(section.text.text).toContain('全テスト通過');
+    });
+
+    it('「Story を Done にする」ボタンが表示される', () => {
+      const blocks = buildAcceptanceGateBlocks(id, storySlug, checkResult);
+      const actions = blocks.find((b) => b.type === 'actions') as any;
+      expect(actions).toBeDefined();
+      expect(actions.elements).toHaveLength(1);
+      expect(actions.elements[0].action_id).toBe('cwk_acceptance_done');
+      expect(actions.elements[0].text.text).toBe('Story を Done にする');
+      expect(actions.elements[0].style).toBe('primary');
+    });
+
+    it('ボタンの value に id と storySlug が JSON で埋め込まれる', () => {
+      const blocks = buildAcceptanceGateBlocks(id, storySlug, checkResult);
+      const actions = blocks.find((b) => b.type === 'actions') as any;
+      const parsed = JSON.parse(actions.elements[0].value);
+      expect(parsed.id).toBe(id);
+      expect(parsed.storySlug).toBe(storySlug);
+    });
+  });
+
+  describe('一部FAILの場合', () => {
+    const checkResult = {
+      allPassed: false,
+      conditions: [
+        { condition: 'ログインAPIが動作する', passed: true, reason: 'テスト通過' },
+        { condition: 'テストが通る', passed: false, reason: '2件のテストが失敗' },
+      ],
+    };
+
+    it('section ブロックに一部 FAIL が含まれる', () => {
+      const blocks = buildAcceptanceGateBlocks(id, storySlug, checkResult);
+      const section = blocks.find((b) => b.type === 'section') as any;
+      expect(section.text.text).toContain('一部 FAIL');
+      expect(section.text.text).toContain('⚠️');
+    });
+
+    it('PASS/FAILの詳細が表示される', () => {
+      const blocks = buildAcceptanceGateBlocks(id, storySlug, checkResult);
+      const section = blocks.find((b) => b.type === 'section') as any;
+      expect(section.text.text).toContain('✅ ログインAPIが動作する');
+      expect(section.text.text).toContain('❌ テストが通る');
+      expect(section.text.text).toContain('2件のテストが失敗');
+    });
+
+    it('「このまま Done にする」と「コメントして追加タスクを作る」ボタンが表示される', () => {
+      const blocks = buildAcceptanceGateBlocks(id, storySlug, checkResult);
+      const actions = blocks.find((b) => b.type === 'actions') as any;
+      expect(actions).toBeDefined();
+      expect(actions.elements).toHaveLength(2);
+
+      const forceDoneBtn = actions.elements.find((e: any) => e.action_id === 'cwk_acceptance_force_done');
+      expect(forceDoneBtn).toBeDefined();
+      expect(forceDoneBtn.text.text).toBe('このまま Done にする');
+
+      const commentBtn = actions.elements.find((e: any) => e.action_id === 'cwk_acceptance_comment');
+      expect(commentBtn).toBeDefined();
+      expect(commentBtn.text.text).toBe('コメントして追加タスクを作る');
+      expect(commentBtn.style).toBe('primary');
+    });
+  });
+});
+
+describe('buildAcceptanceCommentModal', () => {
+  it('モーダルの callback_id が cwk_acceptance_comment_modal である', () => {
+    const modal = buildAcceptanceCommentModal('test-id', 'test-story');
+    expect(modal.callback_id).toBe('cwk_acceptance_comment_modal');
+  });
+
+  it('private_metadata に id と storySlug が JSON で埋め込まれる', () => {
+    const modal = buildAcceptanceCommentModal('test-id', 'test-story');
+    const parsed = JSON.parse(modal.private_metadata!);
+    expect(parsed.id).toBe('test-id');
+    expect(parsed.storySlug).toBe('test-story');
+  });
+
+  it('テキスト入力ブロックが含まれる', () => {
+    const modal = buildAcceptanceCommentModal('test-id', 'test-story');
+    expect(modal.blocks).toHaveLength(1);
+    const input = modal.blocks[0] as any;
+    expect(input.type).toBe('input');
+    expect(input.block_id).toBe('comment_block');
+    expect(input.element.action_id).toBe('comment_input');
+    expect(input.element.multiline).toBe(true);
+  });
+
+  it('送信・キャンセルボタンのラベルが正しい', () => {
+    const modal = buildAcceptanceCommentModal('test-id', 'test-story');
+    expect(modal.submit?.text).toBe('送信');
+    expect(modal.close?.text).toBe('キャンセル');
   });
 });
