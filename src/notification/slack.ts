@@ -1,6 +1,6 @@
 import { App } from '@slack/bolt';
 import type { BlockAction, ButtonAction } from '@slack/bolt';
-import type { Block, KnownBlock } from '@slack/types';
+import type { Block, KnownBlock, Button, ActionsBlock } from '@slack/types';
 import { config } from '../config';
 import type { NotificationBackend, ApprovalResult, NotifyOptions } from './types';
 import { buildRejectModal } from './message-builder';
@@ -21,32 +21,43 @@ const pending = new Map<string, PendingApproval>();
 function buildApprovalBlocks(
   id: string,
   message: string,
-  buttons: { approve: string; reject: string },
+  buttons: { approve: string; reject: string; cancel?: string },
 ): (Block | KnownBlock)[] {
+  const elements: Button[] = [
+    {
+      type: 'button',
+      text: { type: 'plain_text', text: buttons.approve },
+      style: 'primary',
+      action_id: 'cwk_approve',
+      value: id,
+    },
+    {
+      type: 'button',
+      text: { type: 'plain_text', text: buttons.reject },
+      style: 'danger',
+      action_id: 'cwk_reject',
+      value: id,
+    },
+  ];
+  if (buttons.cancel) {
+    elements.push({
+      type: 'button',
+      text: { type: 'plain_text', text: buttons.cancel },
+      style: 'danger',
+      action_id: 'cwk_cancel',
+      value: id,
+    });
+  }
+  const actionsBlock: ActionsBlock = {
+    type: 'actions',
+    elements,
+  };
   return [
     {
       type: 'section',
       text: { type: 'mrkdwn', text: message },
     },
-    {
-      type: 'actions',
-      elements: [
-        {
-          type: 'button',
-          text: { type: 'plain_text', text: buttons.approve },
-          style: 'primary',
-          action_id: 'cwk_approve',
-          value: id,
-        },
-        {
-          type: 'button',
-          text: { type: 'plain_text', text: buttons.reject },
-          style: 'danger',
-          action_id: 'cwk_reject',
-          value: id,
-        },
-      ],
-    },
+    actionsBlock,
   ];
 }
 
@@ -90,9 +101,9 @@ function resolveApproval(id: string, result: ApprovalResult): void {
  */
 export function registerApprovalHandlers(app: App): void {
   // 承認ボタン: メッセージを更新してすぐ解決
-  app.action('cwk_approve', async ({ body, ack }) => {
+  app.action<BlockAction<ButtonAction>>('cwk_approve', async ({ body, ack }) => {
     await ack();
-    const action = (body as any).actions[0];
+    const action = body.actions[0];
     const id = action.value as string;
     const label = action.text?.text ?? '承認';
     const entry = pending.get(id);
@@ -100,14 +111,26 @@ export function registerApprovalHandlers(app: App): void {
     resolveApproval(id, { action: 'approve' });
   });
 
-  // 却下ボタン: ボタンをすぐ消してからモーダルを開く
-  app.action('cwk_reject', async ({ body, ack, client }) => {
+  // キャンセルボタン: メッセージを更新してすぐ解決
+  app.action<BlockAction<ButtonAction>>('cwk_cancel', async ({ body, ack }) => {
     await ack();
-    const id = (body as any).actions[0].value as string;
+    const action = body.actions[0];
+    const id = action.value as string;
+    const label = action.text?.text ?? 'キャンセル';
+    const entry = pending.get(id);
+    if (!entry) return;
+    await updateMessageWithResult(app, entry, `🚫 ${label}`);
+    resolveApproval(id, { action: 'cancel' });
+  });
+
+  // 却下ボタン: ボタンをすぐ消してからモーダルを開く
+  app.action<BlockAction<ButtonAction>>('cwk_reject', async ({ body, ack, client }) => {
+    await ack();
+    const id = body.actions[0].value as string;
     const entry = pending.get(id);
     if (entry) await updateMessageWithResult(app, entry, '⏳ やり直し理由を入力中...');
     await client.views.open({
-      trigger_id: (body as any).trigger_id,
+      trigger_id: body.trigger_id,
       view: {
         type: 'modal',
         callback_id: 'cwk_reject_modal',
@@ -254,7 +277,7 @@ export class SlackNotificationBackend implements NotificationBackend {
   requestApproval(
     id: string,
     message: string,
-    buttons: { approve: string; reject: string },
+    buttons: { approve: string; reject: string; cancel?: string },
     storySlug?: string,
   ): Promise<ApprovalResult> {
     return this._postApprovalRequest(id, message, buttons, storySlug);
@@ -264,7 +287,7 @@ export class SlackNotificationBackend implements NotificationBackend {
   private async _postApprovalRequest(
     id: string,
     message: string,
-    buttons: { approve: string; reject: string },
+    buttons: { approve: string; reject: string; cancel?: string },
     storySlug?: string,
   ): Promise<ApprovalResult> {
     const threadTs = storySlug ? this.threadSession.getThreadTs(storySlug) : undefined;
