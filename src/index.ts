@@ -2,9 +2,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import chokidar from 'chokidar';
 import { config, vaultStoriesPath } from './config';
-import { readStoryFile } from './vault/reader';
+import { readStoryFile, readStoryBySlug } from './vault/reader';
+import { updateFileStatus } from './vault/writer';
 import { runStory } from './runner';
 import { NotificationBackend, createNotificationBackend } from './notification';
+import { StoryQueueManager } from './queue/queue-manager';
+import { promoteNextQueuedStory } from './queue/auto-promote';
 
 // 実行中ストーリーの重複起動防止
 const runningStories = new Set<string>();
@@ -13,6 +16,7 @@ async function handleStoryFile(
   filePath: string,
   project: string,
   notifier: NotificationBackend,
+  queueManager: StoryQueueManager,
 ): Promise<void> {
   if (!filePath.endsWith('.md')) return;
 
@@ -27,14 +31,32 @@ async function handleStoryFile(
 
   console.log(`[orchestrator] story detected: ${storyId}`);
   runningStories.add(storyId);
-  runStory(story, notifier)
-    .catch(console.error)
-    .finally(() => runningStories.delete(storyId));
+
+  try {
+    const finalStatus = await runStory(story, notifier);
+
+    // Story 完了後にキュー先頭を自動プロモート
+    await promoteNextQueuedStory(
+      finalStatus,
+      story,
+      queueManager,
+      notifier,
+      { updateFileStatus, runStory },
+    );
+  } catch (error) {
+    console.error(error);
+  } finally {
+    runningStories.delete(storyId);
+  }
 }
 
 async function main(): Promise<void> {
+  // キューマネージャーを生成（全バックエンドで共有）
+  const queueManager = new StoryQueueManager({ readStoryBySlug, updateFileStatus });
+
   // ファクトリ経由で通知バックエンドを生成（環境変数 NOTIFY_BACKEND で切り替え）
-  const notifier = await createNotificationBackend();
+  // Slack バックエンドの場合、共有 QueueManager を Slack コマンドにも渡す
+  const notifier = await createNotificationBackend({ queueManager });
   const backendType = process.env.NOTIFY_BACKEND ?? 'local';
   console.log(`[notification] backend started: ${backendType}`);
 
@@ -53,11 +75,11 @@ async function main(): Promise<void> {
   });
 
   watcher.on('add', (filePath) => {
-    handleStoryFile(path.resolve(filePath), project, notifier).catch(console.error);
+    handleStoryFile(path.resolve(filePath), project, notifier, queueManager).catch(console.error);
   });
 
   watcher.on('change', (filePath) => {
-    handleStoryFile(path.resolve(filePath), project, notifier).catch(console.error);
+    handleStoryFile(path.resolve(filePath), project, notifier, queueManager).catch(console.error);
   });
 
   console.log('[orchestrator] ready');

@@ -373,7 +373,7 @@ export async function runStory(
   story: StoryFile,
   notifier: NotificationBackend,
   deps?: RunnerDeps,
-): Promise<void> {
+): Promise<StoryStatus> {
   const d = deps ?? createDefaultRunnerDeps();
   const repoPath = resolveRepoPath(story.project);
   console.log(`[runner] starting story: ${story.slug}`);
@@ -390,11 +390,12 @@ export async function runStory(
     if (decompositionResult === 'cancelled') {
       notifier.endSession(story.slug);
       console.log(`[runner] thread session ended for story: ${story.slug}`);
-      return;
+      return 'Cancelled';
     }
   }
 
   // タスク実行 → 受け入れ条件チェック → 追加タスクのループ
+  let finalStatus: StoryStatus = 'Doing';
   let acceptanceGatePassed = false;
   while (!acceptanceGatePassed) {
     const allCurrentTasks = await d.getStoryTasks(story.project, story.slug);
@@ -405,7 +406,7 @@ export async function runStory(
       if (taskResult === 'cancelled') {
         notifier.endSession(story.slug);
         console.log(`[runner] thread session ended for story: ${story.slug}`);
-        return;
+        return 'Cancelled';
       }
     }
 
@@ -440,6 +441,7 @@ export async function runStory(
       const icon = storyStatus === 'Cancelled' ? '🚫' : '❌';
       await notifier.notify(`${icon} ストーリー${storyStatus}: ${story.slug}\n${summary}`, story.slug);
       console.log(`[runner] story ${storyStatus}: ${story.slug}, ${summary}`);
+      finalStatus = storyStatus;
       acceptanceGatePassed = true;
       break;
     }
@@ -457,6 +459,7 @@ export async function runStory(
       d.updateFileStatus(story.filePath, 'Done');
       await notifier.notify(`✅ ストーリー完了: ${story.slug}`, story.slug);
       console.log(`[runner] story done: ${story.slug}`);
+      finalStatus = 'Done';
       acceptanceGatePassed = true;
     }
     // gateResult === 'continue' の場合、ループの先頭に戻って追加タスクを実行
@@ -465,4 +468,5 @@ export async function runStory(
   // スレッドセッション終了: メモリを解放
   notifier.endSession(story.slug);
   console.log(`[runner] thread session ended for story: ${story.slug}`);
+  return finalStatus;
 }
