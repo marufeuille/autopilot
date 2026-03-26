@@ -1044,6 +1044,54 @@ describe('runTask', () => {
     expect(retryPrompt).toContain('既存設計から逸脱した過剰な実装は避ける');
   });
 
+  it('buildTaskPrompt の出力にテスト作成必須のルールが含まれる', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    await runTask(task, story, notifier, repoPath);
+
+    expect(mockQuery).toHaveBeenCalled();
+    const callArgs = mockQuery.mock.calls[0] as unknown[];
+    const options = callArgs[0] as { prompt: string };
+    const prompt = options.prompt;
+
+    expect(prompt).toContain('必ず対応するテストを作成すること');
+    expect(prompt).toContain('ユニットテストを基本');
+    expect(prompt).toContain('既存テストが壊れていないことも確認');
+  });
+
+  it('buildRetryPrompt の出力にテスト作成必須のルールが含まれる', async () => {
+    const story = createStory();
+    const task = createTask('task-01', 'Todo');
+    const notifier = createMockNotifier('approve');
+    const repoPath = '/Users/test/dev/myproject';
+
+    // 1回目のレビューをNG+エスカレーションにして retry を発生させる
+    mockRunReviewLoop
+      .mockResolvedValueOnce({
+        finalVerdict: 'NG',
+        escalationRequired: true,
+        iterations: [
+          { iteration: 1, reviewResult: { verdict: 'NG', summary: 'Issues found', findings: [] }, timestamp: new Date() },
+        ],
+        lastReviewResult: { verdict: 'NG', summary: 'Issues found', findings: [] },
+      });
+
+    await runTask(task, story, notifier, repoPath);
+
+    // retry により mockQuery が2回呼ばれる（初回 + retry）
+    expect(mockQuery.mock.calls.length).toBeGreaterThanOrEqual(2);
+    const retryCallArgs = mockQuery.mock.calls[1] as unknown[];
+    const retryOptions = retryCallArgs[0] as { prompt: string };
+    const retryPrompt = retryOptions.prompt;
+
+    expect(retryPrompt).toContain('必ず対応するテストを作成すること');
+    expect(retryPrompt).toContain('ユニットテストを基本');
+    expect(retryPrompt).toContain('既存テストが壊れていないことも確認');
+  });
+
   it('正常実行時は Doing で updateFileStatus が呼ばれ、完了時は recordTaskCompletion が呼ばれる', async () => {
     const story = createStory();
     const task = createTask('task-01', 'Todo');
