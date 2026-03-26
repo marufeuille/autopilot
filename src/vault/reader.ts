@@ -5,12 +5,13 @@ import { glob } from 'glob';
 import { vaultProjectPath, vaultTasksPath } from '../config';
 
 export type TaskStatus = 'Todo' | 'Doing' | 'Done' | 'Failed' | 'Skipped' | 'Cancelled';
+export type StoryStatus = 'Todo' | 'Doing' | 'Done' | 'Failed' | 'Cancelled';
 
 export interface StoryFile {
   filePath: string;
   project: string;
   slug: string;
-  status: string;
+  status: StoryStatus;
   frontmatter: Record<string, unknown>;
   content: string;
 }
@@ -35,7 +36,7 @@ export function readStoryFile(filePath: string): StoryFile {
     filePath,
     project,
     slug: path.basename(filePath, '.md'),
-    status: data.status ?? '',
+    status: (data.status as StoryStatus) ?? 'Todo',
     frontmatter: data,
     content,
   };

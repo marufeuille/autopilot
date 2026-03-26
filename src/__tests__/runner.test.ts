@@ -1377,4 +1377,18 @@ describe('deriveStoryStatus', () => {
     const tasks = [createTask('t1', 'Skipped'), createTask('t2', 'Skipped')];
     expect(deriveStoryStatus(tasks)).toBe('Done');
   });
+
+  it('空配列 → Done', () => {
+    expect(deriveStoryStatus([])).toBe('Done');
+  });
+
+  it('Cancelled のみ（Done なし） → Cancelled', () => {
+    const tasks = [createTask('t1', 'Cancelled'), createTask('t2', 'Cancelled')];
+    expect(deriveStoryStatus(tasks)).toBe('Cancelled');
+  });
+
+  it('Failed のみ（Done なし） → Failed', () => {
+    const tasks = [createTask('t1', 'Failed'), createTask('t2', 'Failed')];
+    expect(deriveStoryStatus(tasks)).toBe('Failed');
+  });
 });

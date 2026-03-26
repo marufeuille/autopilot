@@ -1,4 +1,4 @@
-import { StoryFile, TaskFile, TaskStatus } from './vault/reader';
+import { StoryFile, StoryStatus, TaskFile, TaskStatus } from './vault/reader';
 import { TaskDraft } from './vault/writer';
 import {
   NotificationBackend,
@@ -153,8 +153,11 @@ async function tryDocUpdateAndNotify(
  * - Cancelled タスクが1つ以上 → Cancelled
  * - Failed タスクが1つ以上 → Failed
  * - 全タスクが Done or Skipped → Done
+ *
+ * @param tasks 空でないタスク配列。空配列の場合は 'Done' を返す。
  */
-export function deriveStoryStatus(tasks: TaskFile[]): string {
+export function deriveStoryStatus(tasks: TaskFile[]): StoryStatus {
+  if (tasks.length === 0) return 'Done';
   if (tasks.some((t) => t.status === 'Cancelled')) return 'Cancelled';
   if (tasks.some((t) => t.status === 'Failed')) return 'Failed';
   return 'Done';
@@ -204,7 +207,6 @@ export async function runStory(
     ? await d.getStoryTasks(story.project, story.slug)
     : allCurrentTasks;
   const allTerminal = allTasks.length > 0 && allTasks.every((t) => terminalStatuses.includes(t.status));
-  const allDoneOrSkipped = allTasks.length > 0 && allTasks.every((t) => t.status === 'Done' || t.status === 'Skipped');
 
   if (allTerminal) {
     // Done タスクがあれば README 更新を試みる
