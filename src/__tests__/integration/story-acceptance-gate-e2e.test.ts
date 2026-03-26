@@ -257,10 +257,10 @@ describe('受け入れ条件ゲート E2E テスト', () => {
         expect(notifier.acceptanceGateRequests[0].checkResult.allPassed).toBe(false);
         expect(notifier.acceptanceGateRequests[0].response).toEqual({ action: 'force_done' });
 
-        // チェック結果に FAIL が含まれている
-        const conditions = notifier.acceptanceGateRequests[0].checkResult.conditions;
-        expect(conditions).toHaveLength(2);
-        expect(conditions.find((c) => !c.passed)).toBeDefined();
+        // チェック結果に FAIL が含まれている（gate型の results で検証）
+        const results = checkResult.results;
+        expect(results).toHaveLength(2);
+        expect(results.find((c) => c.result === 'FAIL')).toBeDefined();
       }, {
         project: PROJECT,
         story: { slug: STORY_SLUG, status: 'Doing' },
@@ -596,16 +596,19 @@ describe('受け入れ条件ゲート E2E テスト', () => {
         await runStory(story, notifier, deps);
 
         // チェック結果が正しく変換されて通知されている
+        // Notifier にはゲートリクエストが送信されたことを確認
         const gateReq = notifier.acceptanceGateRequests[0];
-        expect(gateReq.checkResult.conditions).toHaveLength(3);
+        expect(gateReq).toBeDefined();
+        // gate型の results で各条件を検証
+        expect(checkResult.results).toHaveLength(3);
         // PASS 条件
-        const passConditions = gateReq.checkResult.conditions.filter((c) => c.passed);
-        expect(passConditions).toHaveLength(2);
+        const passResults = checkResult.results.filter((c) => c.result === 'PASS');
+        expect(passResults).toHaveLength(2);
         // FAIL 条件
-        const failConditions = gateReq.checkResult.conditions.filter((c) => !c.passed);
-        expect(failConditions).toHaveLength(1);
-        expect(failConditions[0].condition).toBe('条件B');
-        expect(failConditions[0].reason).toBe('未実装');
+        const failResults = checkResult.results.filter((c) => c.result === 'FAIL');
+        expect(failResults).toHaveLength(1);
+        expect(failResults[0].criterion).toBe('条件B');
+        expect(failResults[0].reason).toBe('未実装');
       }, {
         project: PROJECT,
         story: { slug: STORY_SLUG, status: 'Doing' },
