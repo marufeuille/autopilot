@@ -126,6 +126,29 @@ describe('processStoryCompletion', () => {
   });
 
   // ──────────────────────────────────
+  // Queued / Draft（新規ステータス）→ キュー継続
+  // ──────────────────────────────────
+  describe('Queued / Draft ステータス', () => {
+    it('Queued でもキューは停止しない', () => {
+      qm.enqueue(makeStory('next-story'));
+
+      const result = processStoryCompletion('Queued', qm);
+
+      expect(result).toEqual({ action: 'continue' });
+      expect(qm.isQueuePaused).toBe(false);
+    });
+
+    it('Draft でもキューは停止しない', () => {
+      qm.enqueue(makeStory('next-story'));
+
+      const result = processStoryCompletion('Draft', qm);
+
+      expect(result).toEqual({ action: 'continue' });
+      expect(qm.isQueuePaused).toBe(false);
+    });
+  });
+
+  // ──────────────────────────────────
   // resumeQueue 後の動作確認
   // ──────────────────────────────────
   describe('Failed 後の resumeQueue', () => {

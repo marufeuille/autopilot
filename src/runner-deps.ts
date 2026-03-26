@@ -1,6 +1,6 @@
 import { execSync, execFileSync } from 'child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import { StoryFile, TaskFile, TaskStatus, getStoryTasks } from './vault/reader';
+import { StoryFile, StoryStatus, TaskFile, TaskStatus, getStoryTasks } from './vault/reader';
 import { updateFileStatus, createTaskFile, TaskDraft, recordTaskCompletion, TaskCompletionRecord } from './vault/writer';
 import { decomposeTasks } from './decomposer';
 import { syncMainBranch, createWorktree, removeWorktree } from './git';
@@ -41,7 +41,7 @@ export interface RunnerDeps {
   getStoryTasks: (project: string, storySlug: string) => Promise<TaskFile[]>;
 
   /** ファイルのステータスを更新する */
-  updateFileStatus: (filePath: string, status: TaskStatus) => void;
+  updateFileStatus: (filePath: string, status: TaskStatus | StoryStatus) => void;
 
   /** タスク完了を Vault に記録する */
   recordTaskCompletion: (filePath: string, record: TaskCompletionRecord) => void;

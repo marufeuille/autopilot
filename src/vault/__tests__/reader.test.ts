@@ -77,6 +77,26 @@ describe('vault/reader', () => {
       expect(story.project).toBe('another-proj');
     });
 
+    it('status が Queued の場合は Queued を返す', () => {
+      vault = createFakeVault({
+        project: 'test-project',
+        story: { slug: 'queued-story', status: 'Queued' as any },
+      });
+
+      const story = readStoryFile(vault.storyFilePath);
+      expect(story.status).toBe('Queued');
+    });
+
+    it('status が Draft の場合は Draft を返す', () => {
+      vault = createFakeVault({
+        project: 'test-project',
+        story: { slug: 'draft-story', status: 'Draft' as any },
+      });
+
+      const story = readStoryFile(vault.storyFilePath);
+      expect(story.status).toBe('Draft');
+    });
+
     it('パスに Projects/ が含まれない場合は空文字を返す', () => {
       // 一時ファイルを Projects/ を含まないパスに直接作成
       const fs = require('fs');
