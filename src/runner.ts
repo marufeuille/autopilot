@@ -50,7 +50,7 @@ async function runDecomposition(
   story: StoryFile,
   notifier: NotificationBackend,
   deps: RunnerDeps,
-): Promise<void> {
+): Promise<boolean> {
   let retryReason: string | undefined;
 
   while (true) {
@@ -61,7 +61,7 @@ async function runDecomposition(
     const result = await notifier.requestApproval(
       id,
       formatDecompositionMessage(story, drafts),
-      { approve: '承認', reject: 'やり直し' },
+      { approve: '承認', reject: 'やり直し', cancel: 'キャンセル' },
       story.slug,
     );
 
@@ -70,7 +70,14 @@ async function runDecomposition(
         deps.createTaskFile(story.project, story.slug, draft);
         console.log(`[runner] task file created: ${draft.slug}`);
       }
-      return;
+      return true;
+    }
+
+    if (result.action === 'cancel') {
+      deps.updateFileStatus(story.filePath, 'Cancelled');
+      await notifier.notify(`🚫 ストーリーがキャンセルされました: ${story.slug}`, story.slug);
+      console.log(`[runner] story cancelled: ${story.slug}`);
+      return false;
     }
 
     retryReason = result.reason;
@@ -157,7 +164,12 @@ export async function runStory(
   console.log(`[runner] thread session started for story: ${story.slug}`);
 
   if (tasks.length === 0) {
-    await runDecomposition(story, notifier, d);
+    const continued = await runDecomposition(story, notifier, d);
+    if (!continued) {
+      notifier.endSession(story.slug);
+      console.log(`[runner] thread session ended for story: ${story.slug}`);
+      return;
+    }
   }
 
   const allCurrentTasks = await d.getStoryTasks(story.project, story.slug);
