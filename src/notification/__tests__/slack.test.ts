@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Block, KnownBlock } from '@slack/types';
-import { SlackNotificationBackend, registerApprovalHandlers } from '../slack';
+import { SlackNotificationBackend, registerApprovalHandlers, registerQueueFailedHandlers } from '../slack';
 import type { NotificationBackend, ApprovalResult } from '../types';
 
 /**
@@ -1112,6 +1112,224 @@ describe('キャンセルボタン機能', () => {
       expect(ack).toHaveBeenCalled();
       // メッセージ更新が呼ばれていないことを確認
       expect(mockApp.client.chat.update).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('registerQueueFailedHandlers - キュー停止フロー', () => {
+  let mockApp: ReturnType<typeof createMockApp>;
+  let backend: SlackNotificationBackend;
+
+  beforeEach(() => {
+    mockApp = createMockApp();
+    registerQueueFailedHandlers(mockApp);
+    backend = new SlackNotificationBackend(mockApp);
+  });
+
+  it('ハンドラーが正しく登録される', () => {
+    expect(mockApp.action).toHaveBeenCalledWith('cwk_queue_resume', expect.any(Function));
+    expect(mockApp.action).toHaveBeenCalledWith('cwk_queue_retry', expect.any(Function));
+    expect(mockApp.action).toHaveBeenCalledWith('cwk_queue_clear', expect.any(Function));
+  });
+
+  it('requestQueueFailedAction がボタン付きメッセージを Slack に投稿する', async () => {
+    const promise = backend.requestQueueFailedAction(
+      'my-story',
+      '🚨 キューが停止しました\nStory: my-story が Failed になりました',
+    );
+
+    expect(mockApp.client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: expect.any(String),
+        text: expect.stringContaining('キューが停止しました'),
+        blocks: expect.arrayContaining([
+          expect.objectContaining({ type: 'section' }),
+          expect.objectContaining({
+            type: 'actions',
+            elements: expect.arrayContaining([
+              expect.objectContaining({ action_id: 'cwk_queue_resume' }),
+              expect.objectContaining({ action_id: 'cwk_queue_retry' }),
+              expect.objectContaining({ action_id: 'cwk_queue_clear' }),
+            ]),
+          }),
+        ]),
+      }),
+    );
+
+    void promise;
+  });
+
+  describe('cwk_queue_resume ボタン押下', () => {
+    it('resume アクションで "resume" が返る', async () => {
+      const queuePromise = backend.requestQueueFailedAction(
+        'story-resume',
+        '🚨 キューが停止しました',
+      );
+
+      // postMessage で返される ts を取得するための id を抽出
+      const callArgs = mockApp.client.chat.postMessage.mock.calls[0][0];
+      const actionsBlock = callArgs.blocks.find((b: any) => b.type === 'actions');
+      const resumeBtn = actionsBlock.elements.find((e: any) => e.action_id === 'cwk_queue_resume');
+      const metadata = resumeBtn.value;
+
+      const resumeHandler = mockApp._actionHandlers.get('cwk_queue_resume');
+      await resumeHandler({
+        ack: vi.fn(),
+        body: {
+          actions: [{ value: metadata }],
+        },
+      });
+
+      const result = await queuePromise;
+      expect(result).toBe('resume');
+    });
+
+    it('メッセージが更新される', async () => {
+      const queuePromise = backend.requestQueueFailedAction(
+        'story-resume-msg',
+        '🚨 キューが停止しました',
+      );
+
+      const callArgs = mockApp.client.chat.postMessage.mock.calls[0][0];
+      const actionsBlock = callArgs.blocks.find((b: any) => b.type === 'actions');
+      const resumeBtn = actionsBlock.elements.find((e: any) => e.action_id === 'cwk_queue_resume');
+
+      const resumeHandler = mockApp._actionHandlers.get('cwk_queue_resume');
+      await resumeHandler({
+        ack: vi.fn(),
+        body: {
+          actions: [{ value: resumeBtn.value }],
+        },
+      });
+
+      await queuePromise;
+
+      expect(mockApp.client.chat.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: '⏭️ スキップして次へ',
+        }),
+      );
+    });
+  });
+
+  describe('cwk_queue_retry ボタン押下', () => {
+    it('retry アクションで "retry" が返る', async () => {
+      const queuePromise = backend.requestQueueFailedAction(
+        'story-retry',
+        '🚨 キューが停止しました',
+      );
+
+      const callArgs = mockApp.client.chat.postMessage.mock.calls[0][0];
+      const actionsBlock = callArgs.blocks.find((b: any) => b.type === 'actions');
+      const retryBtn = actionsBlock.elements.find((e: any) => e.action_id === 'cwk_queue_retry');
+
+      const retryHandler = mockApp._actionHandlers.get('cwk_queue_retry');
+      await retryHandler({
+        ack: vi.fn(),
+        body: {
+          actions: [{ value: retryBtn.value }],
+        },
+      });
+
+      const result = await queuePromise;
+      expect(result).toBe('retry');
+    });
+
+    it('メッセージが更新される', async () => {
+      const queuePromise = backend.requestQueueFailedAction(
+        'story-retry-msg',
+        '🚨 キューが停止しました',
+      );
+
+      const callArgs = mockApp.client.chat.postMessage.mock.calls[0][0];
+      const actionsBlock = callArgs.blocks.find((b: any) => b.type === 'actions');
+      const retryBtn = actionsBlock.elements.find((e: any) => e.action_id === 'cwk_queue_retry');
+
+      const retryHandler = mockApp._actionHandlers.get('cwk_queue_retry');
+      await retryHandler({
+        ack: vi.fn(),
+        body: {
+          actions: [{ value: retryBtn.value }],
+        },
+      });
+
+      await queuePromise;
+
+      expect(mockApp.client.chat.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: '🔄 このStoryをリトライ',
+        }),
+      );
+    });
+  });
+
+  describe('cwk_queue_clear ボタン押下', () => {
+    it('clear アクションで "clear" が返る', async () => {
+      const queuePromise = backend.requestQueueFailedAction(
+        'story-clear',
+        '🚨 キューが停止しました',
+      );
+
+      const callArgs = mockApp.client.chat.postMessage.mock.calls[0][0];
+      const actionsBlock = callArgs.blocks.find((b: any) => b.type === 'actions');
+      const clearBtn = actionsBlock.elements.find((e: any) => e.action_id === 'cwk_queue_clear');
+
+      const clearHandler = mockApp._actionHandlers.get('cwk_queue_clear');
+      await clearHandler({
+        ack: vi.fn(),
+        body: {
+          actions: [{ value: clearBtn.value }],
+        },
+      });
+
+      const result = await queuePromise;
+      expect(result).toBe('clear');
+    });
+
+    it('メッセージが更新される', async () => {
+      const queuePromise = backend.requestQueueFailedAction(
+        'story-clear-msg',
+        '🚨 キューが停止しました',
+      );
+
+      const callArgs = mockApp.client.chat.postMessage.mock.calls[0][0];
+      const actionsBlock = callArgs.blocks.find((b: any) => b.type === 'actions');
+      const clearBtn = actionsBlock.elements.find((e: any) => e.action_id === 'cwk_queue_clear');
+
+      const clearHandler = mockApp._actionHandlers.get('cwk_queue_clear');
+      await clearHandler({
+        ack: vi.fn(),
+        body: {
+          actions: [{ value: clearBtn.value }],
+        },
+      });
+
+      await queuePromise;
+
+      expect(mockApp.client.chat.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: '🗑️ キューをすべてクリア',
+        }),
+      );
+    });
+  });
+
+  describe('スレッド内投稿', () => {
+    it('storySlug のスレッドが存在する場合はスレッド内に投稿される', async () => {
+      // スレッドを開始
+      mockApp.client.chat.postMessage.mockResolvedValueOnce({ ts: 'queue-thread-ts' });
+      await backend.startThread('queue-story', 'ストーリー開始');
+
+      // キュー停止通知
+      const promise = backend.requestQueueFailedAction(
+        'queue-story',
+        '🚨 キューが停止しました',
+      );
+
+      const postCall = mockApp.client.chat.postMessage.mock.calls[1][0];
+      expect(postCall.thread_ts).toBe('queue-thread-ts');
+
+      void promise;
     });
   });
 });

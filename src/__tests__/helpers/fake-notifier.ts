@@ -2,6 +2,7 @@ import {
   NotificationBackend,
   ApprovalResult,
   TaskFailureAction,
+  QueueFailedAction,
   AcceptanceCheckResult,
   AcceptanceGateAction,
 } from '../../notification/types';
@@ -42,6 +43,17 @@ export interface RecordedTaskFailureRequest {
 }
 
 /**
+ * 記録されたキュー停止アクションリクエスト
+ */
+export interface RecordedQueueFailedRequest {
+  type: 'requestQueueFailedAction';
+  storySlug: string;
+  message: string;
+  response: QueueFailedAction;
+  timestamp: Date;
+}
+
+/**
  * 記録された受け入れ条件ゲートリクエスト
  */
 export interface RecordedAcceptanceGateRequest {
@@ -52,7 +64,7 @@ export interface RecordedAcceptanceGateRequest {
   timestamp: Date;
 }
 
-export type RecordedEvent = RecordedNotification | RecordedApprovalRequest | RecordedTaskFailureRequest | RecordedAcceptanceGateRequest;
+export type RecordedEvent = RecordedNotification | RecordedApprovalRequest | RecordedTaskFailureRequest | RecordedQueueFailedRequest | RecordedAcceptanceGateRequest;
 
 /**
  * FakeNotifier のオプション
@@ -68,6 +80,11 @@ export interface FakeNotifierOptions {
    * 先頭から順に消費される。キューが空になった場合はデフォルト動作（retry）を返す。
    */
   taskFailureResponses?: TaskFailureAction[];
+  /**
+   * キュー停止アクションリクエストに対する応答キュー。
+   * 先頭から順に消費される。キューが空になった場合はデフォルト動作（resume）を返す。
+   */
+  queueFailedResponses?: QueueFailedAction[];
   /**
    * 受け入れ条件ゲートリクエストに対する応答キュー。
    * 先頭から順に消費される。キューが空になった場合はデフォルト動作（done）を返す。
@@ -95,6 +112,9 @@ export class FakeNotifier implements NotificationBackend {
   /** 記録されたTask失敗アクションリクエストのみ */
   public readonly taskFailureRequests: RecordedTaskFailureRequest[] = [];
 
+  /** 記録されたキュー停止アクションリクエストのみ */
+  public readonly queueFailedRequests: RecordedQueueFailedRequest[] = [];
+
   /** 記録された受け入れ条件ゲートリクエストのみ */
   public readonly acceptanceGateRequests: RecordedAcceptanceGateRequest[] = [];
 
@@ -106,11 +126,13 @@ export class FakeNotifier implements NotificationBackend {
 
   private approvalQueue: ApprovalResult[];
   private taskFailureQueue: TaskFailureAction[];
+  private queueFailedQueue: QueueFailedAction[];
   private acceptanceGateQueue: AcceptanceGateAction[];
 
   constructor(options?: FakeNotifierOptions) {
     this.approvalQueue = [...(options?.approvalResponses ?? [])];
     this.taskFailureQueue = [...(options?.taskFailureResponses ?? [])];
+    this.queueFailedQueue = [...(options?.queueFailedResponses ?? [])];
     this.acceptanceGateQueue = [...(options?.acceptanceGateResponses ?? [])];
   }
 
@@ -184,6 +206,36 @@ export class FakeNotifier implements NotificationBackend {
     this.taskFailureQueue.push(...responses);
   }
 
+  async requestQueueFailedAction(
+    storySlug: string,
+    message: string,
+  ): Promise<QueueFailedAction> {
+    // キューから応答を取得。空ならデフォルト resume
+    const response: QueueFailedAction =
+      this.queueFailedQueue.length > 0
+        ? this.queueFailedQueue.shift()!
+        : 'resume';
+
+    const record: RecordedQueueFailedRequest = {
+      type: 'requestQueueFailedAction',
+      storySlug,
+      message,
+      response,
+      timestamp: new Date(),
+    };
+    this.events.push(record);
+    this.queueFailedRequests.push(record);
+
+    return response;
+  }
+
+  /**
+   * キュー停止応答キューに応答を追加する
+   */
+  enqueueQueueFailedResponse(...responses: QueueFailedAction[]): void {
+    this.queueFailedQueue.push(...responses);
+  }
+
   async requestAcceptanceGateAction(
     storySlug: string,
     checkResult: AcceptanceCheckResult,
@@ -248,9 +300,11 @@ export class FakeNotifier implements NotificationBackend {
     this.notifications.length = 0;
     this.approvalRequests.length = 0;
     this.taskFailureRequests.length = 0;
+    this.queueFailedRequests.length = 0;
     this.acceptanceGateRequests.length = 0;
     this.approvalQueue.length = 0;
     this.taskFailureQueue.length = 0;
+    this.queueFailedQueue.length = 0;
     this.acceptanceGateQueue.length = 0;
     this.threadStarts.length = 0;
     this.threadSessions.clear();

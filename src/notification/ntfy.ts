@@ -1,4 +1,4 @@
-import { NotificationBackend, ApprovalResult, TaskFailureAction, AcceptanceCheckResult, AcceptanceGateAction } from './types';
+import { NotificationBackend, ApprovalResult, TaskFailureAction, QueueFailedAction, AcceptanceCheckResult, AcceptanceGateAction } from './types';
 
 /**
  * ntfy.sh 通知バックエンド
@@ -70,6 +70,19 @@ export class NtfyNotificationBackend implements NotificationBackend {
   ): Promise<TaskFailureAction> {
     throw new Error(
       '[ntfy] requestTaskFailureAction is not yet implemented. ' +
+      'Will be available after HTTP callback endpoint is added.',
+    );
+  }
+
+  /**
+   * キュー停止時のアクション選択（未実装）
+   */
+  async requestQueueFailedAction(
+    _storySlug: string,
+    _message: string,
+  ): Promise<QueueFailedAction> {
+    throw new Error(
+      '[ntfy] requestQueueFailedAction is not yet implemented. ' +
       'Will be available after HTTP callback endpoint is added.',
     );
   }

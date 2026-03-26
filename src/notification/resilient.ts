@@ -5,7 +5,7 @@
  * リトライおよびフォールバック（ローカル通知）を提供する。
  */
 
-import { NotificationBackend, ApprovalResult, NotifyOptions, TaskFailureAction, AcceptanceCheckResult, AcceptanceGateAction } from './types';
+import { NotificationBackend, ApprovalResult, NotifyOptions, TaskFailureAction, QueueFailedAction, AcceptanceCheckResult, AcceptanceGateAction } from './types';
 import { LocalNotificationBackend } from './local';
 
 /** リトライ設定 */
@@ -106,6 +106,23 @@ export class ResilientNotificationBackend implements NotificationBackend {
         error instanceof Error ? error.message : error,
       );
       return this.fallback.requestTaskFailureAction(taskSlug, storySlug, errorSummary);
+    }
+  }
+
+  async requestQueueFailedAction(
+    storySlug: string,
+    message: string,
+  ): Promise<QueueFailedAction> {
+    try {
+      return await this.withRetry(() =>
+        this.primary.requestQueueFailedAction(storySlug, message),
+      );
+    } catch (error) {
+      console.warn(
+        `[resilient-notify] primary requestQueueFailedAction failed after ${this.maxRetries + 1} attempts, falling back to local:`,
+        error instanceof Error ? error.message : error,
+      );
+      return this.fallback.requestQueueFailedAction(storySlug, message);
     }
   }
 
