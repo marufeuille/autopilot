@@ -33,6 +33,19 @@ export type { MergeConditionItem } from './types';
 import { NotificationBackend } from './types';
 import { LocalNotificationBackend } from './local';
 import { ResilientNotificationBackend } from './resilient';
+import type { StoryQueueManager } from '../queue/queue-manager';
+
+/**
+ * createNotificationBackend のオプション
+ */
+export interface CreateNotificationBackendOptions {
+  /**
+   * 外部から渡すキューマネージャー。
+   * Slack バックエンドで queue サブコマンドに使用する。
+   * 未指定の場合は Slack バックエンド内部で新規生成する。
+   */
+  queueManager?: StoryQueueManager;
+}
 
 /**
  * 環境変数 NOTIFY_BACKEND に基づいて適切な通知バックエンドを生成する。
@@ -43,7 +56,9 @@ import { ResilientNotificationBackend } from './resilient';
  *
  * @throws 未知のバックエンド指定時にエラー
  */
-export async function createNotificationBackend(): Promise<NotificationBackend> {
+export async function createNotificationBackend(
+  options?: CreateNotificationBackendOptions,
+): Promise<NotificationBackend> {
   const backend = process.env.NOTIFY_BACKEND ?? 'local';
 
   switch (backend) {
@@ -65,16 +80,21 @@ export async function createNotificationBackend(): Promise<NotificationBackend> 
       const { registerStoryApprovalHandlers } = await import('../slack/actions/story-approval');
       const { registerFixApprovalHandlers } = await import('../slack/actions/fix-approval');
       const { createQueueHandler } = await import('../slack/commands/queue');
-      const { StoryQueueManager } = await import('../queue/queue-manager');
-      const { readStoryBySlug } = await import('../vault/reader');
-      const { updateFileStatus } = await import('../vault/writer');
 
       registerSubcommand('status', handleStatus);
       registerSubcommand('retry', handleRetry);
       registerSubcommand('help', handleHelp);
 
-      // キューマネージャーを生成し、queue サブコマンドを登録
-      const queueManager = new StoryQueueManager({ readStoryBySlug, updateFileStatus });
+      // 外部から渡されたキューマネージャーを使うか、内部で新規生成する
+      let queueManager: StoryQueueManager;
+      if (options?.queueManager) {
+        queueManager = options.queueManager;
+      } else {
+        const { StoryQueueManager: QM } = await import('../queue/queue-manager');
+        const { readStoryBySlug } = await import('../vault/reader');
+        const { updateFileStatus } = await import('../vault/writer');
+        queueManager = new QM({ readStoryBySlug, updateFileStatus });
+      }
       registerSubcommand('queue', createQueueHandler(queueManager));
 
       const slackApp = createSlackApp();
