@@ -7,6 +7,10 @@ import { syncMainBranch, createWorktree, removeWorktree } from './git';
 import { runReviewLoop, ReviewLoopResult } from './review';
 import { runCIPollingLoop, CIPollingResult } from './ci';
 import { checkAcceptanceCriteria, AcceptanceCheckResult, AcceptanceGateDeps, CriterionResult, generateAdditionalTasks, AdditionalTasksDeps, defaultQueryAI } from './story-acceptance-gate';
+import { createCommandLogger } from './logger';
+
+const runnerLog = createCommandLogger('runner');
+const depsLog = createCommandLogger('runner-deps');
 
 /**
  * runner の外部依存を表すインターフェース。
@@ -82,24 +86,24 @@ export function createDefaultRunnerDeps(): RunnerDeps {
             }
           }
         } else if (message.type === 'result') {
-          console.log(`[runner] agent result: ${message.subtype}`);
+          runnerLog.info('agent result', { subtype: message.subtype, phase: 'agent_execution' });
         }
       }
     },
 
     execGh: (args: string[], cwd: string): string => {
-      console.log(`[runner-deps] execGh: gh ${args.join(' ')} (cwd=${cwd})`);
+      depsLog.info('execGh', { command: `gh ${args.join(' ')}`, cwd, phase: 'exec' });
       try {
         const result = execFileSync('gh', args, {
           cwd,
           encoding: 'utf-8',
           stdio: 'pipe',
         });
-        console.log(`[runner-deps] execGh success: gh ${args[0]} ${args[1] ?? ''}`);
+        depsLog.info('execGh success', { command: `gh ${args[0]} ${args[1] ?? ''}`, phase: 'exec' });
         return result;
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        console.error(`[runner-deps] execGh failed: gh ${args.join(' ')} — ${errorMessage}`);
+        depsLog.error('execGh failed', { command: `gh ${args.join(' ')}`, errorMessage, phase: 'exec' });
         throw error;
       }
     },
