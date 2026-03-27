@@ -334,6 +334,7 @@ describe('createPullRequest', () => {
 
     const url = createPullRequest('/repo', 'feature/task-01', task, story, reviewResult, {
       execCommand: mockExecCommand,
+      execGh: mockExecGh,
     });
 
     expect(url).toBe('');
