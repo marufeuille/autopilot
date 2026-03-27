@@ -323,8 +323,15 @@ async function tryDocUpdateAndNotify(
         `✅ *README 更新 PR マージ完了*: \`${story.slug}\`\n*PR*: ${docResult.prUrl}`,
         story.slug,
       );
+    } else if (mergeResult.finalStatus === 'rejected') {
+      // Slack 却下ボタン経由 — リトライ不要、警告通知のみで Done フローを続行
+      console.warn(`[runner] doc PR rejected via Slack: ${docResult.prUrl}`);
+      await notifier.notify(
+        `⚠️ *README 更新 PR 却下*: \`${story.slug}\`\n*PR*: ${docResult.prUrl}`,
+        story.slug,
+      );
     } else {
-      // closed / timeout / error / rejected — いずれも致命的ではないのでログ＋通知のみ
+      // closed / timeout / error — いずれも致命的ではないのでログ＋通知のみ
       console.warn(`[runner] doc PR not merged (${mergeResult.finalStatus}): ${docResult.prUrl}`);
       await notifier.notify(
         `⚠️ *README 更新 PR 未マージ* (${mergeResult.finalStatus}): \`${story.slug}\`\n*PR*: ${docResult.prUrl}`,

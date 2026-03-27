@@ -792,6 +792,35 @@ describe('runStory', () => {
       // ストーリーは Done に更新される
       expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Done');
     });
+
+    it('Slack却下ボタンで rejected の場合は却下通知を送信しストーリーは Done になる', async () => {
+      const story = createStory();
+      const notifier = createMockNotifier();
+      const doneTasks = [
+        createTask('task-01', 'Done'),
+      ];
+      mockedGetStoryTasks.mockResolvedValue(doneTasks);
+      mockRunStoryDocUpdate.mockResolvedValue({
+        skipped: false,
+        prUrl: 'https://github.com/test/repo/pull/99',
+      });
+      mockRunMergePollingLoop.mockResolvedValue({ finalStatus: 'rejected', rejectionReason: 'rejected', elapsedMs: 2000 });
+
+      await runStory(story, notifier);
+
+      // 却下専用通知が送信される
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.stringContaining('README 更新 PR 却下'),
+        'my-story',
+      );
+      // 汎用の「未マージ」通知ではないことを確認
+      const notifyCalls = (notifier.notify as ReturnType<typeof vi.fn>).mock.calls;
+      const rejectCall = notifyCalls.find((call: unknown[]) => (call[0] as string).includes('README 更新 PR 却下'));
+      expect(rejectCall).toBeDefined();
+      expect(rejectCall![0]).not.toContain('未マージ');
+      // ストーリーは Done に更新される（Done フロー続行）
+      expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Done');
+    });
   });
 });
 
