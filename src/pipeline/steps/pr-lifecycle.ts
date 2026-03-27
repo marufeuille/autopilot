@@ -80,7 +80,7 @@ export function createPullRequest(
   task: TaskFile,
   story: StoryFile,
   reviewLoopResult: ReviewLoopResult,
-  deps?: Pick<RunnerDeps, 'execCommand'>,
+  deps?: Pick<RunnerDeps, 'execCommand' | 'execGh'>,
 ): string {
   const d = deps ?? createDefaultRunnerDeps();
   const reviewSummary = formatReviewSummaryForPR(reviewLoopResult);
@@ -98,7 +98,14 @@ export function createPullRequest(
     return prUrl;
   } catch {
     try {
-      return d.execCommand(`gh pr view ${branch} --json url -q .url`, repoPath).trim();
+      const prUrl = d.execCommand(`gh pr view ${branch} --json url -q .url`, repoPath).trim();
+      // 既存PRの本文を最新のレビュー結果で更新する（失敗しても致命的にしない）
+      try {
+        updatePullRequestBody(repoPath, branch, body, d);
+      } catch {
+        // updatePullRequestBody 内でログ出力済み
+      }
+      return prUrl;
     } catch {
       return '';
     }

@@ -181,6 +181,7 @@ describe('buildPRBody', () => {
 
 describe('createPullRequest', () => {
   const mockExecCommand = vi.fn();
+  const mockExecGh = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -208,10 +209,14 @@ describe('createPullRequest', () => {
 
     const url = createPullRequest('/repo', 'feature/task-01', task, story, reviewResult, {
       execCommand: mockExecCommand,
+      execGh: mockExecGh,
     });
 
     expect(url).toBe('https://github.com/test/repo/pull/1');
     expect(mockExecCommand).toHaveBeenCalledTimes(2);
+
+    // PR新規作成成功時はupdatePullRequestBody（execGh）が呼ばれない
+    expect(mockExecGh).not.toHaveBeenCalled();
 
     // git push の呼び出し確認
     expect(mockExecCommand).toHaveBeenCalledWith(
@@ -237,7 +242,7 @@ describe('createPullRequest', () => {
     expect(mockUnlinkSync).toHaveBeenCalledTimes(1);
   });
 
-  it('PR作成が失敗した場合に既存PRのURL取得を試みる', () => {
+  it('PR作成が失敗した場合に既存PRのURL取得とPR本文更新を行う', () => {
     const task = createTask('task-01', 'Todo');
     const story = createStory();
     const reviewResult = {
@@ -257,13 +262,55 @@ describe('createPullRequest', () => {
       .mockReturnValueOnce('') // git push
       .mockImplementationOnce(() => { throw new Error('PR already exists'); }) // gh pr create
       .mockReturnValueOnce('https://github.com/test/repo/pull/1'); // gh pr view fallback
+    mockExecGh.mockReturnValueOnce(''); // gh pr edit
 
     const url = createPullRequest('/repo', 'feature/task-01', task, story, reviewResult, {
       execCommand: mockExecCommand,
+      execGh: mockExecGh,
     });
 
     expect(url).toBe('https://github.com/test/repo/pull/1');
     expect(mockExecCommand).toHaveBeenCalledTimes(3);
+
+    // gh pr edit が呼ばれてPR本文が更新されていることを確認
+    expect(mockExecGh).toHaveBeenCalledTimes(1);
+    const ghArgs = mockExecGh.mock.calls[0][0] as string[];
+    expect(ghArgs[0]).toBe('pr');
+    expect(ghArgs[1]).toBe('edit');
+    expect(ghArgs[2]).toBe('feature/task-01');
+    expect(ghArgs[3]).toBe('--body-file');
+  });
+
+  it('PR本文更新が失敗してもPR URLは返され処理が継続する', () => {
+    const task = createTask('task-01', 'Todo');
+    const story = createStory();
+    const reviewResult = {
+      finalVerdict: 'OK' as const,
+      escalationRequired: false,
+      iterations: [
+        {
+          iteration: 1,
+          reviewResult: { verdict: 'OK' as const, summary: 'All good', findings: [] },
+          timestamp: new Date(),
+        },
+      ],
+      lastReviewResult: { verdict: 'OK' as const, summary: 'All good', findings: [] },
+    };
+
+    mockExecCommand
+      .mockReturnValueOnce('') // git push
+      .mockImplementationOnce(() => { throw new Error('PR already exists'); }) // gh pr create
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1'); // gh pr view fallback
+    mockExecGh.mockImplementationOnce(() => { throw new Error('gh pr edit failed'); }); // gh pr edit fails
+
+    const url = createPullRequest('/repo', 'feature/task-01', task, story, reviewResult, {
+      execCommand: mockExecCommand,
+      execGh: mockExecGh,
+    });
+
+    // 本文更新が失敗してもURLは正しく返される
+    expect(url).toBe('https://github.com/test/repo/pull/1');
+    expect(mockExecGh).toHaveBeenCalledTimes(1);
   });
 
   it('PR作成もURL取得も失敗した場合に空文字が返される', () => {
