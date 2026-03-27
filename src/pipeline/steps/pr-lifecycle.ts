@@ -114,14 +114,14 @@ export function updatePullRequestBody(
   repoPath: string,
   branch: string,
   body: string,
-  deps?: Pick<RunnerDeps, 'execCommand'>,
+  deps?: Pick<RunnerDeps, 'execGh'>,
 ): void {
   const d = deps ?? createDefaultRunnerDeps();
   const tmpFile = join(tmpdir(), `autopilot-pr-body-${Date.now()}.md`);
 
   try {
     writeFileSync(tmpFile, body, 'utf-8');
-    d.execCommand(`gh pr edit ${branch} --body-file ${tmpFile}`, repoPath);
+    d.execGh(['pr', 'edit', branch, '--body-file', tmpFile], repoPath);
     console.log(`[pr-lifecycle] PR body updated for branch: ${branch}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

@@ -294,42 +294,45 @@ describe('createPullRequest', () => {
 });
 
 describe('updatePullRequestBody', () => {
-  const mockExecCommand = vi.fn();
+  const mockExecGh = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it('一時ファイルに本文を書き出してgh pr editで更新する', () => {
-    mockExecCommand.mockReturnValueOnce('');
+    mockExecGh.mockReturnValueOnce('');
 
     updatePullRequestBody('/repo', 'feature/task-01', '## 新しい本文', {
-      execCommand: mockExecCommand,
+      execGh: mockExecGh,
     });
 
     // 一時ファイルにbodyが書き出されていることを確認
     expect(mockWriteFileSync).toHaveBeenCalledTimes(1);
     expect(mockWriteFileSync.mock.calls[0][1]).toBe('## 新しい本文');
 
-    // gh pr edit が呼ばれていることを確認
-    expect(mockExecCommand).toHaveBeenCalledTimes(1);
-    const editCmd = mockExecCommand.mock.calls[0][0] as string;
-    expect(editCmd).toContain('gh pr edit feature/task-01');
-    expect(editCmd).toContain('--body-file');
-    expect(mockExecCommand.mock.calls[0][1]).toBe('/repo');
+    // execGh が引数配列で呼ばれていることを確認（コマンドインジェクション対策）
+    expect(mockExecGh).toHaveBeenCalledTimes(1);
+    const args = mockExecGh.mock.calls[0][0] as string[];
+    expect(args[0]).toBe('pr');
+    expect(args[1]).toBe('edit');
+    expect(args[2]).toBe('feature/task-01');
+    expect(args[3]).toBe('--body-file');
+    expect(typeof args[4]).toBe('string'); // 一時ファイルパス
+    expect(mockExecGh.mock.calls[0][1]).toBe('/repo');
 
     // 一時ファイルが削除されていることを確認
     expect(mockUnlinkSync).toHaveBeenCalledTimes(1);
   });
 
   it('gh pr editが失敗した場合にエラーを投げ、一時ファイルはクリーンアップされる', () => {
-    mockExecCommand.mockImplementationOnce(() => {
+    mockExecGh.mockImplementationOnce(() => {
       throw new Error('gh pr edit failed');
     });
 
     expect(() =>
       updatePullRequestBody('/repo', 'feature/task-01', '## 本文', {
-        execCommand: mockExecCommand,
+        execGh: mockExecGh,
       }),
     ).toThrow('gh pr edit failed');
 
