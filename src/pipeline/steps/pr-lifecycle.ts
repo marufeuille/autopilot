@@ -108,6 +108,31 @@ export function createPullRequest(
 }
 
 /**
+ * 既存PRの本文を最新の内容で上書きする
+ */
+export function updatePullRequestBody(
+  repoPath: string,
+  branch: string,
+  body: string,
+  deps?: Pick<RunnerDeps, 'execCommand'>,
+): void {
+  const d = deps ?? createDefaultRunnerDeps();
+  const tmpFile = join(tmpdir(), `autopilot-pr-body-${Date.now()}.md`);
+
+  try {
+    writeFileSync(tmpFile, body, 'utf-8');
+    d.execCommand(`gh pr edit ${branch} --body-file ${tmpFile}`, repoPath);
+    console.log(`[pr-lifecycle] PR body updated for branch: ${branch}`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[pr-lifecycle] PR本文の更新に失敗しました: ${message}`);
+    throw error;
+  } finally {
+    try { unlinkSync(tmpFile); } catch { /* ignore */ }
+  }
+}
+
+/**
  * PRライフサイクル step（PR作成 → CI → マージ待機）
  *
  * - PR作成
