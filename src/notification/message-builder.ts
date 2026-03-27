@@ -241,6 +241,42 @@ export function sanitizePrUrl(prUrl: string, maxLength: number = SLACK_BUTTON_VA
 }
 
 /**
+ * README 更新 PR 作成通知の Block Kit ブロックを生成する
+ *
+ * README 更新 PR 作成時にユーザーへレビュー・マージを促す通知。
+ * 却下ボタン（action_id: 'readme_pr_reject'）を含み、
+ * クリックすると PR がクローズされる（理由入力モーダルなし）。
+ *
+ * @param prUrl PR の URL（却下ボタンの value に埋め込む）
+ * @param storySlug ストーリーの識別子
+ */
+export function buildReadmePRBlocks(prUrl: string, storySlug: string): KnownBlock[] {
+  const safeUrl = sanitizePrUrl(prUrl);
+  const linkedUrl = `<${safeUrl}|${safeUrl}>`;
+  return [
+    {
+      type: 'section',
+      text: {
+        type: 'mrkdwn',
+        text: `📝 *README 更新 PR 作成*: \`${storySlug}\`\n*PR*: ${linkedUrl}\nレビュー・マージをお願いします。`,
+      },
+    },
+    {
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          text: { type: 'plain_text', text: '❌ 却下' },
+          style: 'danger',
+          action_id: 'readme_pr_reject',
+          value: safeUrl,
+        },
+      ],
+    },
+  ];
+}
+
+/**
  * 「マージ準備完了」通知の Block Kit ブロックを生成する
  *
  * CI 通過後にユーザーへ手動マージを促す通知。
