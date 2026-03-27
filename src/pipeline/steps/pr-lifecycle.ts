@@ -65,6 +65,13 @@ export function formatReviewSummaryForPR(result: ReviewLoopResult): string {
 }
 
 /**
+ * PR 本文を組み立てる純粋関数
+ */
+export function buildPRBody(task: TaskFile, story: StoryFile, reviewSummary: string): string {
+  return `## 概要\n\nタスク: ${task.slug}\nストーリー: ${story.slug}\n\n${task.content}\n\n${reviewSummary}`;
+}
+
+/**
  * PR を作成し URL を返す。失敗時は空文字を返す。
  */
 export function createPullRequest(
@@ -77,7 +84,7 @@ export function createPullRequest(
 ): string {
   const d = deps ?? createDefaultRunnerDeps();
   const reviewSummary = formatReviewSummaryForPR(reviewLoopResult);
-  const body = `## 概要\n\nタスク: ${task.slug}\nストーリー: ${story.slug}\n\n${task.content}\n\n${reviewSummary}`;
+  const body = buildPRBody(task, story, reviewSummary);
   const tmpFile = join(tmpdir(), `autopilot-pr-body-${Date.now()}.md`);
 
   try {
