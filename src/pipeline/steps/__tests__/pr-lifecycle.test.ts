@@ -313,6 +313,54 @@ describe('createPullRequest', () => {
     expect(mockExecGh).toHaveBeenCalledTimes(1);
   });
 
+  it('リトライ時にupdatePullRequestBodyへ渡される本文に最新のレビュー結果が含まれる', () => {
+    const task = createTask('task-01', 'Todo');
+    const story = createStory();
+    // リトライ後の新しいレビュー結果（2イテレーション、最終OK）
+    const updatedReviewResult = {
+      finalVerdict: 'OK' as const,
+      escalationRequired: false,
+      iterations: [
+        {
+          iteration: 1,
+          reviewResult: {
+            verdict: 'NG' as const,
+            summary: 'Initial issues',
+            findings: [{ severity: 'error' as const, message: 'Bug found in retry' }],
+          },
+          fixDescription: 'Fixed the bug',
+          timestamp: new Date(),
+        },
+        {
+          iteration: 2,
+          reviewResult: { verdict: 'OK' as const, summary: 'All fixed after retry', findings: [] },
+          timestamp: new Date(),
+        },
+      ],
+      lastReviewResult: { verdict: 'OK' as const, summary: 'All fixed after retry', findings: [] },
+    };
+
+    mockExecCommand
+      .mockReturnValueOnce('') // git push
+      .mockImplementationOnce(() => { throw new Error('PR already exists'); }) // gh pr create
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1'); // gh pr view fallback
+    mockExecGh.mockReturnValueOnce(''); // gh pr edit
+
+    createPullRequest('/repo', 'feature/task-01', task, story, updatedReviewResult, {
+      execCommand: mockExecCommand,
+      execGh: mockExecGh,
+    });
+
+    // writeFileSync は createPullRequest 内で1回、updatePullRequestBody 内で1回呼ばれる
+    expect(mockWriteFileSync).toHaveBeenCalledTimes(2);
+    const updatedBody = mockWriteFileSync.mock.calls[1][1] as string;
+    // 最新のレビュー結果が本文に反映されている
+    expect(updatedBody).toContain('All fixed after retry');
+    expect(updatedBody).toContain('イテレーション数: 2');
+    expect(updatedBody).toContain('修正履歴');
+    expect(updatedBody).toContain('セルフレビュー通過');
+  });
+
   it('PR作成もURL取得も失敗した場合に空文字が返される', () => {
     const task = createTask('task-01', 'Todo');
     const story = createStory();
