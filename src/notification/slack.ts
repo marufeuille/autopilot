@@ -1,6 +1,7 @@
 import { App } from '@slack/bolt';
 import type { BlockAction, ButtonAction } from '@slack/bolt';
 import type { Block, KnownBlock, Button, ActionsBlock } from '@slack/types';
+import { execFileSync } from 'child_process';
 import { config } from '../config';
 import type { NotificationBackend, ApprovalResult, NotifyOptions, TaskFailureAction, QueueFailedAction, AcceptanceCheckResult, AcceptanceGateAction } from './types';
 import { buildRejectModal, buildTaskFailureBlocks, buildQueueFailedBlocks, buildAcceptanceGateBlocks, buildAcceptanceCommentModal } from './message-builder';
@@ -254,6 +255,56 @@ export function registerPRRejectHandlers(app: App): void {
       // 既に ack 済みのため、ack({response_action:'errors'}) は使えない。
       // エラーログのみ出力する（必要に応じて chat.postMessage で通知を追加可能）。
       logError('pr_reject_modal: 却下処理に失敗しました', { phase: 'pr_reject_modal' }, err);
+    }
+  });
+}
+
+/**
+ * README PR 却下用の Slack アクションハンドラーを登録する
+ *
+ * README 更新 PR 通知の「却下」ボタン（action_id: 'readme_pr_reject'）のハンドラーを登録する。
+ * タスク PR 却下と異なり理由入力モーダルは不要で、ボタン押下で即座に PR をクローズしシグナルを送信する。
+ */
+export function registerReadmePRRejectHandler(app: App): void {
+  app.action<BlockAction<ButtonAction>>('readme_pr_reject', async ({ body, ack, respond }) => {
+    await ack();
+    try {
+      const action = body.actions[0];
+      if (typeof action?.value !== 'string' || action.value.length === 0) {
+        logWarn('readme_pr_reject: actions が空または value がありません', { phase: 'readme_pr_reject' });
+        return;
+      }
+      const prUrl = action.value;
+
+      // PR をクローズ
+      try {
+        execFileSync('gh', ['pr', 'close', prUrl], { encoding: 'utf-8', stdio: 'pipe' });
+      } catch (closeErr) {
+        logError('readme_pr_reject: gh pr close に失敗しました', { phase: 'readme_pr_reject', prUrl }, closeErr);
+        try {
+          await respond({ text: '⚠️ PR のクローズに失敗しました。もう一度お試しください。', replace_original: false });
+        } catch {
+          // respond が失敗してもログは既に出力済み
+        }
+        return;
+      }
+
+      // RejectionRegistry にシグナル送信
+      signalRejection(prUrl, 'rejected');
+
+      // Slack メッセージを更新して却下済みを表示
+      try {
+        await respond({ text: '⚠️ README 更新 PR を却下しました', replace_original: true });
+      } catch {
+        // メッセージ更新失敗は致命的ではないので無視
+      }
+    } catch (err) {
+      logError('readme_pr_reject: 却下処理に失敗しました', { phase: 'readme_pr_reject' }, err);
+      try {
+        await respond({ text: '⚠️ 却下処理に失敗しました。もう一度お試しください。', replace_original: false });
+      } catch {
+        // respond が失敗してもログは既に出力済み
+      }
     }
   });
 }
