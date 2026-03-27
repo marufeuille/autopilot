@@ -18,6 +18,14 @@ vi.mock('glob', () => ({
   glob: vi.fn(),
 }));
 
+// fs の writeFileSync / unlinkSync をモック（PR body一時ファイルで使われる）
+const mockWriteFileSync = vi.fn();
+const mockUnlinkSync = vi.fn();
+vi.mock('fs', () => ({
+  writeFileSync: (...args: unknown[]) => mockWriteFileSync(...args),
+  unlinkSync: (...args: unknown[]) => mockUnlinkSync(...args),
+}));
+
 import { createTaskContext } from '../../runner';
 import { TaskContext } from '../../types';
 import { handleStartApproval } from '../start-approval';
@@ -90,6 +98,8 @@ function makeCtx(overrides: {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  mockWriteFileSync.mockClear();
+  mockUnlinkSync.mockClear();
   vi.mocked(detectNoRemote).mockReturnValue(false);
   vi.mocked(runMergePollingLoop).mockResolvedValue({ finalStatus: 'merged', elapsedMs: 1000 });
 });
@@ -863,14 +873,7 @@ describe('handlePRLifecycle', () => {
       lastReviewResult: { verdict: 'OK' as const, summary: 'Retry review passed', findings: [] },
     };
 
-    // execGh をキャプチャして、渡された一時ファイルのパスを記録する
-    let capturedBodyFilePath = '';
-    const execGh = vi.fn().mockImplementation((args: string[]) => {
-      if (args[0] === 'pr' && args[1] === 'edit') {
-        capturedBodyFilePath = args[4]; // --body-file の値
-      }
-      return '';
-    });
+    const execGh = vi.fn().mockReturnValue('');
     const { ctx } = makeCtx({
       ctxStore: { reviewResult: retryReviewResult },
       depsOverrides: { execGh },
@@ -885,16 +888,15 @@ describe('handlePRLifecycle', () => {
 
     // gh pr edit が呼ばれていること
     expect(execGh).toHaveBeenCalledTimes(1);
-    // 一時ファイルパスがキャプチャされていること
-    expect(capturedBodyFilePath).toBeTruthy();
 
-    // 一時ファイルは unlinkSync で削除されるため、execGh の引数から本文内容を間接的に検証
-    // buildPRBody + formatReviewSummaryForPR の結果を検証
-    const { buildPRBody, formatReviewSummaryForPR } = await import('../pr-lifecycle');
-    const expectedReviewSummary = formatReviewSummaryForPR(retryReviewResult);
-    expect(expectedReviewSummary).toContain('Retry review passed');
-    expect(expectedReviewSummary).toContain('イテレーション数: 2');
-    expect(expectedReviewSummary).toContain('修正履歴');
+    // writeFileSync で書き出された本文から、updatePullRequestBody 用の本文（2回目の呼び出し）を検証
+    // 1回目: createPullRequest 内の gh pr create 用、2回目: updatePullRequestBody 用
+    expect(mockWriteFileSync).toHaveBeenCalledTimes(2);
+    const updatedBody = mockWriteFileSync.mock.calls[1][1] as string;
+    expect(updatedBody).toContain('Retry review passed');
+    expect(updatedBody).toContain('イテレーション数: 2');
+    expect(updatedBody).toContain('修正履歴');
+    expect(updatedBody).toContain('セルフレビュー通過');
   });
 
   it('PR新規作成成功時にexecGh（gh pr edit）が呼ばれない', async () => {
