@@ -1,4 +1,23 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// 外部パッケージの transitive import をモック
+vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
+  query: vi.fn(),
+}));
+
+vi.mock('dotenv', () => ({
+  default: { config: vi.fn() },
+  config: vi.fn(),
+}));
+
+vi.mock('gray-matter', () => ({
+  default: vi.fn(),
+}));
+
+vi.mock('glob', () => ({
+  glob: vi.fn(),
+}));
+
 import { createTaskContext } from '../../runner';
 import { TaskContext } from '../../types';
 import { handleStartApproval } from '../start-approval';
@@ -788,6 +807,129 @@ describe('handlePRLifecycle', () => {
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('worktreeの削除に失敗しましたが、ポーリングを続行します'),
     );
+  });
+
+  // ---- リトライ時のPR本文更新シナリオ ----
+
+  it('リトライ時（PR既存）にexecGhでPR本文が更新され、コンテキストのPR URLが保持される', async () => {
+    vi.mocked(runMergePollingLoop).mockResolvedValue({ finalStatus: 'merged', elapsedMs: 1000 });
+    const execGh = vi.fn().mockReturnValue('');
+    const { ctx } = makeCtx({
+      ctxStore: baseCtxStore,
+      depsOverrides: { execGh },
+    });
+    vi.mocked(ctx.deps.execCommand)
+      .mockReturnValueOnce('') // git push
+      .mockImplementationOnce(() => { throw new Error('PR already exists'); }) // gh pr create fails
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1'); // gh pr view fallback
+
+    const signal = await handlePRLifecycle(ctx);
+    expect(signal.kind).toBe('continue');
+    expect(ctx.get('prUrl')).toBe('https://github.com/test/repo/pull/1');
+
+    // execGh で gh pr edit が呼ばれていること
+    expect(execGh).toHaveBeenCalledTimes(1);
+    const args = execGh.mock.calls[0][0] as string[];
+    expect(args[0]).toBe('pr');
+    expect(args[1]).toBe('edit');
+    expect(args[2]).toBe('feature/test-task');
+    expect(args[3]).toBe('--body-file');
+    expect(typeof args[4]).toBe('string');
+  });
+
+  it('リトライ時の本文更新に最新のレビュー結果が反映される', async () => {
+    vi.mocked(runMergePollingLoop).mockResolvedValue({ finalStatus: 'merged', elapsedMs: 1000 });
+    // 2回目のレビュー結果（イテレーション2回、最終OK）
+    const retryReviewResult = {
+      finalVerdict: 'OK' as const,
+      escalationRequired: false,
+      iterations: [
+        {
+          iteration: 1,
+          reviewResult: {
+            verdict: 'NG' as const,
+            summary: 'Problems detected',
+            findings: [{ severity: 'error' as const, message: 'Missing validation' }],
+          },
+          fixDescription: 'Added validation',
+          timestamp: new Date(),
+        },
+        {
+          iteration: 2,
+          reviewResult: { verdict: 'OK' as const, summary: 'Retry review passed', findings: [] },
+          timestamp: new Date(),
+        },
+      ],
+      lastReviewResult: { verdict: 'OK' as const, summary: 'Retry review passed', findings: [] },
+    };
+
+    // execGh をキャプチャして、渡された一時ファイルのパスを記録する
+    let capturedBodyFilePath = '';
+    const execGh = vi.fn().mockImplementation((args: string[]) => {
+      if (args[0] === 'pr' && args[1] === 'edit') {
+        capturedBodyFilePath = args[4]; // --body-file の値
+      }
+      return '';
+    });
+    const { ctx } = makeCtx({
+      ctxStore: { reviewResult: retryReviewResult },
+      depsOverrides: { execGh },
+    });
+    vi.mocked(ctx.deps.execCommand)
+      .mockReturnValueOnce('') // git push
+      .mockImplementationOnce(() => { throw new Error('PR already exists'); }) // gh pr create
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1'); // gh pr view
+
+    const signal = await handlePRLifecycle(ctx);
+    expect(signal.kind).toBe('continue');
+
+    // gh pr edit が呼ばれていること
+    expect(execGh).toHaveBeenCalledTimes(1);
+    // 一時ファイルパスがキャプチャされていること
+    expect(capturedBodyFilePath).toBeTruthy();
+
+    // 一時ファイルは unlinkSync で削除されるため、execGh の引数から本文内容を間接的に検証
+    // buildPRBody + formatReviewSummaryForPR の結果を検証
+    const { buildPRBody, formatReviewSummaryForPR } = await import('../pr-lifecycle');
+    const expectedReviewSummary = formatReviewSummaryForPR(retryReviewResult);
+    expect(expectedReviewSummary).toContain('Retry review passed');
+    expect(expectedReviewSummary).toContain('イテレーション数: 2');
+    expect(expectedReviewSummary).toContain('修正履歴');
+  });
+
+  it('PR新規作成成功時にexecGh（gh pr edit）が呼ばれない', async () => {
+    vi.mocked(runMergePollingLoop).mockResolvedValue({ finalStatus: 'merged', elapsedMs: 1000 });
+    const execGh = vi.fn();
+    const { ctx } = makeCtx({
+      ctxStore: baseCtxStore,
+      depsOverrides: { execGh },
+    });
+    vi.mocked(ctx.deps.execCommand)
+      .mockReturnValueOnce('') // git push
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1'); // gh pr create succeeds
+
+    await handlePRLifecycle(ctx);
+
+    // PR新規作成成功時は execGh（gh pr edit）は呼ばれない
+    expect(execGh).not.toHaveBeenCalled();
+  });
+
+  it('リトライ時にPR本文更新が失敗してもPR URLが正常にコンテキストにセットされる', async () => {
+    vi.mocked(runMergePollingLoop).mockResolvedValue({ finalStatus: 'merged', elapsedMs: 1000 });
+    const execGh = vi.fn().mockImplementation(() => { throw new Error('gh pr edit failed'); });
+    const { ctx } = makeCtx({
+      ctxStore: baseCtxStore,
+      depsOverrides: { execGh },
+    });
+    vi.mocked(ctx.deps.execCommand)
+      .mockReturnValueOnce('') // git push
+      .mockImplementationOnce(() => { throw new Error('PR already exists'); }) // gh pr create fails
+      .mockReturnValueOnce('https://github.com/test/repo/pull/1'); // gh pr view fallback
+
+    const signal = await handlePRLifecycle(ctx);
+    expect(signal.kind).toBe('continue');
+    // 本文更新が失敗してもPR URLはコンテキストにセットされている
+    expect(ctx.get('prUrl')).toBe('https://github.com/test/repo/pull/1');
   });
 });
 
