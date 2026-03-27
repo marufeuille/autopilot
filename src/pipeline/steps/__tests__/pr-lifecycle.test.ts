@@ -33,7 +33,7 @@ vi.mock('child_process', () => ({
   execFileSync: vi.fn(() => ''),
 }));
 
-import { formatReviewSummaryForPR, createPullRequest } from '../pr-lifecycle';
+import { formatReviewSummaryForPR, createPullRequest, buildPRBody } from '../pr-lifecycle';
 
 function createStory(overrides: Partial<StoryFile> = {}): StoryFile {
   return {
@@ -148,6 +148,34 @@ describe('formatReviewSummaryForPR', () => {
     expect(result).toContain('**イテレーション 2**: ✅ OK');
     expect(result).toContain('修正実施済み');
     expect(result).toContain('イテレーション数: 2');
+  });
+});
+
+describe('buildPRBody', () => {
+  it('タスク・ストーリー情報とレビューサマリーを含むPR本文を生成する', () => {
+    const task = createTask('task-01', 'Todo');
+    const story = createStory();
+    const reviewSummary = '## セルフレビュー結果\n\n✅ **セルフレビュー通過**';
+
+    const body = buildPRBody(task, story, reviewSummary);
+
+    expect(body).toContain('## 概要');
+    expect(body).toContain('タスク: task-01');
+    expect(body).toContain('ストーリー: my-story');
+    expect(body).toContain(task.content);
+    expect(body).toContain(reviewSummary);
+  });
+
+  it('異なるタスク・ストーリーの値が正しく反映される', () => {
+    const task = createTask('another-task', 'Doing');
+    const story = createStory({ slug: 'another-story' });
+    const reviewSummary = '## セルフレビュー結果\n\n⚠️ **セルフレビュー未通過**';
+
+    const body = buildPRBody(task, story, reviewSummary);
+
+    expect(body).toContain('タスク: another-task');
+    expect(body).toContain('ストーリー: another-story');
+    expect(body).toContain('セルフレビュー未通過');
   });
 });
 
