@@ -547,9 +547,9 @@ describe('runStory', () => {
 
     // task-01 が Todo に戻される（リトライ）
     expect(mockedUpdateFileStatus).toHaveBeenCalledWith(todoTask1.filePath, 'Todo');
-    // リトライログが出力される
+    // リトライログが出力される（logger経由で構造化ログ形式）
     expect(consoleLogSpy).toHaveBeenCalledWith(
-      expect.stringContaining('retrying task: task-01 (retry #1)'),
+      expect.stringContaining('retrying task'),
     );
     // ストーリーが Done に更新される
     expect(mockedUpdateFileStatus).toHaveBeenCalledWith(story.filePath, 'Done');

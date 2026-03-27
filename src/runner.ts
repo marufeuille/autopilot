@@ -13,8 +13,11 @@ import { createTaskContext } from './pipeline/runner';
 import { taskPipeline } from './pipeline/task-pipeline';
 import { runStoryDocUpdate } from './story-doc-update';
 import { runMergePollingLoop } from './merge';
+import { createCommandLogger } from './logger';
 import type { AcceptanceCheckResult as GateCheckResult, CriterionResult } from './story-acceptance-gate';
 import type { AcceptanceCheckResult as NotificationCheckResult } from './notification/types';
+
+const log = createCommandLogger('runner');
 
 export { RunnerDeps, createDefaultRunnerDeps } from './runner-deps';
 
@@ -105,12 +108,12 @@ async function runAcceptanceGate(
   deps: RunnerDeps,
 ): Promise<{ result: 'done'; messageTs?: string } | { result: 'continue' }> {
   // 1. 受け入れ条件チェック
-  console.log(`[runner] checking acceptance criteria: ${story.slug}`);
+  log.info('checking acceptance criteria', { storySlug: story.slug, phase: 'acceptance_gate' });
   const checkResult = await deps.checkAcceptanceCriteria(story, allTasks, repoPath);
 
   // 2. 受け入れ条件セクションがない場合はスキップ
   if (checkResult.skipped) {
-    console.warn(`[runner] acceptance criteria skipped (no section): ${story.slug}`);
+    log.warn('acceptance criteria skipped (no section)', { storySlug: story.slug, phase: 'acceptance_gate' });
     return { result: 'done' };
   }
 
@@ -120,25 +123,25 @@ async function runAcceptanceGate(
 
   // 4. ユーザーの選択に応じて処理
   if (gateAction.action === 'done') {
-    console.log(`[runner] acceptance gate: user approved Done: ${story.slug}`);
+    log.info('acceptance gate: user approved Done', { storySlug: story.slug, phase: 'acceptance_gate' });
     return { result: 'done', messageTs: gateAction.messageTs };
   }
 
   if (gateAction.action === 'force_done') {
-    console.log(`[runner] acceptance gate: user force-done: ${story.slug}`);
+    log.info('acceptance gate: user force-done', { storySlug: story.slug, phase: 'acceptance_gate' });
     return { result: 'done', messageTs: gateAction.messageTs };
   }
 
   // 5. コメント入力 → 追加タスク生成
   const comment = gateAction.text;
-  console.log(`[runner] acceptance gate: user commented: ${story.slug}, comment="${comment}"`);
+  log.info('acceptance gate: user commented', { storySlug: story.slug, comment, phase: 'acceptance_gate' });
 
   const failedCriteria = checkResult.results.filter((r) => r.result === 'FAIL');
   const additionalDrafts = await deps.generateAdditionalTasks(story, allTasks, comment, failedCriteria);
 
   // 「追加タスク不要」と判断された場合
   if (additionalDrafts.length === 0) {
-    console.log(`[runner] acceptance gate: no additional tasks generated, marking done: ${story.slug}`);
+    log.info('acceptance gate: no additional tasks generated, marking done', { storySlug: story.slug, phase: 'acceptance_gate' });
     return { result: 'done' };
   }
 
@@ -150,7 +153,7 @@ async function runAcceptanceGate(
       : additionalDrafts;
 
     if (draftsToApprove.length === 0) {
-      console.log(`[runner] acceptance gate: regeneration produced no tasks, marking done: ${story.slug}`);
+      log.info('acceptance gate: regeneration produced no tasks, marking done', { storySlug: story.slug, phase: 'acceptance_gate' });
       return { result: 'done' };
     }
 
@@ -165,18 +168,18 @@ async function runAcceptanceGate(
     if (approvalResult.action === 'approve') {
       for (const draft of draftsToApprove) {
         deps.createTaskFile(story.project, story.slug, draft);
-        console.log(`[runner] additional task file created: ${draft.slug}`);
+        log.info('additional task file created', { taskSlug: draft.slug, phase: 'acceptance_gate' });
       }
       return { result: 'continue' };
     }
 
     if (approvalResult.action === 'cancel') {
-      console.log(`[runner] acceptance gate: additional tasks cancelled, marking done: ${story.slug}`);
+      log.info('acceptance gate: additional tasks cancelled, marking done', { storySlug: story.slug, phase: 'acceptance_gate' });
       return { result: 'done' };
     }
 
     retryReason = approvalResult.reason;
-    console.log(`[runner] acceptance gate: additional tasks rejected, retrying: ${retryReason}`);
+    log.info('acceptance gate: additional tasks rejected, retrying', { retryReason, phase: 'acceptance_gate' });
   }
 }
 
@@ -204,21 +207,21 @@ async function runTodoTasks(
         await runTask(task, story, notifier, repoPath, deps);
         succeeded = true;
       } catch (error) {
-        console.error(`[runner] task failed: ${task.slug}`, error);
+        log.error('task failed', { taskSlug: task.slug, phase: 'task_execution' }, error);
 
         const action = await requestTaskFailureAction(task, story, notifier, error);
 
         if (action === 'retry') {
           retryCount++;
-          console.log(`[runner] retrying task: ${task.slug} (retry #${retryCount})`);
+          log.info('retrying task', { taskSlug: task.slug, retryCount, phase: 'task_execution' });
           await deps.updateFileStatus(task.filePath, 'Todo');
           continue;
         } else if (action === 'skip') {
-          console.log(`[runner] skipping task: ${task.slug}`);
+          log.info('skipping task', { taskSlug: task.slug, phase: 'task_execution' });
           await deps.updateFileStatus(task.filePath, 'Skipped');
           succeeded = true;
         } else if (action === 'cancel') {
-          console.log(`[runner] cancelling story: ${story.slug}`);
+          log.info('cancelling story', { storySlug: story.slug, phase: 'task_execution' });
           await deps.updateFileStatus(story.filePath, 'Cancelled');
           await notifier.notify(
             `🚫 ストーリーがキャンセルされました: ${story.slug}`,
@@ -246,7 +249,7 @@ async function runDecomposition(
   let retryReason: string | undefined;
 
   while (true) {
-    console.log(`[runner] decomposing story: ${story.slug}`);
+    log.info('decomposing story', { storySlug: story.slug, phase: 'decomposition' });
     const drafts = await deps.decomposeTasks(story, retryReason);
 
     const id = generateApprovalId(story.slug, 'decompose');
@@ -260,7 +263,7 @@ async function runDecomposition(
     if (result.action === 'approve') {
       for (const draft of drafts) {
         deps.createTaskFile(story.project, story.slug, draft);
-        console.log(`[runner] task file created: ${draft.slug}`);
+        log.info('task file created', { taskSlug: draft.slug, phase: 'decomposition' });
       }
       return 'approved';
     }
@@ -268,12 +271,12 @@ async function runDecomposition(
     if (result.action === 'cancel') {
       deps.updateFileStatus(story.filePath, 'Cancelled');
       await notifier.notify(`🚫 ストーリーがキャンセルされました: ${story.slug}`, story.slug);
-      console.log(`[runner] story cancelled: ${story.slug}`);
+      log.info('story cancelled', { storySlug: story.slug, phase: 'decomposition' });
       return 'cancelled';
     }
 
     retryReason = result.reason;
-    console.log(`[runner] decomposition rejected, retrying: ${retryReason}`);
+    log.info('decomposition rejected, retrying', { retryReason, phase: 'decomposition' });
   }
 }
 
@@ -318,21 +321,21 @@ async function tryDocUpdateAndNotify(
     );
 
     if (mergeResult.finalStatus === 'merged') {
-      console.log(`[runner] doc PR merged: ${docResult.prUrl}`);
+      log.info('doc PR merged', { prUrl: docResult.prUrl, phase: 'doc_update' });
       await notifier.notify(
         `✅ *README 更新 PR マージ完了*: \`${story.slug}\`\n*PR*: ${docResult.prUrl}`,
         story.slug,
       );
     } else if (mergeResult.finalStatus === 'rejected') {
       // Slack 却下ボタン経由 — リトライ不要、警告通知のみで Done フローを続行
-      console.warn(`[runner] doc PR rejected via Slack: ${docResult.prUrl}`);
+      log.warn('doc PR rejected via Slack', { prUrl: docResult.prUrl, phase: 'doc_update' });
       await notifier.notify(
         `⚠️ *README 更新 PR 却下*: \`${story.slug}\`\n*PR*: ${docResult.prUrl}`,
         story.slug,
       );
     } else {
       // closed / timeout / error — いずれも致命的ではないのでログ＋通知のみ
-      console.warn(`[runner] doc PR not merged (${mergeResult.finalStatus}): ${docResult.prUrl}`);
+      log.warn('doc PR not merged', { finalStatus: mergeResult.finalStatus, prUrl: docResult.prUrl, phase: 'doc_update' });
       await notifier.notify(
         `⚠️ *README 更新 PR 未マージ* (${mergeResult.finalStatus}): \`${story.slug}\`\n*PR*: ${docResult.prUrl}`,
         story.slug,
@@ -340,7 +343,7 @@ async function tryDocUpdateAndNotify(
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`[runner] story doc update failed: ${message}`);
+    log.error('story doc update failed', { errorMessage: message, phase: 'doc_update' });
     await notifier.notify(
       `⚠️ *README 更新失敗* (${story.slug}): ${message}\nストーリー完了処理は続行します。`,
       story.slug,
@@ -383,20 +386,20 @@ export async function runStory(
 ): Promise<StoryStatus> {
   const d = deps ?? createDefaultRunnerDeps();
   const repoPath = resolveRepoPath(story.project);
-  console.log(`[runner] starting story: ${story.slug}`);
+  log.info('starting story', { storySlug: story.slug, phase: 'story_start' });
 
   const tasks = await d.getStoryTasks(story.project, story.slug);
 
   // スレッドセッション開始: 起点メッセージを投稿
   const originMessage = buildThreadOriginMessage(story.slug, tasks);
   await notifier.startThread(story.slug, originMessage);
-  console.log(`[runner] thread session started for story: ${story.slug}`);
+  log.info('thread session started', { storySlug: story.slug, phase: 'thread_session' });
 
   if (tasks.length === 0) {
     const decompositionResult = await runDecomposition(story, notifier, d);
     if (decompositionResult === 'cancelled') {
       notifier.endSession(story.slug);
-      console.log(`[runner] thread session ended for story: ${story.slug}`);
+      log.info('thread session ended', { storySlug: story.slug, phase: 'thread_session' });
       return 'Cancelled';
     }
   }
@@ -412,7 +415,7 @@ export async function runStory(
       const taskResult = await runTodoTasks(todoTasks, story, repoPath, notifier, d);
       if (taskResult === 'cancelled') {
         notifier.endSession(story.slug);
-        console.log(`[runner] thread session ended for story: ${story.slug}`);
+        log.info('thread session ended', { storySlug: story.slug, phase: 'thread_session' });
         return 'Cancelled';
       }
     }
@@ -428,13 +431,17 @@ export async function runStory(
       // 非終端タスクが残っている場合はログを出してループを抜ける
       if (todoTasks.length === 0) {
         const remaining = allTasks.filter((t) => !terminalStatuses.includes(t.status));
-        console.log(
-          `[runner] no todo tasks but story not complete: ${story.slug}, ` +
-          `remaining: ${remaining.map((t) => `${t.slug}(${t.status})`).join(', ')}`,
-        );
+        log.info('no todo tasks but story not complete', {
+          storySlug: story.slug,
+          remaining: remaining.map((t) => `${t.slug}(${t.status})`).join(', '),
+          phase: 'story_loop',
+        });
       } else {
         const remaining = allTasks.filter((t) => !terminalStatuses.includes(t.status));
-        console.log(`[runner] story not done, remaining tasks: ${remaining.map((t) => t.slug).join(', ')}`);
+        log.info('story not done, remaining tasks', {
+          remaining: remaining.map((t) => t.slug).join(', '),
+          phase: 'story_loop',
+        });
       }
       break;
     }
@@ -447,7 +454,7 @@ export async function runStory(
       const summary = allTasks.map((t) => `${t.slug}(${t.status})`).join(', ');
       const icon = storyStatus === 'Cancelled' ? '🚫' : '❌';
       await notifier.notify(`${icon} ストーリー${storyStatus}: ${story.slug}\n${summary}`, story.slug);
-      console.log(`[runner] story ${storyStatus}: ${story.slug}, ${summary}`);
+      log.info(`story ${storyStatus}`, { storySlug: story.slug, summary, phase: 'story_complete' });
       finalStatus = storyStatus;
       acceptanceGatePassed = true;
       break;
@@ -472,7 +479,7 @@ export async function runStory(
       } else {
         await notifier.notify(completionMessage, story.slug);
       }
-      console.log(`[runner] story done: ${story.slug}`);
+      log.info('story done', { storySlug: story.slug, phase: 'story_complete' });
       finalStatus = 'Done';
       acceptanceGatePassed = true;
     }
@@ -481,6 +488,6 @@ export async function runStory(
 
   // スレッドセッション終了: メモリを解放
   notifier.endSession(story.slug);
-  console.log(`[runner] thread session ended for story: ${story.slug}`);
+  log.info('thread session ended', { storySlug: story.slug, phase: 'thread_session' });
   return finalStatus;
 }
