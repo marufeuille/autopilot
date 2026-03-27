@@ -1,4 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// config をモック（dotenv 等の外部依存を回避）
+vi.mock('../../config', () => ({
+  config: {
+    slackChannelId: 'C_TEST',
+    vaultPath: '/tmp/test-vault',
+    watchProject: 'test-project',
+  },
+}));
+
 import { registerReadmePRRejectHandler } from '../slack';
 
 // execFileSync をモック

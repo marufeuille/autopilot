@@ -745,6 +745,41 @@ describe('runStory', () => {
       );
     });
 
+    it('README PR 通知に却下ボタン付き Block Kit メッセージが含まれる', async () => {
+      const story = createStory();
+      const notifier = createMockNotifier();
+      const doneTasks = [
+        createTask('task-01', 'Done'),
+      ];
+      mockedGetStoryTasks.mockResolvedValue(doneTasks);
+      mockRunStoryDocUpdate.mockResolvedValue({
+        skipped: false,
+        prUrl: 'https://github.com/test/repo/pull/99',
+      });
+      mockRunMergePollingLoop.mockResolvedValue({ finalStatus: 'merged', elapsedMs: 5000 });
+
+      await runStory(story, notifier);
+
+      // Block Kit メッセージ（blocks オプション付き）で通知されること
+      expect(notifier.notify).toHaveBeenCalledWith(
+        expect.stringContaining('README 更新 PR 作成'),
+        'my-story',
+        expect.objectContaining({
+          blocks: expect.arrayContaining([
+            expect.objectContaining({
+              type: 'actions',
+              elements: expect.arrayContaining([
+                expect.objectContaining({
+                  action_id: 'readme_pr_reject',
+                  value: 'https://github.com/test/repo/pull/99',
+                }),
+              ]),
+            }),
+          ]),
+        }),
+      );
+    });
+
     it('更新不要の場合はマージポーリングが呼ばれない', async () => {
       const story = createStory();
       const notifier = createMockNotifier();
