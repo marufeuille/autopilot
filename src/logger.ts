@@ -2,7 +2,11 @@
  * 構造化ログユーティリティ
  *
  * 処理パイプライン全体で統一的なログ出力を提供する。
- * 各ログには タイムスタンプ・コマンド種別・ユーザーID・処理フェーズ・スレッドts を含む。
+ * 各ログには タイムスタンプ・レベル・モジュール名・メッセージ・コンテキスト を含む。
+ *
+ * フォーマット:
+ *   pretty (デフォルト): [timestamp] [LEVEL] [module] message {key=value...}
+ *   json (LOG_FORMAT=json): {"ts":"...","level":"INFO","module":"...","msg":"...","key":"value"}
  */
 
 /** ログレベル */
@@ -10,6 +14,8 @@ export type LogLevel = 'info' | 'warn' | 'error';
 
 /** ログコンテキスト（各ログに付与される構造化情報） */
 export interface LogContext {
+  /** モジュール名（例: 'runner', 'ci'） */
+  module?: string;
   /** コマンド種別（例: 'fix', 'story'） */
   command?: string;
   /** ユーザーID */
@@ -28,27 +34,45 @@ export interface LogContext {
 interface LogEntry {
   timestamp: string;
   level: LogLevel;
+  module: string;
   message: string;
   context: LogContext;
 }
 
-/**
- * ログエントリを整形された文字列に変換する
- */
-function formatLogEntry(entry: LogEntry): string {
-  const { timestamp, level, message, context } = entry;
-  const prefix = `[${timestamp}] [${level.toUpperCase()}]`;
+/** デフォルトのモジュール名 */
+const DEFAULT_MODULE = 'app';
 
-  // コンテキスト情報をコンパクトに表示
+/** module キーを除外したコンテキストを返す */
+function contextWithoutModule(context: LogContext): LogContext {
+  const { module: _, ...rest } = context;
+  return rest;
+}
+
+/**
+ * LOG_FORMAT 環境変数を参照して JSON モードかどうかを判定する
+ */
+function isJsonFormat(): boolean {
+  return process.env.LOG_FORMAT === 'json';
+}
+
+/**
+ * ログエントリを pretty 形式の文字列に変換する
+ */
+function formatPretty(entry: LogEntry): string {
+  const { timestamp, level, module, message, context } = entry;
+  const prefix = `[${timestamp}] [${level.toUpperCase()}] [${module}]`;
+
+  // コンテキスト情報をコンパクトに表示（module は除外）
+  const ctx = contextWithoutModule(context);
   const contextParts: string[] = [];
-  if (context.command) contextParts.push(`cmd=${context.command}`);
-  if (context.userId) contextParts.push(`user=${context.userId}`);
-  if (context.phase) contextParts.push(`phase=${context.phase}`);
-  if (context.threadTs) contextParts.push(`thread=${context.threadTs}`);
+  if (ctx.command) contextParts.push(`cmd=${ctx.command}`);
+  if (ctx.userId) contextParts.push(`user=${ctx.userId}`);
+  if (ctx.phase) contextParts.push(`phase=${ctx.phase}`);
+  if (ctx.threadTs) contextParts.push(`thread=${ctx.threadTs}`);
 
   // 標準フィールド以外のコンテキスト
   const standardKeys = new Set(['command', 'userId', 'phase', 'threadTs']);
-  for (const [key, value] of Object.entries(context)) {
+  for (const [key, value] of Object.entries(ctx)) {
     if (!standardKeys.has(key) && value !== undefined) {
       contextParts.push(`${key}=${typeof value === 'string' ? value : JSON.stringify(value)}`);
     }
@@ -59,6 +83,28 @@ function formatLogEntry(entry: LogEntry): string {
 }
 
 /**
+ * ログエントリを JSON 形式の文字列に変換する
+ */
+function formatJson(entry: LogEntry): string {
+  const { timestamp, level, module, message, context } = entry;
+  const ctx = contextWithoutModule(context);
+  return JSON.stringify({
+    ts: timestamp,
+    level: level.toUpperCase(),
+    module,
+    msg: message,
+    ...ctx,
+  });
+}
+
+/**
+ * ログエントリをフォーマットする
+ */
+function formatLogEntry(entry: LogEntry): string {
+  return isJsonFormat() ? formatJson(entry) : formatPretty(entry);
+}
+
+/**
  * 現在のISO 8601タイムスタンプを返す
  */
 function now(): string {
@@ -66,10 +112,23 @@ function now(): string {
 }
 
 /**
+ * コンテキストからモジュール名を取得する
+ */
+function resolveModule(context: LogContext): string {
+  return (typeof context.module === 'string' && context.module) || DEFAULT_MODULE;
+}
+
+/**
  * info レベルのログを出力する
  */
 export function logInfo(message: string, context: LogContext = {}): void {
-  const entry: LogEntry = { timestamp: now(), level: 'info', message, context };
+  const entry: LogEntry = {
+    timestamp: now(),
+    level: 'info',
+    module: resolveModule(context),
+    message,
+    context,
+  };
   console.log(formatLogEntry(entry));
 }
 
@@ -77,7 +136,13 @@ export function logInfo(message: string, context: LogContext = {}): void {
  * warn レベルのログを出力する
  */
 export function logWarn(message: string, context: LogContext = {}): void {
-  const entry: LogEntry = { timestamp: now(), level: 'warn', message, context };
+  const entry: LogEntry = {
+    timestamp: now(),
+    level: 'warn',
+    module: resolveModule(context),
+    message,
+    context,
+  };
   console.warn(formatLogEntry(entry));
 }
 
@@ -87,7 +152,13 @@ export function logWarn(message: string, context: LogContext = {}): void {
  * エラーオブジェクトが渡された場合、スタックトレースも出力する。
  */
 export function logError(message: string, context: LogContext = {}, error?: unknown): void {
-  const entry: LogEntry = { timestamp: now(), level: 'error', message, context };
+  const entry: LogEntry = {
+    timestamp: now(),
+    level: 'error',
+    module: resolveModule(context),
+    message,
+    context,
+  };
   const formatted = formatLogEntry(entry);
 
   if (error instanceof Error) {
@@ -100,18 +171,32 @@ export function logError(message: string, context: LogContext = {}, error?: unkn
 }
 
 /**
- * 特定のコマンドに紐づくロガーを生成する
+ * 特定のモジュール／コマンドに紐づくロガーを生成する
  *
- * コマンド種別やユーザーIDなど、共通のコンテキストを事前にバインドして
- * 繰り返し指定する手間を省く。
+ * 使い方:
+ *   // 新しい形式: module を第1引数で指定
+ *   const log = createCommandLogger('runner', { command: 'fix' });
+ *
+ *   // 後方互換: オブジェクトを渡す（module は 'app'）
+ *   const log = createCommandLogger({ command: 'fix' });
  */
-export function createCommandLogger(baseContext: LogContext) {
+export function createCommandLogger(moduleOrContext: string | LogContext, baseContext?: LogContext) {
+  let effectiveContext: LogContext;
+
+  if (typeof moduleOrContext === 'string') {
+    // 新しい形式: createCommandLogger('runner', { command: 'fix' })
+    effectiveContext = { ...baseContext, module: moduleOrContext };
+  } else {
+    // 後方互換: createCommandLogger({ command: 'fix' })
+    effectiveContext = { module: DEFAULT_MODULE, ...moduleOrContext };
+  }
+
   return {
     info: (message: string, extraContext: LogContext = {}) =>
-      logInfo(message, { ...baseContext, ...extraContext }),
+      logInfo(message, { ...effectiveContext, ...extraContext }),
     warn: (message: string, extraContext: LogContext = {}) =>
-      logWarn(message, { ...baseContext, ...extraContext }),
+      logWarn(message, { ...effectiveContext, ...extraContext }),
     error: (message: string, extraContext: LogContext = {}, error?: unknown) =>
-      logError(message, { ...baseContext, ...extraContext }, error),
+      logError(message, { ...effectiveContext, ...extraContext }, error),
   };
 }
