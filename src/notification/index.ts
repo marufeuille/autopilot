@@ -21,6 +21,7 @@ export {
   buildReviewEscalationMessage,
   buildCIEscalationMessage,
   buildThreadOriginMessage,
+  buildReadmePRBlocks,
   buildMergeReadyBlocks,
   buildRejectModal,
   buildTaskFailureBlocks,

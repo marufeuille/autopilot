@@ -4,6 +4,7 @@ import {
   NotificationBackend,
   generateApprovalId,
   buildThreadOriginMessage,
+  buildReadmePRBlocks,
 } from './notification';
 import { detectNoRemote } from './git';
 import { resolveRepoPath } from './config';
@@ -301,10 +302,12 @@ async function tryDocUpdateAndNotify(
       return;
     }
 
-    // PR 作成成功 → レビュー通知を送信し、マージを待機する
+    // PR 作成成功 → 却下ボタン付き Block Kit 通知を送信し、マージを待機する
+    const readmeBlocks = buildReadmePRBlocks(docResult.prUrl!, story.slug);
     await notifier.notify(
       `📝 *README 更新 PR 作成*: \`${story.slug}\`\n*PR*: ${docResult.prUrl}\nレビュー・マージをお願いします。`,
       story.slug,
+      { blocks: readmeBlocks },
     );
 
     // マージポーリングで待機（pr-lifecycle と同じ仕組み）

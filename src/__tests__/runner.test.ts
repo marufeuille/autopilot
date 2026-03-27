@@ -37,6 +37,10 @@ vi.mock('../notification', () => ({
     { type: 'section', text: { type: 'mrkdwn', text: `✅ *マージ準備完了*: \`${taskSlug}\`\n*PR*: ${prUrl}` } },
     { type: 'actions', elements: [{ type: 'button', action_id: 'pr_reject_ng', value: prUrl }] },
   ]),
+  buildReadmePRBlocks: vi.fn((prUrl: string, storySlug: string) => [
+    { type: 'section', text: { type: 'mrkdwn', text: `📝 *README 更新 PR 作成*: \`${storySlug}\`\n*PR*: ${prUrl}` } },
+    { type: 'actions', elements: [{ type: 'button', action_id: 'readme_pr_reject', value: prUrl }] },
+  ]),
 }));
 
 vi.mock('../git', () => ({
