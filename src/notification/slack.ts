@@ -213,12 +213,12 @@ export function registerPRRejectHandlers(app: App): void {
     try {
       const action = body.actions[0];
       if (typeof action?.value !== 'string' || action.value.length === 0) {
-        logWarn('pr_reject_ng: actions が空または value がありません', { phase: 'pr_reject_ng' });
+        logWarn('pr_reject_ng: actions が空または value がありません', { module: 'notification-slack', phase: 'pr_reject_ng' });
         return;
       }
       const triggerId = body.trigger_id;
       if (!triggerId) {
-        logWarn('pr_reject_ng: trigger_id が取得できませんでした', { phase: 'pr_reject_ng' });
+        logWarn('pr_reject_ng: trigger_id が取得できませんでした', { module: 'notification-slack', phase: 'pr_reject_ng' });
         await respond({ text: '⚠️ モーダルを開けませんでした。もう一度お試しください。', replace_original: false });
         return;
       }
@@ -228,7 +228,7 @@ export function registerPRRejectHandlers(app: App): void {
         view: buildRejectModal(prUrl),
       });
     } catch (err) {
-      logError('pr_reject_ng: モーダルの表示に失敗しました', { phase: 'pr_reject_ng' }, err);
+      logError('pr_reject_ng: モーダルの表示に失敗しました', { module: 'notification-slack', phase: 'pr_reject_ng' }, err);
       try {
         await respond({ text: '⚠️ モーダルの表示に失敗しました。もう一度お試しください。', replace_original: false });
       } catch {
@@ -247,6 +247,7 @@ export function registerPRRejectHandlers(app: App): void {
       const accepted = signalRejection(prUrl, reason);
       if (!accepted) {
         logWarn('pr_reject_modal: signalRejection が受理されませんでした（待機中エントリなし）', {
+          module: 'notification-slack',
           phase: 'pr_reject_modal',
           prUrl,
         });
@@ -254,7 +255,7 @@ export function registerPRRejectHandlers(app: App): void {
     } catch (err) {
       // 既に ack 済みのため、ack({response_action:'errors'}) は使えない。
       // エラーログのみ出力する（必要に応じて chat.postMessage で通知を追加可能）。
-      logError('pr_reject_modal: 却下処理に失敗しました', { phase: 'pr_reject_modal' }, err);
+      logError('pr_reject_modal: 却下処理に失敗しました', { module: 'notification-slack', phase: 'pr_reject_modal' }, err);
     }
   });
 }
@@ -271,7 +272,7 @@ export function registerReadmePRRejectHandler(app: App): void {
     try {
       const action = body.actions[0];
       if (typeof action?.value !== 'string' || action.value.length === 0) {
-        logWarn('readme_pr_reject: actions が空または value がありません', { phase: 'readme_pr_reject' });
+        logWarn('readme_pr_reject: actions が空または value がありません', { module: 'notification-slack', phase: 'readme_pr_reject' });
         return;
       }
       const prUrl = action.value;
@@ -280,7 +281,7 @@ export function registerReadmePRRejectHandler(app: App): void {
       try {
         execFileSync('gh', ['pr', 'close', prUrl], { encoding: 'utf-8', stdio: 'pipe' });
       } catch (closeErr) {
-        logError('readme_pr_reject: gh pr close に失敗しました', { phase: 'readme_pr_reject', prUrl }, closeErr);
+        logError('readme_pr_reject: gh pr close に失敗しました', { module: 'notification-slack', phase: 'readme_pr_reject', prUrl }, closeErr);
         try {
           await respond({ text: '⚠️ PR のクローズに失敗しました。もう一度お試しください。', replace_original: false });
         } catch {
@@ -299,7 +300,7 @@ export function registerReadmePRRejectHandler(app: App): void {
         // メッセージ更新失敗は致命的ではないので無視
       }
     } catch (err) {
-      logError('readme_pr_reject: 却下処理に失敗しました', { phase: 'readme_pr_reject' }, err);
+      logError('readme_pr_reject: 却下処理に失敗しました', { module: 'notification-slack', phase: 'readme_pr_reject' }, err);
       try {
         await respond({ text: '⚠️ 却下処理に失敗しました。もう一度お試しください。', replace_original: false });
       } catch {

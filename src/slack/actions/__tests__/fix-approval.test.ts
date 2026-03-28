@@ -287,9 +287,12 @@ describe('handleFixApproveInternal', () => {
     expect(postCall.text).not.toContain('Permission denied');
     expect(postCall.thread_ts).toBe(threadTs);
 
+    // 構造化ログ経由でエラーが出力されることを確認
     expect(consoleSpy).toHaveBeenCalledWith(
       expect.stringContaining('[fix-approval]'),
-      expect.stringContaining('Permission denied'),
+      expect.objectContaining({
+        error: expect.stringContaining('Permission denied'),
+      }),
     );
     consoleSpy.mockRestore();
   });

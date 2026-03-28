@@ -118,7 +118,7 @@ export async function handleFixInternal(
   respond: (msg: string) => Promise<void>,
   deps: FixDraftDeps,
 ): Promise<void> {
-  const log = createCommandLogger({ command: 'fix' });
+  const log = createCommandLogger('fix-command', { command: 'fix' });
 
   // 引数バリデーション
   if (args.length === 0) {

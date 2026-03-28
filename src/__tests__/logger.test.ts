@@ -219,20 +219,7 @@ describe('logger', () => {
   });
 
   describe('createCommandLogger', () => {
-    it('後方互換: オブジェクトを渡すとベースコンテキストが自動付与される', () => {
-      const log = createCommandLogger({ command: 'fix', threadTs: '1111.2222' });
-
-      log.info('テスト', { phase: 'start' });
-
-      const output = consoleSpy.log.mock.calls[0][0] as string;
-      expect(output).toContain('cmd=fix');
-      expect(output).toContain('thread=1111.2222');
-      expect(output).toContain('phase=start');
-      // module 未指定なのでデフォルト app
-      expect(output).toContain('[app]');
-    });
-
-    it('新形式: module を第1引数で指定できる', () => {
+    it('module を第1引数で指定できる', () => {
       const log = createCommandLogger('runner', { command: 'fix' });
 
       log.info('テスト', { phase: 'start' });
@@ -243,7 +230,19 @@ describe('logger', () => {
       expect(output).toContain('phase=start');
     });
 
-    it('新形式: baseContext 省略可能', () => {
+    it('baseContext にコンテキスト情報を含められる', () => {
+      const log = createCommandLogger('fix-command', { command: 'fix', threadTs: '1111.2222' });
+
+      log.info('テスト', { phase: 'start' });
+
+      const output = consoleSpy.log.mock.calls[0][0] as string;
+      expect(output).toContain('[fix-command]');
+      expect(output).toContain('cmd=fix');
+      expect(output).toContain('thread=1111.2222');
+      expect(output).toContain('phase=start');
+    });
+
+    it('baseContext 省略可能', () => {
       const log = createCommandLogger('runner');
 
       log.info('テスト');
@@ -252,8 +251,9 @@ describe('logger', () => {
       expect(output).toContain('[runner]');
     });
 
-    it('後方互換: オブジェクトに module を含められる', () => {
-      const log = createCommandLogger({ command: 'fix', module: 'slack' });
+    it('第1引数は string のみ受け付ける', () => {
+      // string 型が必須であることの型チェック確認
+      const log = createCommandLogger('slack', { command: 'fix' });
 
       log.info('テスト');
 
@@ -262,22 +262,26 @@ describe('logger', () => {
     });
 
     it('warn レベルが使える', () => {
-      const log = createCommandLogger({ command: 'fix' });
+      const log = createCommandLogger('test-module', { command: 'fix' });
       log.warn('警告');
 
       expect(consoleSpy.warn).toHaveBeenCalledTimes(1);
+      const output = consoleSpy.warn.mock.calls[0][0] as string;
+      expect(output).toContain('[test-module]');
     });
 
     it('error レベルが使える', () => {
-      const log = createCommandLogger({ command: 'fix' });
+      const log = createCommandLogger('test-module', { command: 'fix' });
       const err = new Error('test');
       log.error('エラー', {}, err);
 
       expect(consoleSpy.error).toHaveBeenCalledTimes(1);
+      const output = consoleSpy.error.mock.calls[0][0] as string;
+      expect(output).toContain('[test-module]');
     });
 
     it('追加コンテキストでベースコンテキストをオーバーライドできる', () => {
-      const log = createCommandLogger({ command: 'fix', phase: 'default' });
+      const log = createCommandLogger('test-module', { command: 'fix', phase: 'default' });
       log.info('テスト', { phase: 'override' });
 
       const output = consoleSpy.log.mock.calls[0][0] as string;

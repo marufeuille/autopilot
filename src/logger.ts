@@ -174,22 +174,11 @@ export function logError(message: string, context: LogContext = {}, error?: unkn
  * 特定のモジュール／コマンドに紐づくロガーを生成する
  *
  * 使い方:
- *   // 新しい形式: module を第1引数で指定
  *   const log = createCommandLogger('runner', { command: 'fix' });
- *
- *   // 後方互換: オブジェクトを渡す（module は 'app'）
- *   const log = createCommandLogger({ command: 'fix' });
+ *   const log = createCommandLogger('runner');
  */
-export function createCommandLogger(moduleOrContext: string | LogContext, baseContext?: LogContext) {
-  let effectiveContext: LogContext;
-
-  if (typeof moduleOrContext === 'string') {
-    // 新しい形式: createCommandLogger('runner', { command: 'fix' })
-    effectiveContext = { ...baseContext, module: moduleOrContext };
-  } else {
-    // 後方互換: createCommandLogger({ command: 'fix' })
-    effectiveContext = { module: DEFAULT_MODULE, ...moduleOrContext };
-  }
+export function createCommandLogger(module: string, baseContext?: LogContext) {
+  const effectiveContext: LogContext = { ...baseContext, module };
 
   return {
     info: (message: string, extraContext: LogContext = {}) =>
