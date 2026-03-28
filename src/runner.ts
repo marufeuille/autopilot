@@ -14,7 +14,7 @@ import { taskPipeline } from './pipeline/task-pipeline';
 import { runStoryDocUpdate } from './story-doc-update';
 import { runMergePollingLoop } from './merge';
 import { createCommandLogger } from './logger';
-import type { AcceptanceCheckResult as GateCheckResult, CriterionResult } from './story-acceptance-gate';
+import type { AcceptanceCheckResult as GateCheckResult } from './story-acceptance-gate';
 import type { AcceptanceCheckResult as NotificationCheckResult } from './notification/types';
 
 const log = createCommandLogger('runner');
@@ -380,6 +380,15 @@ export function deriveStoryStatus(tasks: TaskFile[]): StoryStatus {
 }
 
 // --- 内部型: runStory 状態機械のフェーズ遷移 ---
+//
+// フェーズ遷移図:
+//
+//   decompose ──→ execute-tasks ──→ acceptance-gate ──→ doc-update ──→ Done
+//       │              │     ↑            │
+//       └→ terminal    └→ terminal        ├→ terminal (Failed/Cancelled)
+//          (Cancelled)    (Cancelled/     └→ execute-tasks (追加タスク)
+//                          Doing)
+//
 
 type StoryPhase = 'decompose' | 'execute-tasks' | 'acceptance-gate' | 'doc-update';
 
