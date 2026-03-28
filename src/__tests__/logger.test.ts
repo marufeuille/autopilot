@@ -203,18 +203,92 @@ describe('logger', () => {
       // module はトップレベルに存在し、コンテキスト側には重複しない
       expect(parsed.module).toBe('runner');
     });
+
+    it('logError で Error オブジェクト付きの場合、stack が含まれる', () => {
+      const err = new Error('JSON テストエラー');
+      logError('エラー発生', { module: 'pipeline' }, err);
+
+      expect(consoleSpy.error).toHaveBeenCalledTimes(1);
+      // 第1引数は JSON 形式のログ
+      const parsed = JSON.parse(consoleSpy.error.mock.calls[0][0] as string);
+      expect(parsed.level).toBe('ERROR');
+      expect(parsed.module).toBe('pipeline');
+      expect(parsed.msg).toBe('エラー発生');
+      // 第2引数にエラー詳細（message, stack）が含まれる
+      const errorDetail = consoleSpy.error.mock.calls[0][1] as any;
+      expect(errorDetail.error).toBe('JSON テストエラー');
+      expect(errorDetail.stack).toBeDefined();
+      expect(errorDetail.stack).toContain('JSON テストエラー');
+    });
+
+    it('logError で非 Error オブジェクトの場合も JSON 形式で出力される', () => {
+      logError('エラー発生', { module: 'runner' }, 'string error');
+
+      const parsed = JSON.parse(consoleSpy.error.mock.calls[0][0] as string);
+      expect(parsed.level).toBe('ERROR');
+      expect(parsed.module).toBe('runner');
+      const errorDetail = consoleSpy.error.mock.calls[0][1] as any;
+      expect(errorDetail.error).toBe('string error');
+    });
+
+    it('logError で error なしの場合は第2引数がない', () => {
+      logError('エラーメッセージのみ', { module: 'ci' });
+
+      const parsed = JSON.parse(consoleSpy.error.mock.calls[0][0] as string);
+      expect(parsed.level).toBe('ERROR');
+      expect(parsed.module).toBe('ci');
+      expect(consoleSpy.error.mock.calls[0]).toHaveLength(1);
+    });
   });
 
-  describe('LOG_FORMAT=pretty は pretty 形式と同じ', () => {
-    it('LOG_FORMAT=pretty 設定時は pretty 形式で出力される', () => {
+  describe('LOG_FORMAT 環境変数によるフォーマット切り替え', () => {
+    it('LOG_FORMAT 未設定 → pretty 形式で出力される', () => {
+      delete process.env.LOG_FORMAT;
+      logInfo('テスト', { module: 'runner' });
+
+      const output = consoleSpy.log.mock.calls[0][0] as string;
+      expect(output).toContain('[runner]');
+      expect(output).toContain('[INFO]');
+      expect(output).toMatch(/\[.*\] \[INFO\] \[runner\] テスト/);
+      // JSON ではないことを確認
+      expect(() => JSON.parse(output)).toThrow();
+    });
+
+    it('LOG_FORMAT=pretty → pretty 形式で出力される', () => {
       process.env.LOG_FORMAT = 'pretty';
       logInfo('テスト', { module: 'runner' });
 
       const output = consoleSpy.log.mock.calls[0][0] as string;
       expect(output).toContain('[runner]');
       expect(output).toContain('[INFO]');
-      // JSON ではないことを確認
       expect(() => JSON.parse(output)).toThrow();
+    });
+
+    it('LOG_FORMAT=json → JSON 形式で出力される', () => {
+      process.env.LOG_FORMAT = 'json';
+      logInfo('テスト', { module: 'runner' });
+
+      const output = consoleSpy.log.mock.calls[0][0] as string;
+      const parsed = JSON.parse(output);
+      expect(parsed.level).toBe('INFO');
+      expect(parsed.module).toBe('runner');
+      expect(parsed.msg).toBe('テスト');
+      expect(parsed.ts).toBeDefined();
+    });
+
+    it('LOG_FORMAT を切り替えると出力形式が変わる', () => {
+      // まず pretty
+      delete process.env.LOG_FORMAT;
+      logInfo('pretty出力', { module: 'test' });
+      const prettyOutput = consoleSpy.log.mock.calls[0][0] as string;
+      expect(() => JSON.parse(prettyOutput)).toThrow();
+
+      // JSON に切り替え
+      process.env.LOG_FORMAT = 'json';
+      logInfo('json出力', { module: 'test' });
+      const jsonOutput = consoleSpy.log.mock.calls[1][0] as string;
+      const parsed = JSON.parse(jsonOutput);
+      expect(parsed.msg).toBe('json出力');
     });
   });
 
