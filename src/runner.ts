@@ -389,6 +389,141 @@ type StoryPhaseResult =
   | { next: 'doc-update'; doneTasks: TaskFile[]; messageTs?: string }
   | { next: 'terminal'; status: StoryStatus };
 
+// --- フェーズ関数: runStory の各フェーズを独立した関数として抽出 ---
+
+/**
+ * decompose フェーズ: タスクが未作成の場合にストーリーを分解する。
+ * タスクが既に存在する場合はそのまま execute-tasks へ遷移する。
+ */
+async function phaseDecompose(
+  story: StoryFile,
+  notifier: NotificationBackend,
+  deps: RunnerDeps,
+): Promise<StoryPhaseResult> {
+  const tasks = await deps.getStoryTasks(story.project, story.slug);
+
+  if (tasks.length === 0) {
+    const decompositionResult = await runDecomposition(story, notifier, deps);
+    if (decompositionResult === 'cancelled') {
+      return { next: 'terminal', status: 'Cancelled' };
+    }
+  }
+
+  return { next: 'execute-tasks' };
+}
+
+/**
+ * execute-tasks フェーズ: Todo タスクを順番に実行し、全タスクの終端判定を行う。
+ */
+async function phaseExecuteTasks(
+  story: StoryFile,
+  repoPath: string,
+  notifier: NotificationBackend,
+  deps: RunnerDeps,
+): Promise<StoryPhaseResult> {
+  const allCurrentTasks = await deps.getStoryTasks(story.project, story.slug);
+  const todoTasks = allCurrentTasks.filter((t) => t.status === 'Todo');
+
+  if (todoTasks.length > 0) {
+    const taskResult = await runTodoTasks(todoTasks, story, repoPath, notifier, deps);
+    if (taskResult === 'cancelled') {
+      return { next: 'terminal', status: 'Cancelled' };
+    }
+  }
+
+  // 全タスクの最新状態を取得してストーリー完了判定
+  const terminalStatuses: TaskStatus[] = ['Done', 'Skipped', 'Failed', 'Cancelled'];
+  const allTasks = todoTasks.length > 0
+    ? await deps.getStoryTasks(story.project, story.slug)
+    : allCurrentTasks;
+  const allTerminal = allTasks.length > 0 && allTasks.every((t) => terminalStatuses.includes(t.status));
+
+  if (!allTerminal) {
+    if (todoTasks.length === 0) {
+      const remaining = allTasks.filter((t) => !terminalStatuses.includes(t.status));
+      log.info('no todo tasks but story not complete', {
+        storySlug: story.slug,
+        remaining: remaining.map((t) => `${t.slug}(${t.status})`).join(', '),
+        phase: 'story_loop',
+      });
+    } else {
+      const remaining = allTasks.filter((t) => !terminalStatuses.includes(t.status));
+      log.info('story not done, remaining tasks', {
+        remaining: remaining.map((t) => t.slug).join(', '),
+        phase: 'story_loop',
+      });
+    }
+    return { next: 'terminal', status: 'Doing' };
+  }
+
+  return { next: 'acceptance-gate', allTasks };
+}
+
+/**
+ * acceptance-gate フェーズ: 受け入れ条件チェックを実行し、結果に応じて遷移先を決定する。
+ * - 全タスク Done/Skipped → 受け入れ条件ゲート実行
+ * - Failed/Cancelled タスクあり → ゲートをスキップして terminal
+ * - ゲート結果が 'continue' → execute-tasks に戻る（追加タスク実行）
+ */
+async function phaseAcceptanceGate(
+  story: StoryFile,
+  allTasks: TaskFile[],
+  repoPath: string,
+  notifier: NotificationBackend,
+  deps: RunnerDeps,
+): Promise<StoryPhaseResult> {
+  const storyStatus = deriveStoryStatus(allTasks);
+
+  if (storyStatus !== 'Done') {
+    // Failed/Cancelled の場合は受け入れ条件ゲートを通さない
+    deps.updateFileStatus(story.filePath, storyStatus);
+    const summary = allTasks.map((t) => `${t.slug}(${t.status})`).join(', ');
+    const icon = storyStatus === 'Cancelled' ? '🚫' : '❌';
+    await notifier.notify(`${icon} ストーリー${storyStatus}: ${story.slug}\n${summary}`, story.slug);
+    log.info(`story ${storyStatus}`, { storySlug: story.slug, summary, phase: 'story_complete' });
+    return { next: 'terminal', status: storyStatus };
+  }
+
+  // 全タスク Done/Skipped → 受け入れ条件ゲートを実行
+  const gateResult = await runAcceptanceGate(story, allTasks, repoPath, notifier, deps);
+
+  if (gateResult.result === 'done') {
+    const doneTasks = allTasks.filter((t) => t.status === 'Done');
+    return { next: 'doc-update', doneTasks, messageTs: gateResult.messageTs };
+  }
+
+  // gateResult.result === 'continue' → 追加タスクが生成されたのでタスクループを再開
+  return { next: 'execute-tasks' };
+}
+
+/**
+ * doc-update フェーズ: README 更新 → ステータス更新 → 完了通知を行い、最終ステータスを返す。
+ */
+async function phaseDocUpdate(
+  story: StoryFile,
+  doneTasks: TaskFile[],
+  repoPath: string,
+  notifier: NotificationBackend,
+  deps: RunnerDeps,
+  messageTs?: string,
+): Promise<StoryStatus> {
+  if (doneTasks.length > 0) {
+    await tryDocUpdateAndNotify(story, doneTasks, repoPath, notifier, deps);
+  }
+
+  deps.updateFileStatus(story.filePath, 'Done');
+
+  const completionMessage = `✅ ストーリー完了: ${story.slug}`;
+  if (messageTs) {
+    await notifier.notifyUpdate(messageTs, completionMessage, story.slug);
+  } else {
+    await notifier.notify(completionMessage, story.slug);
+  }
+  log.info('story done', { storySlug: story.slug, phase: 'story_complete' });
+
+  return 'Done';
+}
+
 export async function runStory(
   story: StoryFile,
   notifier: NotificationBackend,
