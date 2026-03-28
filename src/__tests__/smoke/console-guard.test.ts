@@ -79,7 +79,6 @@ describe('smoke: console-guard', () => {
 
   /** console メソッドをスパイし、呼び出しを記録する */
   function spyConsoleMethod(method: 'log' | 'warn' | 'error') {
-    const original = console[method];
     return vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
       const stack = new Error().stack;
       capturedCalls.push({ method, args, stack });
@@ -88,6 +87,8 @@ describe('smoke: console-guard', () => {
   }
 
   beforeEach(() => {
+    // モジュールキャッシュをクリアし、動的importで毎回トップレベル副作用を再実行させる
+    vi.resetModules();
     capturedCalls.length = 0;
 
     // 環境変数を退避
