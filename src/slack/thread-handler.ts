@@ -198,7 +198,7 @@ export async function handleThreadMessageInternal(
     return;
   }
 
-  const log = createCommandLogger({ command: session.type, threadTs });
+  const log = createCommandLogger('thread-handler', { command: session.type, threadTs });
   log.info('スレッド内修正依頼を受信', { phase: 'thread_message_received' });
 
   // 会話履歴にユーザーの修正依頼を追加
@@ -287,7 +287,7 @@ export function createRedraftDepsFromApp(app: App): RedraftDeps {
 export function registerThreadHandler(app: App): void {
   const deps = createRedraftDepsFromApp(app);
 
-  logInfo('スレッドハンドラーを登録', { phase: 'handler_registered' });
+  logInfo('スレッドハンドラーを登録', { module: 'thread-handler', phase: 'handler_registered' });
 
   app.event('message', async ({ event }) => {
     const msg = event as any;
@@ -317,6 +317,7 @@ export function registerThreadHandler(app: App): void {
     const userId = msg.user;
 
     logInfo('スレッドメッセージイベント検出', {
+      module: 'thread-handler',
       phase: 'event_received',
       threadTs,
       userId,
@@ -326,6 +327,7 @@ export function registerThreadHandler(app: App): void {
     const session = interactiveSessionManager.getSession(threadTs);
     if (!session) {
       logInfo('対応するセッションなし（無視）', {
+        module: 'thread-handler',
         phase: 'session_not_found',
         threadTs,
         userId,
@@ -334,6 +336,7 @@ export function registerThreadHandler(app: App): void {
     }
 
     logInfo('セッション照合成功', {
+      module: 'thread-handler',
       phase: 'session_matched',
       threadTs,
       userId,
@@ -343,6 +346,7 @@ export function registerThreadHandler(app: App): void {
 
     if (session.phase !== 'drafting') {
       logInfo('セッションが drafting フェーズではないため無視', {
+        module: 'thread-handler',
         phase: 'session_phase_mismatch',
         threadTs,
         userId,
@@ -355,6 +359,7 @@ export function registerThreadHandler(app: App): void {
     try {
       await handleThreadMessageInternal(threadTs, text, deps);
       logInfo('スレッド返信処理完了', {
+        module: 'thread-handler',
         phase: 'thread_reply_handled',
         threadTs,
         userId,
@@ -362,6 +367,7 @@ export function registerThreadHandler(app: App): void {
       });
     } catch (error) {
       logError('スレッド返信処理中にエラーが発生', {
+        module: 'thread-handler',
         phase: 'thread_reply_error',
         threadTs,
         userId,

@@ -234,7 +234,7 @@ export async function executeFixInternal(
   userId?: string,
   timeoutMs: number = FIX_EXECUTION_TIMEOUT_MS,
 ): Promise<FixExecutionResult> {
-  const log = createCommandLogger({ command: 'fix', threadTs, userId });
+  const log = createCommandLogger('fix-executor', { command: 'fix', threadTs, userId });
 
   // 1. 進捗メッセージを投稿
   log.info('修正実行開始', { phase: 'fix_execution_start', slug });

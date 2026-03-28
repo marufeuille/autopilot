@@ -123,6 +123,7 @@ export function registerSlashCommands(app: App): void {
     const userId = command.user_id;
 
     logInfo('スラッシュコマンド受信', {
+      module: 'slash-commands',
       command: parsed.subcommand || '(none)',
       userId,
       phase: 'slash_command_received',
@@ -140,6 +141,7 @@ export function registerSlashCommands(app: App): void {
       const sanitized = sanitizeForMrkdwn(parsed.subcommand);
       const available = getRegisteredSubcommands().join(', ');
       logWarn('不明なサブコマンド', {
+        module: 'slash-commands',
         command: parsed.subcommand,
         userId,
         phase: 'unknown_subcommand',
@@ -156,6 +158,7 @@ export function registerSlashCommands(app: App): void {
     await ack();
 
     logInfo('サブコマンドにディスパッチ', {
+      module: 'slash-commands',
       command: parsed.subcommand,
       userId,
       phase: 'dispatch',
@@ -167,6 +170,7 @@ export function registerSlashCommands(app: App): void {
       });
     } catch (error) {
       logError('サブコマンドハンドラーでエラーが発生', {
+        module: 'slash-commands',
         command: parsed.subcommand,
         userId,
         phase: 'handler_error',

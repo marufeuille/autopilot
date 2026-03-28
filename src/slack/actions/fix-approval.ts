@@ -168,7 +168,7 @@ export async function handleFixApproveInternal(
   deps: FixApprovalDeps,
   userId?: string,
 ): Promise<void> {
-  const log = createCommandLogger({ command: 'fix', threadTs, userId });
+  const log = createCommandLogger('fix-approval', { command: 'fix', threadTs, userId });
   const session = interactiveSessionManager.getSession(threadTs);
 
   if (!session) {
@@ -290,7 +290,6 @@ export async function handleFixApproveInternal(
   } catch (error) {
     log.error('承認処理中にエラーが発生', { phase: 'approve_error' }, error);
     const errMsg = error instanceof Error ? error.message : String(error);
-    console.error(`[fix-approval] Vault書き込みエラー (thread: ${threadTs}):`, errMsg);
     await deps.postMessage({
       channel: session.channelId,
       text: ':x: fix用ストーリーの作成に失敗しました。管理者に問い合わせてください。',
@@ -308,7 +307,7 @@ export async function handleFixCancelInternal(
   deps: FixApprovalDeps,
   userId?: string,
 ): Promise<void> {
-  const log = createCommandLogger({ command: 'fix', threadTs, userId });
+  const log = createCommandLogger('fix-approval', { command: 'fix', threadTs, userId });
   const session = interactiveSessionManager.getSession(threadTs);
 
   if (!session || session.phase !== 'drafting') {
@@ -433,7 +432,7 @@ export function createFixApprovalDepsFromApp(app: App): FixApprovalDeps {
 export function registerFixApprovalHandlers(app: App): void {
   const deps = createFixApprovalDepsFromApp(app);
 
-  logInfo('fix承認アクションハンドラーを登録', { command: 'fix', phase: 'handler_registered' });
+  logInfo('fix承認アクションハンドラーを登録', { module: 'fix-approval', command: 'fix', phase: 'handler_registered' });
 
   // 承認ボタン
   app.action('ap_fix_approve', async ({ body, ack }) => {
@@ -443,6 +442,7 @@ export function registerFixApprovalHandlers(app: App): void {
     const action = blockBody.actions?.[0];
 
     logInfo('fix承認ボタン押下を受信', {
+      module: 'fix-approval',
       command: 'fix',
       userId,
       phase: 'interactive_payload_received',
@@ -450,17 +450,18 @@ export function registerFixApprovalHandlers(app: App): void {
     });
 
     if (!action || !('value' in action) || !action.value) {
-      logError('承認アクションの値が取得できません', { command: 'fix', userId, phase: 'action_parse_error' });
+      logError('承認アクションの値が取得できません', { module: 'fix-approval', command: 'fix', userId, phase: 'action_parse_error' });
       return;
     }
     const threadTs = action.value;
     const messageTs = blockBody.message?.ts;
     if (!messageTs) {
-      logError('メッセージtsが取得できません', { command: 'fix', userId, phase: 'action_parse_error', threadTs });
+      logError('メッセージtsが取得できません', { module: 'fix-approval', command: 'fix', userId, phase: 'action_parse_error', threadTs });
       return;
     }
 
     logInfo('fix承認ペイロード解析完了', {
+      module: 'fix-approval',
       command: 'fix',
       userId,
       phase: 'payload_parsed',
@@ -479,6 +480,7 @@ export function registerFixApprovalHandlers(app: App): void {
     const action = blockBody.actions?.[0];
 
     logInfo('fixキャンセルボタン押下を受信', {
+      module: 'fix-approval',
       command: 'fix',
       userId,
       phase: 'interactive_payload_received',
@@ -486,17 +488,18 @@ export function registerFixApprovalHandlers(app: App): void {
     });
 
     if (!action || !('value' in action) || !action.value) {
-      logError('キャンセルアクションの値が取得できません', { command: 'fix', userId, phase: 'action_parse_error' });
+      logError('キャンセルアクションの値が取得できません', { module: 'fix-approval', command: 'fix', userId, phase: 'action_parse_error' });
       return;
     }
     const threadTs = action.value;
     const messageTs = blockBody.message?.ts;
     if (!messageTs) {
-      logError('メッセージtsが取得できません', { command: 'fix', userId, phase: 'action_parse_error', threadTs });
+      logError('メッセージtsが取得できません', { module: 'fix-approval', command: 'fix', userId, phase: 'action_parse_error', threadTs });
       return;
     }
 
     logInfo('fixキャンセルペイロード解析完了', {
+      module: 'fix-approval',
       command: 'fix',
       userId,
       phase: 'payload_parsed',

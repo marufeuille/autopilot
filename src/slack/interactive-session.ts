@@ -54,6 +54,7 @@ export class InteractiveSessionManager {
   startSession(session: InteractiveSession): void {
     this.sessions.set(session.threadTs, session);
     logInfo('セッション開始', {
+      module: 'interactive-session',
       command: session.type,
       threadTs: session.threadTs,
       phase: session.phase,
@@ -76,6 +77,7 @@ export class InteractiveSessionManager {
       const previousPhase = session.phase;
       session.phase = phase;
       logInfo('セッションフェーズ更新', {
+        module: 'interactive-session',
         command: session.type,
         threadTs,
         phase,
@@ -83,6 +85,7 @@ export class InteractiveSessionManager {
       });
     } else {
       logWarn('セッションが見つからないためフェーズ更新をスキップ', {
+        module: 'interactive-session',
         threadTs,
         phase,
       });
@@ -104,6 +107,7 @@ export class InteractiveSessionManager {
     const session = this.sessions.get(threadTs);
     if (!session || session.phase !== expectedPhase) {
       logWarn('CAS フェーズ遷移失敗', {
+        module: 'interactive-session',
         threadTs,
         expectedPhase,
         newPhase,
@@ -113,6 +117,7 @@ export class InteractiveSessionManager {
     }
     session.phase = newPhase;
     logInfo('CAS フェーズ遷移成功', {
+      module: 'interactive-session',
       command: session.type,
       threadTs,
       phase: `${expectedPhase} → ${newPhase}`,
@@ -128,6 +133,7 @@ export class InteractiveSessionManager {
     if (session) {
       session.conversationHistory.push(message);
       logInfo('会話履歴にメッセージ追加', {
+        module: 'interactive-session',
         command: session.type,
         threadTs,
         role: message.role,
@@ -143,6 +149,7 @@ export class InteractiveSessionManager {
     const session = this.sessions.get(threadTs);
     if (session) {
       logInfo('セッション終了', {
+        module: 'interactive-session',
         command: session.type,
         threadTs,
         phase: session.phase,
