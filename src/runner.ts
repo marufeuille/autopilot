@@ -379,6 +379,16 @@ export function deriveStoryStatus(tasks: TaskFile[]): StoryStatus {
   return 'Done';
 }
 
+// --- 内部型: runStory 状態機械のフェーズ遷移 ---
+
+type StoryPhase = 'decompose' | 'execute-tasks' | 'acceptance-gate' | 'doc-update';
+
+type StoryPhaseResult =
+  | { next: 'execute-tasks' }
+  | { next: 'acceptance-gate'; allTasks: TaskFile[] }
+  | { next: 'doc-update'; doneTasks: TaskFile[]; messageTs?: string }
+  | { next: 'terminal'; status: StoryStatus };
+
 export async function runStory(
   story: StoryFile,
   notifier: NotificationBackend,
