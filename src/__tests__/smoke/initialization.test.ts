@@ -28,6 +28,9 @@ describe('smoke: initialization', () => {
   ];
 
   beforeEach(() => {
+    // モジュールキャッシュをリセットし、各テストで再初期化を検証する
+    vi.resetModules();
+
     // 環境変数を退避
     for (const key of envKeys) {
       savedEnv[key] = process.env[key];
