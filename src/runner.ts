@@ -392,21 +392,17 @@ type StoryPhaseResult =
 // --- フェーズ関数: runStory の各フェーズを独立した関数として抽出 ---
 
 /**
- * decompose フェーズ: タスクが未作成の場合にストーリーを分解する。
- * タスクが既に存在する場合はそのまま execute-tasks へ遷移する。
+ * decompose フェーズ: ストーリーを分解してタスクファイルを作成する。
+ * タスクが未作成と判定された場合にのみ呼び出される前提。
  */
 async function phaseDecompose(
   story: StoryFile,
   notifier: NotificationBackend,
   deps: RunnerDeps,
 ): Promise<StoryPhaseResult> {
-  const tasks = await deps.getStoryTasks(story.project, story.slug);
-
-  if (tasks.length === 0) {
-    const decompositionResult = await runDecomposition(story, notifier, deps);
-    if (decompositionResult === 'cancelled') {
-      return { next: 'terminal', status: 'Cancelled' };
-    }
+  const decompositionResult = await runDecomposition(story, notifier, deps);
+  if (decompositionResult === 'cancelled') {
+    return { next: 'terminal', status: 'Cancelled' };
   }
 
   return { next: 'execute-tasks' };
@@ -540,95 +536,57 @@ export async function runStory(
   await notifier.startThread(story.slug, originMessage);
   log.info('thread session started', { storySlug: story.slug, phase: 'thread_session' });
 
-  if (tasks.length === 0) {
-    const decompositionResult = await runDecomposition(story, notifier, d);
-    if (decompositionResult === 'cancelled') {
-      notifier.endSession(story.slug);
-      log.info('thread session ended', { storySlug: story.slug, phase: 'thread_session' });
-      return 'Cancelled';
-    }
-  }
-
-  // タスク実行 → 受け入れ条件チェック → 追加タスクのループ
+  // 初期フェーズの決定: タスク未作成なら decompose、既存タスクがあれば execute-tasks
+  let phase: StoryPhase = tasks.length === 0 ? 'decompose' : 'execute-tasks';
   let finalStatus: StoryStatus = 'Doing';
-  let acceptanceGatePassed = false;
-  while (!acceptanceGatePassed) {
-    const allCurrentTasks = await d.getStoryTasks(story.project, story.slug);
-    const todoTasks = allCurrentTasks.filter((t) => t.status === 'Todo');
 
-    if (todoTasks.length > 0) {
-      const taskResult = await runTodoTasks(todoTasks, story, repoPath, notifier, d);
-      if (taskResult === 'cancelled') {
-        notifier.endSession(story.slug);
-        log.info('thread session ended', { storySlug: story.slug, phase: 'thread_session' });
-        return 'Cancelled';
+  // フェーズ間で受け渡すデータ
+  let gateAllTasks: TaskFile[] = [];
+  let docDoneTasks: TaskFile[] = [];
+  let docMessageTs: string | undefined;
+
+  // 状態機械メインループ
+  loop: while (true) {
+    switch (phase) {
+      case 'decompose': {
+        const r = await phaseDecompose(story, notifier, d);
+        if (r.next === 'terminal') {
+          finalStatus = r.status;
+          break loop;
+        }
+        phase = r.next;
+        break;
+      }
+      case 'execute-tasks': {
+        const r = await phaseExecuteTasks(story, repoPath, notifier, d);
+        if (r.next === 'terminal') {
+          finalStatus = r.status;
+          break loop;
+        }
+        if (r.next === 'acceptance-gate') {
+          gateAllTasks = r.allTasks;
+        }
+        phase = r.next;
+        break;
+      }
+      case 'acceptance-gate': {
+        const r = await phaseAcceptanceGate(story, gateAllTasks, repoPath, notifier, d);
+        if (r.next === 'terminal') {
+          finalStatus = r.status;
+          break loop;
+        }
+        if (r.next === 'doc-update') {
+          docDoneTasks = r.doneTasks;
+          docMessageTs = r.messageTs;
+        }
+        phase = r.next;
+        break;
+      }
+      case 'doc-update': {
+        finalStatus = await phaseDocUpdate(story, docDoneTasks, repoPath, notifier, d, docMessageTs);
+        break loop;
       }
     }
-
-    // 全タスクの最新状態を取得してストーリー完了判定
-    const terminalStatuses: TaskStatus[] = ['Done', 'Skipped', 'Failed', 'Cancelled'];
-    const allTasks = todoTasks.length > 0
-      ? await d.getStoryTasks(story.project, story.slug)
-      : allCurrentTasks;
-    const allTerminal = allTasks.length > 0 && allTasks.every((t) => terminalStatuses.includes(t.status));
-
-    if (!allTerminal) {
-      // 非終端タスクが残っている場合はログを出してループを抜ける
-      if (todoTasks.length === 0) {
-        const remaining = allTasks.filter((t) => !terminalStatuses.includes(t.status));
-        log.info('no todo tasks but story not complete', {
-          storySlug: story.slug,
-          remaining: remaining.map((t) => `${t.slug}(${t.status})`).join(', '),
-          phase: 'story_loop',
-        });
-      } else {
-        const remaining = allTasks.filter((t) => !terminalStatuses.includes(t.status));
-        log.info('story not done, remaining tasks', {
-          remaining: remaining.map((t) => t.slug).join(', '),
-          phase: 'story_loop',
-        });
-      }
-      break;
-    }
-
-    // 全タスク終端かつ Failed/Cancelled がある場合はゲートをスキップ
-    const storyStatus = deriveStoryStatus(allTasks);
-    if (storyStatus !== 'Done') {
-      // Failed/Cancelled の場合は受け入れ条件ゲートを通さない
-      d.updateFileStatus(story.filePath, storyStatus);
-      const summary = allTasks.map((t) => `${t.slug}(${t.status})`).join(', ');
-      const icon = storyStatus === 'Cancelled' ? '🚫' : '❌';
-      await notifier.notify(`${icon} ストーリー${storyStatus}: ${story.slug}\n${summary}`, story.slug);
-      log.info(`story ${storyStatus}`, { storySlug: story.slug, summary, phase: 'story_complete' });
-      finalStatus = storyStatus;
-      acceptanceGatePassed = true;
-      break;
-    }
-
-    // 全タスク Done/Skipped → 受け入れ条件ゲートを実行
-    const gateResult = await runAcceptanceGate(story, allTasks, repoPath, notifier, d);
-
-    if (gateResult.result === 'done') {
-      // Done タスクがあれば README 更新を試みる
-      const doneTasks = allTasks.filter((t) => t.status === 'Done');
-      if (doneTasks.length > 0) {
-        await tryDocUpdateAndNotify(story, doneTasks, repoPath, notifier, d);
-      }
-
-      d.updateFileStatus(story.filePath, 'Done');
-
-      // 「⏳ 処理中...」メッセージがあれば「✅ ストーリー完了」で上書き、なければ新規通知
-      const completionMessage = `✅ ストーリー完了: ${story.slug}`;
-      if (gateResult.messageTs) {
-        await notifier.notifyUpdate(gateResult.messageTs, completionMessage, story.slug);
-      } else {
-        await notifier.notify(completionMessage, story.slug);
-      }
-      log.info('story done', { storySlug: story.slug, phase: 'story_complete' });
-      finalStatus = 'Done';
-      acceptanceGatePassed = true;
-    }
-    // gateResult.result === 'continue' の場合、ループの先頭に戻って追加タスクを実行
   }
 
   // スレッドセッション終了: メモリを解放
