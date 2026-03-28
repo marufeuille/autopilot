@@ -149,6 +149,11 @@ SLACK_CHANNEL_ID=C0XXXXXXXXX
 
 # リポジトリのベースディレクトリ（省略時は ${HOME}/dev）
 # REPO_BASE_PATH=/path/to/your/repos
+
+# ログ出力フォーマット（省略時は pretty）
+# pretty: 人間が読みやすい形式 [timestamp] [LEVEL] [module] message {context}
+# json: JSON形式（Datadog, CloudWatch等のログ収集基盤向け）
+# LOG_FORMAT=json
 ```
 
 ### 3. 通知バックエンドの選択
