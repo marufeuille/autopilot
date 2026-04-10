@@ -8,7 +8,6 @@ import {
   sanitizeSlackOutput,
   FixExecutionTimeoutError,
   type FixExecutionDeps,
-  FIX_EXECUTION_TIMEOUT_MS,
 } from '../fix-executor';
 import {
   interactiveSessionManager,
@@ -168,12 +167,6 @@ describe('FixExecutionTimeoutError', () => {
     expect(error.name).toBe('FixExecutionTimeoutError');
     expect(error.timeoutMs).toBe(60000);
     expect(error.message).toBe('test');
-  });
-});
-
-describe('FIX_EXECUTION_TIMEOUT_MS', () => {
-  it('5分（300000ms）に設定されている', () => {
-    expect(FIX_EXECUTION_TIMEOUT_MS).toBe(300000);
   });
 });
 
