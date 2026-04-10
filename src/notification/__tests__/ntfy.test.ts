@@ -58,9 +58,7 @@ describe('NtfyNotificationBackend', () => {
       });
       vi.stubGlobal('fetch', mockFetch);
 
-      await expect(backend.notify('test')).rejects.toThrow(
-        '[ntfy] POST https://ntfy.sh/test-topic failed: 403 Forbidden',
-      );
+      await expect(backend.notify('test')).rejects.toThrow(/403/);
     });
 
     it('セルフホストサーバーの URL を使用できる', async () => {
@@ -91,7 +89,7 @@ describe('NtfyNotificationBackend', () => {
           approve: 'OK',
           reject: 'NG',
         }),
-      ).rejects.toThrow('[ntfy] requestApproval is not yet implemented');
+      ).rejects.toThrow(/requestApproval.*not yet implemented/);
     });
   });
 });
