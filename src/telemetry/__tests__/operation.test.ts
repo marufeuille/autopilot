@@ -106,6 +106,32 @@ describe('traceOperation', () => {
     expect(mockSpan.setAttribute).toHaveBeenCalledWith('op.token_output', 200);
   });
 
+  it('getResult コールバックが例外を投げても fn() の結果が返され op.error=false のままになる', async () => {
+    const mockSpan = {
+      setAttribute: vi.fn(),
+      setStatus: vi.fn(),
+      end: vi.fn(),
+    };
+    const mockTracer = {
+      startSpan: vi.fn().mockReturnValue(mockSpan),
+    };
+    vi.spyOn(trace, 'getTracer').mockReturnValue(mockTracer as any);
+
+    const result = await traceOperation(
+      { type: 'agent', waitType: 'agent' },
+      async () => ({ data: 'success' }),
+      () => { throw new Error('getResult failed'); },
+    );
+
+    // fn() の結果がそのまま返される
+    expect(result).toEqual({ data: 'success' });
+    // op.error は false（fn() 自体は成功しているため）
+    expect(mockSpan.setAttribute).toHaveBeenCalledWith('op.error', false);
+    expect(mockSpan.setAttribute).not.toHaveBeenCalledWith('op.error', true);
+    // スパンは終了している
+    expect(mockSpan.end).toHaveBeenCalled();
+  });
+
   it('getResult コールバックが undefined のトークン値を渡した場合、属性が設定されない', async () => {
     const mockSpan = {
       setAttribute: vi.fn(),

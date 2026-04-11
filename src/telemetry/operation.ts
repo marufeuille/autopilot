@@ -89,13 +89,20 @@ export async function traceOperation<T>(
     const result = await fn();
 
     // トークン情報の記録（Claude 呼び出し時）
+    // getResult コールバック内の例外は、fn() の成功結果に影響を与えないよう
+    // 独立した try-catch で囲む。
     if (getResult) {
-      const opResult = getResult(result);
-      if (opResult.tokenInput !== undefined) {
-        span.setAttribute('op.token_input', opResult.tokenInput);
-      }
-      if (opResult.tokenOutput !== undefined) {
-        span.setAttribute('op.token_output', opResult.tokenOutput);
+      try {
+        const opResult = getResult(result);
+        if (opResult.tokenInput !== undefined) {
+          span.setAttribute('op.token_input', opResult.tokenInput);
+        }
+        if (opResult.tokenOutput !== undefined) {
+          span.setAttribute('op.token_output', opResult.tokenOutput);
+        }
+      } catch {
+        // getResult の失敗はトークン情報の記録漏れに留め、
+        // 本来成功した操作の結果は呼び出し元に返す。
       }
     }
 
