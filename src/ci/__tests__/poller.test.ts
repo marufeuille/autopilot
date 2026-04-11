@@ -6,12 +6,21 @@ vi.mock('child_process', () => ({
   execSync: (...args: unknown[]) => mockExecSync(...args),
 }));
 
+// fs をモック
+const mockExistsSync = vi.fn();
+const mockReaddirSync = vi.fn();
+vi.mock('fs', () => ({
+  existsSync: (...args: unknown[]) => mockExistsSync(...args),
+  readdirSync: (...args: unknown[]) => mockReaddirSync(...args),
+}));
+
 import {
   getCIStatus,
   mapGitHubStatus,
   getFailureLogs,
   pollCIStatus,
   sleep,
+  hasCIWorkflows,
 } from '../poller';
 import { CIPollingError, CIPollingTimeoutError } from '../types';
 
@@ -347,6 +356,49 @@ describe('pollCIStatus', () => {
     expect(mockExecSync).toHaveBeenCalledTimes(2);
 
     delete process.env.CI_EMPTY_RUNS_MAX_RETRIES;
+  });
+});
+
+describe('hasCIWorkflows', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('.github/workflows/ が存在しない場合は false を返す', () => {
+    mockExistsSync.mockReturnValue(false);
+
+    expect(hasCIWorkflows('/repo')).toBe(false);
+    expect(mockExistsSync).toHaveBeenCalledWith('/repo/.github/workflows');
+  });
+
+  it('.github/workflows/ に .yml ファイルがある場合は true を返す', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReaddirSync.mockReturnValue(['ci.yml']);
+
+    expect(hasCIWorkflows('/repo')).toBe(true);
+  });
+
+  it('.github/workflows/ に .yaml ファイルがある場合は true を返す', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReaddirSync.mockReturnValue(['ci.yaml']);
+
+    expect(hasCIWorkflows('/repo')).toBe(true);
+  });
+
+  it('.github/workflows/ にワークフローファイルがない場合は false を返す', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReaddirSync.mockReturnValue(['README.md', '.gitkeep']);
+
+    expect(hasCIWorkflows('/repo')).toBe(false);
+  });
+
+  it('ディレクトリ読み取りエラー時は false を返す', () => {
+    mockExistsSync.mockReturnValue(true);
+    mockReaddirSync.mockImplementation(() => {
+      throw new Error('permission denied');
+    });
+
+    expect(hasCIWorkflows('/repo')).toBe(false);
   });
 });
 

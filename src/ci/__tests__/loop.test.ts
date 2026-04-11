@@ -19,8 +19,10 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 
 // poller をモック
 const mockPollCIStatus = vi.fn();
+const mockHasCIWorkflows = vi.fn().mockReturnValue(true);
 vi.mock('../poller', () => ({
   pollCIStatus: (...args: unknown[]) => mockPollCIStatus(...args),
+  hasCIWorkflows: (...args: unknown[]) => mockHasCIWorkflows(...args),
 }));
 
 import {
@@ -52,6 +54,17 @@ describe('runCIPollingLoop', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockExecSync.mockReturnValue(''); // git push default
+  });
+
+  it('ワークフローファイルが存在しない場合は即座に no_ci を返す', async () => {
+    mockHasCIWorkflows.mockReturnValueOnce(false);
+
+    const result = await runCIPollingLoop('/repo', 'feature/task-01', 'task desc');
+
+    expect(result.finalStatus).toBe('no_ci');
+    expect(result.attempts).toBe(0);
+    expect(result.attemptResults).toHaveLength(0);
+    expect(mockPollCIStatus).not.toHaveBeenCalled();
   });
 
   it('CI が最初に成功した場合、試行1回で終了する', async () => {
@@ -331,6 +344,18 @@ describe('formatCIPollingResult', () => {
     expect(text).toContain('試行 1');
     expect(text).toContain('試行 2');
     expect(text).toContain('試行 3');
+  });
+
+  it('CI未設定結果をフォーマットする', () => {
+    const result: CIPollingResult = {
+      finalStatus: 'no_ci',
+      attempts: 0,
+      attemptResults: [],
+    };
+
+    const text = formatCIPollingResult(result);
+
+    expect(text).toContain('CI未設定');
   });
 
   it('CI の URL が含まれる', () => {
