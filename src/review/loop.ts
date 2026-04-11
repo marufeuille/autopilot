@@ -120,7 +120,11 @@ ${findings}
  */
 async function runFixAgent(prompt: string, cwd: string): Promise<string> {
   const backend = createBackend(config.agentBackends.fix);
-  return backend.run(prompt, { cwd });
+  return backend.run(prompt, {
+    cwd,
+    allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
+    permissionMode: 'bypassPermissions',
+  });
 }
 
 /**

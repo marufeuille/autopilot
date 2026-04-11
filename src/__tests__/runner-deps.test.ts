@@ -68,7 +68,11 @@ describe('createDefaultRunnerDeps', () => {
     await deps.runAgent('test prompt', '/workspace');
 
     const mockBackend = (createBackend as ReturnType<typeof vi.fn>).mock.results[0].value;
-    expect(mockBackend.run).toHaveBeenCalledWith('test prompt', { cwd: '/workspace' });
+    expect(mockBackend.run).toHaveBeenCalledWith('test prompt', {
+      cwd: '/workspace',
+      allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
+      permissionMode: 'bypassPermissions',
+    });
   });
 
   it('runAgent は AgentBackend.run() のエラーをそのまま伝播する', async () => {

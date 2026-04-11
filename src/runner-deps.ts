@@ -72,7 +72,11 @@ export function createDefaultRunnerDeps(): RunnerDeps {
 
   return {
     runAgent: async (prompt: string, cwd: string): Promise<void> => {
-      await backend.run(prompt, { cwd });
+      await backend.run(prompt, {
+        cwd,
+        allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
+        permissionMode: 'bypassPermissions',
+      });
     },
 
     execGh: (args: string[], cwd: string): string => {
