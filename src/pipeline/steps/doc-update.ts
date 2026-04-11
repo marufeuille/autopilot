@@ -1,4 +1,5 @@
 import { FlowSignal, TaskContext } from '../types';
+import { traceOperation } from '../../telemetry/operation';
 
 /**
  * Vault ストーリーノートへの why 記録プロンプトを生成する
@@ -58,7 +59,10 @@ export async function handleDocUpdate(ctx: TaskContext): Promise<FlowSignal> {
       story.content,
     );
 
-    await deps.runAgent(prompt, ctx.get('worktreePath') ?? ctx.repoPath);
+    await traceOperation(
+      { type: 'agent', waitType: 'agent' },
+      () => deps.runAgent(prompt, ctx.get('worktreePath') ?? ctx.repoPath),
+    );
 
     await notifier.notify(
       `📝 *Vault記録完了* (${task.slug})`,

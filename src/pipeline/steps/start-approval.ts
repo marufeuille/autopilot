@@ -1,5 +1,6 @@
 import { FlowSignal, TaskContext } from '../types';
 import { generateApprovalId } from '../../notification/approval-id';
+import { traceOperation } from '../../telemetry/operation';
 
 /**
  * タスク開始承認 step
@@ -12,11 +13,14 @@ export async function handleStartApproval(ctx: TaskContext): Promise<FlowSignal>
   const { task, story, notifier } = ctx;
 
   const id = generateApprovalId(story.slug, task.slug);
-  const result = await notifier.requestApproval(
-    id,
-    `*タスク開始確認*\n\n*ストーリー*: ${story.slug}\n*タスク*: ${task.slug}\n\nこのタスクを開始しますか？`,
-    { approve: '開始', reject: 'スキップ' },
-    story.slug,
+  const result = await traceOperation(
+    { type: 'slack-approval', waitType: 'human' },
+    () => notifier.requestApproval(
+      id,
+      `*タスク開始確認*\n\n*ストーリー*: ${story.slug}\n*タスク*: ${task.slug}\n\nこのタスクを開始しますか？`,
+      { approve: '開始', reject: 'スキップ' },
+      story.slug,
+    ),
   );
 
   if (result.action === 'reject') {

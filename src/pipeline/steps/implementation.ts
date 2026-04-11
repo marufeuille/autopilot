@@ -1,6 +1,7 @@
 import { FlowSignal, TaskContext } from '../types';
 import { StoryFile, TaskFile } from '../../vault/reader';
 import { formatReviewLoopResult } from '../../review';
+import { traceOperation } from '../../telemetry/operation';
 
 /**
  * タスク実装のプロンプトを生成する
@@ -78,9 +79,15 @@ export async function handleImplementation(ctx: TaskContext): Promise<FlowSignal
     ctx.set('rejectionReason', undefined);
   }
 
-  await deps.runAgent(prompt, cwd);
+  await traceOperation(
+    { type: 'agent', waitType: 'agent' },
+    () => deps.runAgent(prompt, cwd),
+  );
 
-  const reviewResult = await deps.runReviewLoop(cwd, branch, task.content);
+  const reviewResult = await traceOperation(
+    { type: 'review', waitType: 'agent' },
+    () => deps.runReviewLoop(cwd, branch, task.content),
+  );
   const reviewMessage = formatReviewLoopResult(reviewResult);
 
   if (reviewResult.finalVerdict === 'OK') {
