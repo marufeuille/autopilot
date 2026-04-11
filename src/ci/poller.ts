@@ -1,4 +1,6 @@
 import { execSync } from 'child_process';
+import { existsSync, readdirSync } from 'fs';
+import { join } from 'path';
 import {
   CIPollingOptions,
   CIRunResult,
@@ -16,6 +18,24 @@ const DEFAULT_EMPTY_RUNS_MAX_RETRIES = 10;
  */
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * リポジトリに GitHub Actions ワークフローファイルが存在するか確認する
+ *
+ * `.github/workflows/` ディレクトリに `.yml` または `.yaml` ファイルがあれば true を返す。
+ */
+export function hasCIWorkflows(repoPath: string): boolean {
+  const workflowsDir = join(repoPath, '.github', 'workflows');
+  if (!existsSync(workflowsDir)) {
+    return false;
+  }
+  try {
+    const files = readdirSync(workflowsDir);
+    return files.some((f) => f.endsWith('.yml') || f.endsWith('.yaml'));
+  } catch {
+    return false;
+  }
 }
 
 /**

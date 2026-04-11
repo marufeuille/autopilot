@@ -16,12 +16,13 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: (...args: unknown[]) => mockQuery(...args),
 }));
 
-// sleep をモック（テスト高速化）
+// sleep と hasCIWorkflows をモック（テスト高速化 + ワークフロー存在を前提とする）
 vi.mock('../poller', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../poller')>();
   return {
     ...actual,
     sleep: vi.fn().mockResolvedValue(undefined),
+    hasCIWorkflows: vi.fn().mockReturnValue(true),
   };
 });
 

@@ -38,7 +38,7 @@ export interface CIRunResult {
  */
 export interface CIPollingResult {
   /** 最終ステータス */
-  finalStatus: 'success' | 'failure' | 'timeout' | 'max_retries_exceeded';
+  finalStatus: 'success' | 'failure' | 'timeout' | 'max_retries_exceeded' | 'no_ci';
   /** CI の実行回数（初回含む） */
   attempts: number;
   /** 各試行の結果ログ */

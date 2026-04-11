@@ -205,7 +205,7 @@ export async function handlePRLifecycle(ctx: TaskContext): Promise<FlowSignal> {
   const ciMessage = formatCIPollingResult(ciResult);
   const ciRunUrl = ciResult.lastCIResult?.runUrl;
 
-  if (ciResult.finalStatus !== 'success') {
+  if (ciResult.finalStatus !== 'success' && ciResult.finalStatus !== 'no_ci') {
     const ciEscCtx: NotificationContext = {
       eventType: 'ci_escalation',
       taskSlug: task.slug,

@@ -7,7 +7,7 @@ import {
   CIPollingError,
   CIPollingTimeoutError,
 } from './types';
-import { pollCIStatus } from './poller';
+import { pollCIStatus, hasCIWorkflows } from './poller';
 
 const DEFAULT_MAX_RETRIES = 3;
 
@@ -95,6 +95,16 @@ export async function runCIPollingLoop(
 ): Promise<CIPollingResult> {
   const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
   const attemptResults: CIAttemptResult[] = [];
+
+  // ワークフローファイルが存在しない場合は即座にスキップ
+  if (!hasCIWorkflows(repoPath)) {
+    console.log(`[ci-loop] no CI workflow files found in ${repoPath}/.github/workflows/, skipping CI polling`);
+    return {
+      finalStatus: 'no_ci',
+      attempts: 0,
+      attemptResults: [],
+    };
+  }
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const attemptNumber = attempt + 1;
@@ -226,6 +236,9 @@ export function formatCIPollingResult(result: CIPollingResult): string {
       break;
     case 'max_retries_exceeded':
       lines.push('⚠️ *CI失敗（最大リトライ到達）*');
+      break;
+    case 'no_ci':
+      lines.push('ℹ️ *CI未設定*（ワークフローファイルなし）');
       break;
   }
 
