@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ClaudeBackend, AgentBackend, AgentRunOptions } from '../backend';
 
-// query SDK をモック
+// Claude Code SDK（query）をモック
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: vi.fn(),
 }));
@@ -88,7 +88,7 @@ describe('ClaudeBackend', () => {
     expect(result).toBe('');
   });
 
-  it('query に正しいオプションを渡す（デフォルトツール）', async () => {
+  it('query に正しいオプションを渡す（デフォルトは bypassPermissions）', async () => {
     mockedQuery.mockReturnValue(
       fakeStream([{ type: 'result', subtype: 'success' }]) as ReturnType<typeof query>,
     );
@@ -100,7 +100,7 @@ describe('ClaudeBackend', () => {
       options: {
         cwd: '/workspace',
         allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-        permissionMode: 'default',
+        permissionMode: 'bypassPermissions',
       },
     });
   });
@@ -120,19 +120,19 @@ describe('ClaudeBackend', () => {
       options: {
         cwd: '/workspace',
         allowedTools: ['Read', 'Grep'],
-        permissionMode: 'default',
+        permissionMode: 'bypassPermissions',
       },
     });
   });
 
-  it('permissionMode を明示的に指定した場合はそれが使われる', async () => {
+  it('permissionMode を明示的に default に指定した場合はそれが使われる', async () => {
     mockedQuery.mockReturnValue(
       fakeStream([{ type: 'result', subtype: 'success' }]) as ReturnType<typeof query>,
     );
 
     await backend.run('prompt', {
       cwd: '/workspace',
-      permissionMode: 'bypassPermissions',
+      permissionMode: 'default',
     });
 
     expect(mockedQuery).toHaveBeenCalledWith({
@@ -140,7 +140,7 @@ describe('ClaudeBackend', () => {
       options: {
         cwd: '/workspace',
         allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-        permissionMode: 'bypassPermissions',
+        permissionMode: 'default',
       },
     });
   });

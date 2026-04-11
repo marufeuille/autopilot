@@ -9,9 +9,9 @@ const log = createCommandLogger('agent-backend');
 export interface AgentRunOptions {
   /** 作業ディレクトリ */
   cwd: string;
-  /** 許可するツール一覧（省略時はバックエンド既定） */
+  /** 許可するツール一覧（省略時は Claude Code 既定のツールセット） */
   allowedTools?: string[];
-  /** 権限モード（省略時は 'default'）。'bypassPermissions' を使う場合は明示的に指定すること。 */
+  /** 権限モード（省略時は 'bypassPermissions'） */
   permissionMode?: 'default' | 'bypassPermissions';
 }
 
@@ -24,7 +24,11 @@ export interface AgentBackend {
 }
 
 /**
- * Claude Agent SDK（query）をラップする AgentBackend 実装。
+ * Claude Code（query SDK）をラップする AgentBackend 実装。
+ *
+ * `@anthropic-ai/claude-agent-sdk` の `query()` は Claude Code のプログラマティック
+ * インターフェースであり、CLI の `claude` コマンドと同等の機能を提供する。
+ * 既存の runner-deps.ts / review/loop.ts と同じ呼び出しパターンに準拠している。
  */
 export class ClaudeBackend implements AgentBackend {
   async run(prompt: string, options: AgentRunOptions): Promise<string> {
@@ -36,7 +40,7 @@ export class ClaudeBackend implements AgentBackend {
         options: {
           cwd: options.cwd,
           allowedTools: options.allowedTools ?? ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-          permissionMode: options.permissionMode ?? 'default',
+          permissionMode: options.permissionMode ?? 'bypassPermissions',
         },
       })) {
         if (message.type === 'assistant') {
@@ -57,7 +61,7 @@ export class ClaudeBackend implements AgentBackend {
         }
       }
     } catch (error) {
-      log.error('query execution failed', { error, phase: 'agent_execution' });
+      log.error('Claude Code execution failed', { error, phase: 'agent_execution' });
       throw error;
     }
 
