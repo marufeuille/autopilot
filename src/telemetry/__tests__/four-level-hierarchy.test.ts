@@ -339,8 +339,8 @@ describe('4階層トレース (Story → Task → Step → Operation)', () => {
 
     // 許可されたキーのリスト
     const allowedKeys = new Set([
-      'story.slug', 'story.task_count', 'story.result',
-      'task.slug', 'task.effort', 'task.priority', 'task.result', 'task.retry_count',
+      'story.slug', 'story.project', 'story.task_count', 'story.result',
+      'task.slug', 'task.project', 'task.effort', 'task.priority', 'task.result', 'task.retry_count',
       'step.name', 'step.signal',
       'op.type', 'op.wait_type', 'op.error', 'op.token_input', 'op.token_output',
     ]);

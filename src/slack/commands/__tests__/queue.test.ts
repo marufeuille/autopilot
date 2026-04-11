@@ -4,10 +4,10 @@ import { StoryQueueManager } from '../../../queue/queue-manager';
 import type { QueueManagerDeps } from '../../../queue/queue-manager';
 import type { StoryFile, StoryStatus } from '../../../vault/reader';
 
-function makeStory(slug: string, status: StoryStatus = 'Todo'): StoryFile {
+function makeStory(slug: string, status: StoryStatus = 'Todo', project = 'test'): StoryFile {
   return {
-    filePath: `/vault/Projects/test/stories/${slug}.md`,
-    project: 'test',
+    filePath: `/vault/Projects/${project}/stories/${slug}.md`,
+    project,
     slug,
     status,
     frontmatter: { status },
@@ -283,5 +283,112 @@ describe('createQueueHandler', () => {
       const lastCall = respond.mock.calls[respond.mock.calls.length - 1][0];
       expect(lastCall).not.toContain('一時停止中');
     });
+  });
+});
+
+// ──────────────────────────────────
+// Map<string, StoryQueueManager> 対応テスト
+// ──────────────────────────────────
+describe('createQueueHandler with Map', () => {
+  let qmAlpha: StoryQueueManager;
+  let qmBeta: StoryQueueManager;
+  let queueManagers: Map<string, StoryQueueManager>;
+  let respond: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    const depsAlpha = makeDeps({
+      'alpha-story': makeStory('alpha-story', 'Todo', 'alpha'),
+    });
+    const depsBeta = makeDeps({
+      'beta-story': makeStory('beta-story', 'Todo', 'beta'),
+    });
+    qmAlpha = new StoryQueueManager(depsAlpha);
+    qmBeta = new StoryQueueManager(depsBeta);
+    queueManagers = new Map([
+      ['alpha', qmAlpha],
+      ['beta', qmBeta],
+    ]);
+    respond = vi.fn().mockResolvedValue(undefined);
+  });
+
+  it('--project オプションで指定したプロジェクトのキューに追加される', async () => {
+    const handler = createQueueHandler(queueManagers);
+    await handler(['add', 'beta-story', '--project=beta'], respond);
+
+    expect(qmBeta.list()).toHaveLength(1);
+    expect(qmBeta.list()[0].slug).toBe('beta-story');
+    expect(qmAlpha.list()).toHaveLength(0);
+    expect(respond).toHaveBeenCalledWith(
+      expect.stringContaining('[beta]'),
+    );
+  });
+
+  it('--project 未指定時はデフォルトプロジェクト（Map の最初のキー）に追加される', async () => {
+    const handler = createQueueHandler(queueManagers);
+    await handler(['add', 'alpha-story'], respond);
+
+    expect(qmAlpha.list()).toHaveLength(1);
+    expect(qmAlpha.list()[0].slug).toBe('alpha-story');
+  });
+
+  it('存在しないプロジェクトを指定するとエラーメッセージを返す', async () => {
+    const handler = createQueueHandler(queueManagers);
+    await handler(['add', 'some-story', '--project=nonexistent'], respond);
+
+    expect(respond).toHaveBeenCalledWith(
+      expect.stringContaining('監視対象ではありません'),
+    );
+  });
+
+  it('list で全プロジェクトのキューを表示する', async () => {
+    const handler = createQueueHandler(queueManagers);
+    await handler(['add', 'alpha-story'], respond);
+    await handler(['add', 'beta-story', '--project=beta'], respond);
+    await handler(['list'], respond);
+
+    const lastCall = respond.mock.calls[respond.mock.calls.length - 1][0];
+    expect(lastCall).toContain('alpha');
+    expect(lastCall).toContain('beta');
+    expect(lastCall).toContain('alpha-story');
+    expect(lastCall).toContain('beta-story');
+    expect(lastCall).toContain('2件');
+  });
+
+  it('全プロジェクトのキューが空の場合は空メッセージを返す', async () => {
+    const handler = createQueueHandler(queueManagers);
+    await handler(['list'], respond);
+
+    expect(respond).toHaveBeenCalledWith(
+      expect.stringContaining('キューは空です'),
+    );
+  });
+
+  it('cancel で --project を指定して特定プロジェクトのキューから削除できる', async () => {
+    const handler = createQueueHandler(queueManagers);
+    await handler(['add', 'beta-story', '--project=beta'], respond);
+    await handler(['cancel', 'beta-story', '--project=beta'], respond);
+
+    expect(qmBeta.list()).toHaveLength(0);
+    expect(respond).toHaveBeenLastCalledWith(
+      expect.stringContaining('[beta]'),
+    );
+  });
+
+  it('プロジェクトごとに独立したキューが動作する（片方の停止がもう一方に影響しない）', async () => {
+    const handler = createQueueHandler(queueManagers);
+    await handler(['add', 'alpha-story'], respond);
+    await handler(['add', 'beta-story', '--project=beta'], respond);
+
+    // alpha のキューを停止
+    qmAlpha.pauseQueue();
+
+    // beta のキューは影響を受けない
+    expect(qmAlpha.isQueuePaused).toBe(true);
+    expect(qmBeta.isQueuePaused).toBe(false);
+
+    // beta から shift できる
+    expect(qmBeta.shift()).toBeDefined();
+    // alpha からは shift できない（停止中）
+    expect(qmAlpha.shift()).toBeUndefined();
   });
 });

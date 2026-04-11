@@ -73,6 +73,7 @@ describe('OtelOrchestratorHooks', () => {
     expect(mockTracer.startSpan).toHaveBeenCalledWith('story', {
       attributes: {
         'story.slug': 'my-story',
+        'story.project': 'test-project',
         'story.task_count': 3,
       },
     });
@@ -177,6 +178,7 @@ describe('OtelOrchestratorHooks', () => {
       {
         attributes: {
           'task.slug': 'my-task',
+          'task.project': 'test-project',
           'task.effort': 'medium',
           'task.priority': 'high',
         },
@@ -512,8 +514,8 @@ describe('OtelOrchestratorHooks', () => {
       for (const [key, value] of Object.entries(attrs)) {
         // 許可されたキーのみ
         expect([
-          'story.slug', 'story.task_count',
-          'task.slug', 'task.effort', 'task.priority',
+          'story.slug', 'story.project', 'story.task_count',
+          'task.slug', 'task.project', 'task.effort', 'task.priority',
         ]).toContain(key);
         // ファイルパス・コンテンツが値に含まれない
         expect(String(value)).not.toContain('/secret');

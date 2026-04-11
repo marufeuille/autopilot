@@ -63,7 +63,7 @@ describe('OtelPipelineHooks', () => {
     await hooks.onPipelineStart(ctx);
 
     expect(mockTracer.startSpan).toHaveBeenCalledWith('task', {
-      attributes: { 'task.slug': 'my-task' },
+      attributes: { 'task.slug': 'my-task', 'task.project': '' },
     });
   });
 
