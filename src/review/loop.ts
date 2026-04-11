@@ -1,7 +1,8 @@
 import { execSync } from 'child_process';
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import { SubprocessReviewRunner } from './subprocess-runner';
 import { ReviewResult, ReviewFinding, ReviewError } from './types';
+import { createBackend } from '../agent/backend';
+import { config } from '../config';
 
 /**
  * レビューループの各イテレーション記録
@@ -115,31 +116,11 @@ ${findings}
 }
 
 /**
- * 修正エージェントを実行する
+ * 修正エージェントを実行する（AgentBackend 経由）
  */
 async function runFixAgent(prompt: string, cwd: string): Promise<string> {
-  let output = '';
-
-  for await (const message of query({
-    prompt,
-    options: {
-      cwd,
-      allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-      permissionMode: 'bypassPermissions',
-    },
-  })) {
-    if (message.type === 'assistant') {
-      const content = message.message?.content ?? [];
-      for (const block of content) {
-        if ('text' in block && block.text) {
-          output += block.text;
-          process.stdout.write(`[fix-agent] ${block.text}\n`);
-        }
-      }
-    }
-  }
-
-  return output;
+  const backend = createBackend(config.agentBackends.fix);
+  return backend.run(prompt, { cwd });
 }
 
 /**

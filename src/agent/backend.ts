@@ -1,5 +1,6 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { createCommandLogger } from '../logger';
+import type { AgentBackendConfig } from '../config';
 
 const log = createCommandLogger('agent-backend');
 
@@ -66,5 +67,21 @@ export class ClaudeBackend implements AgentBackend {
     }
 
     return chunks.join('\n');
+  }
+}
+
+/**
+ * AgentBackendConfig に基づいて AgentBackend インスタンスを生成するファクトリ関数。
+ * 現時点では 'claude' のみサポート。後続で他のバックエンド追加時に拡張する。
+ */
+export function createBackend(backendConfig: AgentBackendConfig): AgentBackend {
+  switch (backendConfig.type) {
+    case 'claude':
+      return new ClaudeBackend();
+    default: {
+      // 型安全: 新しい type が追加された場合にコンパイルエラーになる
+      const _exhaustive: never = backendConfig.type;
+      throw new Error(`Unknown backend type: ${_exhaustive}`);
+    }
   }
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ClaudeBackend, AgentBackend, AgentRunOptions } from '../backend';
+import { ClaudeBackend, AgentBackend, AgentRunOptions, createBackend } from '../backend';
 
 // Claude Code SDK（query）をモック
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
@@ -191,6 +191,18 @@ describe('ClaudeBackend', () => {
     });
 
     await expect(backend.run('test', { cwd: '/tmp' })).rejects.toThrow('Authentication failed');
+  });
+});
+
+describe('createBackend', () => {
+  it('type が claude の場合は ClaudeBackend を返す', () => {
+    const backend = createBackend({ type: 'claude' });
+    expect(backend).toBeInstanceOf(ClaudeBackend);
+  });
+
+  it('返されたインスタンスは AgentBackend interface を満たす', () => {
+    const backend: AgentBackend = createBackend({ type: 'claude' });
+    expect(typeof backend.run).toBe('function');
   });
 });
 
