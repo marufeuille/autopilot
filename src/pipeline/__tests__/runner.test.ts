@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createPipeline, createTaskContext, step } from '../runner';
-import { FlowSignal, TaskContext } from '../types';
+import { FlowSignal, PipelineHooks, TaskContext } from '../types';
 
 // テスト用の最小限の TaskContext を生成するヘルパー
 function makeCtx(overrides: Partial<TaskContext> = {}): TaskContext {
@@ -251,5 +251,155 @@ describe('step', () => {
     const s = step('my-step', h);
     expect(s.name).toBe('my-step');
     expect(s.handler).toBe(h);
+  });
+});
+
+describe('PipelineHooks', () => {
+  function makeHooks(): { hooks: PipelineHooks; calls: string[] } {
+    const calls: string[] = [];
+    const hooks: PipelineHooks = {
+      onPipelineStart: vi.fn(async () => { calls.push('pipeline:start'); }),
+      onPipelineEnd: vi.fn(async (_ctx, result) => { calls.push(`pipeline:end:${result}`); }),
+      onStepStart: vi.fn(async (_ctx, name) => { calls.push(`step:start:${name}`); }),
+      onStepEnd: vi.fn(async (_ctx, info) => { calls.push(`step:end:${info.name}:${info.signal}`); }),
+    };
+    return { hooks, calls };
+  }
+
+  it('全stepがcontinueの場合、正しい順序でフックが呼ばれる', async () => {
+    const { hooks, calls } = makeHooks();
+    const run = createPipeline([
+      step('a', handler({ kind: 'continue' })),
+      step('b', handler({ kind: 'continue' })),
+    ], { hooks });
+
+    await run(makeCtx());
+
+    expect(calls).toEqual([
+      'pipeline:start',
+      'step:start:a',
+      'step:end:a:continue',
+      'step:start:b',
+      'step:end:b:continue',
+      'pipeline:end:done',
+    ]);
+  });
+
+  it('skipの場合、onStepEndにsignalが渡されonPipelineEndにskippedが渡される', async () => {
+    const { hooks, calls } = makeHooks();
+    const run = createPipeline([
+      step('a', handler({ kind: 'continue' })),
+      step('b', handler({ kind: 'skip' })),
+      step('c', handler({ kind: 'continue' })),
+    ], { hooks });
+
+    await run(makeCtx());
+
+    expect(calls).toEqual([
+      'pipeline:start',
+      'step:start:a',
+      'step:end:a:continue',
+      'step:start:b',
+      'step:end:b:skip',
+      'pipeline:end:skipped',
+    ]);
+  });
+
+  it('abortの場合、onStepEndにabortが渡されonPipelineEndにundefinedが渡される', async () => {
+    const { hooks, calls } = makeHooks();
+    const run = createPipeline([
+      step('a', handler({ kind: 'abort', error: new Error('boom') })),
+    ], { hooks });
+
+    await expect(run(makeCtx())).rejects.toThrow('boom');
+
+    expect(calls).toEqual([
+      'pipeline:start',
+      'step:start:a',
+      'step:end:a:abort',
+      'pipeline:end:undefined',
+    ]);
+  });
+
+  it('retryの場合、onStepEndにretryシグナルが渡され巻き戻し先のstepが再度フックされる', async () => {
+    let callCount = 0;
+    const retriable = vi.fn(async (_ctx: TaskContext): Promise<FlowSignal> => {
+      callCount++;
+      return callCount === 1
+        ? { kind: 'retry', from: 'a', reason: 'fail' }
+        : { kind: 'continue' };
+    });
+
+    const { hooks, calls } = makeHooks();
+    const run = createPipeline([
+      step('a', handler({ kind: 'continue' })),
+      step('b', retriable),
+    ], { hooks });
+
+    await run(makeCtx());
+
+    expect(calls).toEqual([
+      'pipeline:start',
+      'step:start:a',
+      'step:end:a:continue',
+      'step:start:b',
+      'step:end:b:retry',
+      // retry → step a から再開
+      'step:start:a',
+      'step:end:a:continue',
+      'step:start:b',
+      'step:end:b:continue',
+      'pipeline:end:done',
+    ]);
+  });
+
+  it('フック未登録（undefined）でもパイプラインが正常動作する', async () => {
+    const run = createPipeline([
+      step('a', handler({ kind: 'continue' })),
+      step('b', handler({ kind: 'continue' })),
+    ], { hooks: {} });
+
+    const result = await run(makeCtx());
+    expect(result).toBe('done');
+  });
+
+  it('hooks オプション自体を省略してもパイプラインが正常動作する', async () => {
+    const run = createPipeline([
+      step('a', handler({ kind: 'continue' })),
+    ]);
+
+    const result = await run(makeCtx());
+    expect(result).toBe('done');
+  });
+
+  it('onStepEnd の info に step.name と step.signal が含まれる', async () => {
+    const endInfos: Array<{ name: string; signal: string }> = [];
+    const hooks: PipelineHooks = {
+      onStepEnd: vi.fn(async (_ctx, info) => { endInfos.push(info); }),
+    };
+
+    const run = createPipeline([
+      step('first', handler({ kind: 'continue' })),
+      step('second', handler({ kind: 'skip' })),
+    ], { hooks });
+
+    await run(makeCtx());
+
+    expect(endInfos).toEqual([
+      { name: 'first', signal: 'continue' },
+      { name: 'second', signal: 'skip' },
+    ]);
+  });
+
+  it('retry上限超過時もonPipelineEndが呼ばれる', async () => {
+    const { hooks, calls } = makeHooks();
+    const run = createPipeline([
+      step('a', handler({ kind: 'retry', from: 'a', reason: 'fail' })),
+    ], { maxRetries: 1, hooks });
+
+    await expect(run(makeCtx())).rejects.toThrow('Pipeline retry limit exceeded');
+
+    // onPipelineEnd が undefined（エラー）で呼ばれることを確認
+    expect(calls).toContain('pipeline:end:undefined');
   });
 });

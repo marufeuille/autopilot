@@ -1,4 +1,4 @@
-import { FlowSignal, PipelineOptions, PipelineResult, Step, StepName, TaskContext } from './types';
+import { FlowSignal, PipelineHooks, PipelineOptions, PipelineResult, Step, StepName, TaskContext } from './types';
 
 export const DEFAULT_MAX_RETRIES = 10;
 
@@ -12,54 +12,83 @@ export const DEFAULT_MAX_RETRIES = 10;
  * - skip: pipeline を即座に終了し 'skipped' を返す
  * - abort: signal.error を throw する
  * - retry: signal.from で指定した step 名まで巻き戻す
+ *
+ * options.hooks を渡すと、ステップ実行前後および Pipeline 開始・終了時に
+ * コールバックが呼ばれる。フック未登録時は no-op。
  */
 export function createPipeline<TCtx extends TaskContext>(steps: Step<TCtx>[], options?: PipelineOptions) {
   const _maxRetries = options?.maxRetries ?? DEFAULT_MAX_RETRIES;
+  const hooks: PipelineHooks = options?.hooks ?? {};
 
   return async function run(ctx: TCtx): Promise<PipelineResult> {
     let stepIndex = 0;
     let retryCount = 0;
+    let result: PipelineResult | undefined;
 
-    while (stepIndex < steps.length) {
-      const current = steps[stepIndex];
-      const signal: FlowSignal = await current.handler(ctx);
+    await hooks.onPipelineStart?.(ctx);
 
-      switch (signal.kind) {
-        case 'continue':
-          stepIndex++;
-          break;
+    let pipelineEndCalled = false;
 
-        case 'skip':
-          return 'skipped';
+    try {
+      while (stepIndex < steps.length) {
+        const current = steps[stepIndex];
 
-        case 'abort':
-          throw signal.error;
+        await hooks.onStepStart?.(ctx, current.name);
+        const signal: FlowSignal = await current.handler(ctx);
+        await hooks.onStepEnd?.(ctx, { name: current.name, signal: signal.kind });
 
-        case 'retry': {
-          const targetIndex = steps.findIndex((s) => s.name === signal.from);
-          if (targetIndex === -1) {
-            throw new Error(
-              `[pipeline] Unknown step name in retry signal: "${signal.from}". ` +
-              `Available steps: ${steps.map((s) => s.name).join(', ')}`,
-            );
+        switch (signal.kind) {
+          case 'continue':
+            stepIndex++;
+            break;
+
+          case 'skip':
+            result = 'skipped';
+            pipelineEndCalled = true;
+            await hooks.onPipelineEnd?.(ctx, result);
+            return result;
+
+          case 'abort':
+            throw signal.error;
+
+          case 'retry': {
+            const targetIndex = steps.findIndex((s) => s.name === signal.from);
+            if (targetIndex === -1) {
+              throw new Error(
+                `[pipeline] Unknown step name in retry signal: "${signal.from}". ` +
+                `Available steps: ${steps.map((s) => s.name).join(', ')}`,
+              );
+            }
+
+            retryCount++;
+            if (retryCount > _maxRetries) {
+              throw new Error(
+                `Pipeline retry limit exceeded (${retryCount - 1}/${_maxRetries}): ` +
+                `last retry requested by step "${current.name}", reason: "${signal.reason}"`,
+              );
+            }
+
+            ctx.set('retryReason', signal.reason);
+            stepIndex = targetIndex;
+            break;
           }
-
-          retryCount++;
-          if (retryCount > _maxRetries) {
-            throw new Error(
-              `Pipeline retry limit exceeded (${retryCount - 1}/${_maxRetries}): ` +
-              `last retry requested by step "${current.name}", reason: "${signal.reason}"`,
-            );
-          }
-
-          ctx.set('retryReason', signal.reason);
-          stepIndex = targetIndex;
-          break;
         }
       }
-    }
 
-    return 'done';
+      result = 'done';
+      pipelineEndCalled = true;
+      await hooks.onPipelineEnd?.(ctx, result);
+      return result;
+    } catch (error) {
+      if (!pipelineEndCalled) {
+        try {
+          await hooks.onPipelineEnd?.(ctx, undefined);
+        } catch {
+          // フック自体のエラーは無視し、元のエラーを優先して re-throw する
+        }
+      }
+      throw error;
+    }
   };
 }
 

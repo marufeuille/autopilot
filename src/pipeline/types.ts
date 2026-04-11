@@ -12,8 +12,35 @@ export type FlowSignal =
 
 export type PipelineResult = 'done' | 'skipped' | 'aborted';
 
+/**
+ * ステップ完了時にフックへ渡される情報。
+ */
+export interface StepEndInfo {
+  /** ステップ名 */
+  name: StepName;
+  /** ステップが返した FlowSignal の kind */
+  signal: FlowSignal['kind'];
+}
+
+/**
+ * Pipeline のライフサイクルフック。
+ * 計装（OTel 等）をビジネスロジックに依存させずに差し込むためのインターフェース。
+ * すべて optional — 未登録時は no-op。
+ */
+export interface PipelineHooks {
+  /** Pipeline 実行開始時に呼ばれる */
+  onPipelineStart?: (ctx: TaskContext) => void | Promise<void>;
+  /** Pipeline 実行終了時に呼ばれる（result: done / skipped、または abort 時は undefined） */
+  onPipelineEnd?: (ctx: TaskContext, result: PipelineResult | undefined) => void | Promise<void>;
+  /** 各ステップの実行前に呼ばれる */
+  onStepStart?: (ctx: TaskContext, stepName: StepName) => void | Promise<void>;
+  /** 各ステップの実行後に呼ばれる */
+  onStepEnd?: (ctx: TaskContext, info: StepEndInfo) => void | Promise<void>;
+}
+
 export interface PipelineOptions {
   maxRetries?: number;
+  hooks?: PipelineHooks;
 }
 
 export interface Step<TCtx> {
