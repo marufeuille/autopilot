@@ -84,8 +84,10 @@ describe('ClaudeBackend', () => {
       prompt: 'my prompt',
       options: {
         cwd: '/workspace',
+        tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
         allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
         permissionMode: 'bypassPermissions',
+        allowDangerouslySkipPermissions: true,
       },
     });
   });
@@ -104,13 +106,36 @@ describe('ClaudeBackend', () => {
       prompt: 'prompt',
       options: {
         cwd: '/workspace',
+        tools: ['Read', 'Grep'],
         allowedTools: ['Read', 'Grep'],
         permissionMode: 'bypassPermissions',
+        allowDangerouslySkipPermissions: true,
       },
     });
   });
 
-  it('permissionMode を明示的に default に指定した場合はそれが使われる', async () => {
+  it('allowedTools が空配列の場合は tools も空になりビルトインツールが無効化される', async () => {
+    mockedQuery.mockReturnValue(
+      fakeStream([{ type: 'result', subtype: 'success' }]) as ReturnType<typeof query>,
+    );
+
+    await backend.run('prompt', {
+      allowedTools: [],
+      permissionMode: 'bypassPermissions',
+    });
+
+    expect(mockedQuery).toHaveBeenCalledWith({
+      prompt: 'prompt',
+      options: {
+        tools: [],
+        allowedTools: [],
+        permissionMode: 'bypassPermissions',
+        allowDangerouslySkipPermissions: true,
+      },
+    });
+  });
+
+  it('permissionMode を明示的に default に指定した場合はそれが使われる（allowDangerouslySkipPermissions なし）', async () => {
     mockedQuery.mockReturnValue(
       fakeStream([{ type: 'result', subtype: 'success' }]) as ReturnType<typeof query>,
     );
@@ -124,6 +149,7 @@ describe('ClaudeBackend', () => {
       prompt: 'prompt',
       options: {
         cwd: '/workspace',
+        tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
         allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
         permissionMode: 'default',
       },
@@ -189,6 +215,40 @@ describe('ClaudeBackend', () => {
     });
 
     await expect(backend.run('test', { cwd: '/tmp' })).rejects.toThrow('Authentication failed');
+  });
+
+  it('AbortSignal のリスナーが処理完了後にクリーンアップされる（メモリリーク防止）', async () => {
+    mockedQuery.mockReturnValue(
+      fakeStream([{ type: 'result', subtype: 'success', result: 'done' }]) as ReturnType<typeof query>,
+    );
+
+    const ac = new AbortController();
+    const signal = ac.signal;
+    const removeEventListenerSpy = vi.spyOn(signal, 'removeEventListener');
+
+    await backend.run('test', { cwd: '/tmp', abortSignal: signal });
+
+    // signal が abort されなくてもリスナーが解除されていることを確認
+    expect(removeEventListenerSpy).toHaveBeenCalledWith('abort', expect.any(Function));
+    removeEventListenerSpy.mockRestore();
+  });
+
+  it('AbortSignal のリスナーがエラー時にもクリーンアップされる', async () => {
+    mockedQuery.mockReturnValue(
+      fakeStream([
+        { type: 'result', subtype: 'error_during_execution', errors: ['fail'] },
+      ]) as ReturnType<typeof query>,
+    );
+
+    const ac = new AbortController();
+    const signal = ac.signal;
+    const removeEventListenerSpy = vi.spyOn(signal, 'removeEventListener');
+
+    await expect(backend.run('test', { cwd: '/tmp', abortSignal: signal })).rejects.toThrow();
+
+    // エラー時もリスナーが解除されていることを確認
+    expect(removeEventListenerSpy).toHaveBeenCalledWith('abort', expect.any(Function));
+    removeEventListenerSpy.mockRestore();
   });
 });
 

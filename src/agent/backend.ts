@@ -13,7 +13,12 @@ const log = createCommandLogger('agent-backend');
  * 各バックエンド固有のパラメータにマッピングすることで差し替えを実現する。
  */
 export interface AgentRunOptions {
-  /** 作業ディレクトリ（ツールを使わないテキスト生成のみの場合は省略可能） */
+  /**
+   * 作業ディレクトリ（ツールを使わないテキスト生成のみの場合は省略可能）。
+   *
+   * 省略時は SDK のデフォルト動作として `process.cwd()` が使用される。
+   * 明示的に指定することを推奨する。
+   */
   cwd?: string;
   /** 許可するツール一覧（省略時は Claude Code 既定のツールセット） */
   allowedTools?: string[];
@@ -62,26 +67,54 @@ export interface AgentBackend {
 /**
  * AbortSignal を AbortController にラップする。
  * SDK は AbortController を受け取るため、外部から渡された AbortSignal を変換する必要がある。
+ *
+ * @returns `controller` と、リスナーを解除するための `cleanup` 関数を返す。
+ *          呼び出し側は処理完了後に `cleanup()` を呼ぶことで、
+ *          signal が abort されなかった場合のメモリリークを防止する。
  */
-function wrapSignalAsController(signal: AbortSignal): AbortController {
+function wrapSignalAsController(signal: AbortSignal): { controller: AbortController; cleanup: () => void } {
   const controller = new AbortController();
   if (signal.aborted) {
     controller.abort(signal.reason);
-  } else {
-    signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
+    return { controller, cleanup: () => {} };
   }
-  return controller;
+
+  const onAbort = () => controller.abort(signal.reason);
+  signal.addEventListener('abort', onAbort, { once: true });
+
+  const cleanup = () => {
+    signal.removeEventListener('abort', onAbort);
+  };
+
+  return { controller, cleanup };
 }
 
 export class ClaudeBackend implements AgentBackend {
   async run(prompt: string, options: AgentRunOptions): Promise<string> {
+    // AbortSignal のラップ（cleanup を finally で呼ぶためにスコープ外で保持）
+    let signalCleanup: (() => void) | undefined;
+
     try {
+      const resolvedPermissionMode = options.permissionMode ?? 'bypassPermissions';
+      const resolvedAllowedTools = options.allowedTools ?? ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'];
+
       const queryOptions: QueryOptions = {
         ...(options.cwd ? { cwd: options.cwd } : {}),
-        allowedTools: options.allowedTools ?? ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-        permissionMode: options.permissionMode ?? 'bypassPermissions',
-        ...(options.abortSignal ? { abortController: wrapSignalAsController(options.abortSignal) } : {}),
+        // tools: 利用可能なツールの基本セット。allowedTools と同じリストを設定し、
+        // 空配列の場合はすべてのビルトインツールを無効化する（テキスト生成のみモード）。
+        tools: resolvedAllowedTools,
+        // allowedTools: 権限プロンプトなしで自動実行を許可するツール一覧。
+        allowedTools: resolvedAllowedTools,
+        permissionMode: resolvedPermissionMode,
+        // bypassPermissions 使用時は SDK が要求する安全フラグを明示的に設定する
+        ...(resolvedPermissionMode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {}),
       };
+
+      if (options.abortSignal) {
+        const wrapped = wrapSignalAsController(options.abortSignal);
+        signalCleanup = wrapped.cleanup;
+        (queryOptions as QueryOptions & { abortController: AbortController }).abortController = wrapped.controller;
+      }
 
       let resultText: string | undefined;
 
@@ -106,6 +139,9 @@ export class ClaudeBackend implements AgentBackend {
     } catch (error) {
       log.error('Claude Code execution failed', { error, phase: 'agent_execution' });
       throw error;
+    } finally {
+      // AbortSignal リスナーを確実に解除してメモリリークを防止する
+      signalCleanup?.();
     }
   }
 }
