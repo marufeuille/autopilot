@@ -2,7 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../../../config', () => ({
   config: {
-    watchProject: 'test-project',
+    watchProjects: ['test-project', 'other-project'],
+    get watchProject() { return this.watchProjects[0]; },
     vaultPath: '/vault',
     slack: { channelId: 'C_TEST_CHANNEL' },
   },
@@ -309,6 +310,36 @@ describe('handleFixApproveInternal', () => {
     expect(project).toBe('custom-project');
     // ファイル内容にもプロジェクト名が反映される
     expect(content).toContain('project: custom-project');
+  });
+
+  it('マルチプロジェクト: 異なるプロジェクトのセッションがそれぞれ正しいプロジェクトに書き込まれる', async () => {
+    // プロジェクトAのセッション
+    const sessionA = makeSession({
+      threadTs: 'thread-a',
+      project: 'project-alpha',
+    });
+    interactiveSessionManager.startSession(sessionA);
+    const depsA = createMockDeps();
+
+    await handleFixApproveInternal('thread-a', messageTs, depsA, 'U_TEST');
+
+    const [projectA, contentA] = (depsA.writeFixStoryToVault as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(projectA).toBe('project-alpha');
+    expect(contentA).toContain('project: project-alpha');
+
+    // プロジェクトBのセッション
+    const sessionB = makeSession({
+      threadTs: 'thread-b',
+      project: 'project-beta',
+    });
+    interactiveSessionManager.startSession(sessionB);
+    const depsB = createMockDeps();
+
+    await handleFixApproveInternal('thread-b', messageTs, depsB, 'U_TEST');
+
+    const [projectB, contentB] = (depsB.writeFixStoryToVault as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(projectB).toBe('project-beta');
+    expect(contentB).toContain('project: project-beta');
   });
 
   it('マルチターン後の最終分析が使用される', async () => {
