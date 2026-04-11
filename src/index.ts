@@ -8,9 +8,13 @@ import { runStory } from './runner';
 import { NotificationBackend, createNotificationBackend } from './notification';
 import { StoryQueueManager } from './queue/queue-manager';
 import { promoteNextQueuedStory } from './queue/auto-promote';
+import { initTelemetry, shutdownTelemetry, TelemetryHandle } from './telemetry';
 
 // 実行中ストーリーの重複起動防止
 const runningStories = new Set<string>();
+
+// OTel ハンドル（module スコープで保持し SIGINT ハンドラからアクセス可能にする）
+let telemetry: TelemetryHandle | undefined;
 
 async function handleStoryFile(
   filePath: string,
@@ -51,41 +55,71 @@ async function handleStoryFile(
 }
 
 async function main(): Promise<void> {
-  // キューマネージャーを生成（全バックエンドで共有）
-  const queueManager = new StoryQueueManager({ readStoryBySlug, updateFileStatus });
+  // OTel 初期化（OTEL_ENABLED=true の場合のみトレース送信）
+  telemetry = initTelemetry();
 
-  // ファクトリ経由で通知バックエンドを生成（環境変数 NOTIFY_BACKEND で切り替え）
-  // Slack バックエンドの場合、共有 QueueManager を Slack コマンドにも渡す
-  const notifier = await createNotificationBackend({ queueManager });
-  const backendType = process.env.NOTIFY_BACKEND ?? 'local';
-  console.log(`[notification] backend started: ${backendType}`);
+  try {
+    // キューマネージャーを生成（全バックエンドで共有）
+    const queueManager = new StoryQueueManager({ readStoryBySlug, updateFileStatus });
 
-  const project = config.watchProject;
-  const storiesPath = vaultStoriesPath(project);
+    // ファクトリ経由で通知バックエンドを生成（環境変数 NOTIFY_BACKEND で切り替え）
+    // Slack バックエンドの場合、共有 QueueManager を Slack コマンドにも渡す
+    const notifier = await createNotificationBackend({ queueManager });
+    const backendType = process.env.NOTIFY_BACKEND ?? 'local';
+    console.log(`[notification] backend started: ${backendType}`);
 
-  if (!fs.existsSync(storiesPath)) {
-    throw new Error(`[vault] stories dir not found: ${storiesPath}`);
+    const project = config.watchProject;
+    const storiesPath = vaultStoriesPath(project);
+
+    if (!fs.existsSync(storiesPath)) {
+      throw new Error(`[vault] stories dir not found: ${storiesPath}`);
+    }
+
+    console.log(`[vault] watching: ${storiesPath}`);
+
+    const watcher = chokidar.watch(storiesPath, {
+      ignoreInitial: false,
+      depth: 1,
+    });
+
+    watcher.on('add', (filePath) => {
+      handleStoryFile(path.resolve(filePath), project, notifier, queueManager).catch(console.error);
+    });
+
+    watcher.on('change', (filePath) => {
+      handleStoryFile(path.resolve(filePath), project, notifier, queueManager).catch(console.error);
+    });
+
+    console.log('[orchestrator] ready');
+  } catch (err) {
+    // 初期化失敗時もバッファをフラッシュしてからスパンを失わない
+    await shutdownTelemetry(telemetry);
+    throw err;
   }
-
-  console.log(`[vault] watching: ${storiesPath}`);
-
-  const watcher = chokidar.watch(storiesPath, {
-    ignoreInitial: false,
-    depth: 1,
-  });
-
-  watcher.on('add', (filePath) => {
-    handleStoryFile(path.resolve(filePath), project, notifier, queueManager).catch(console.error);
-  });
-
-  watcher.on('change', (filePath) => {
-    handleStoryFile(path.resolve(filePath), project, notifier, queueManager).catch(console.error);
-  });
-
-  console.log('[orchestrator] ready');
 }
 
 main().catch((err) => {
   console.error(err);
   process.exit(1);
+});
+
+// Graceful shutdown: プロセス終了時に OTel バッファをフラッシュ
+// Note: シグナルハンドラは async を待てないため then() チェーンで処理し、
+// フラッシュが完了しない場合に備えて setTimeout でフォールバック終了する。
+process.on('SIGINT', () => {
+  const SHUTDOWN_TIMEOUT_MS = 5000;
+  const fallbackTimer = setTimeout(() => {
+    process.exit(0);
+  }, SHUTDOWN_TIMEOUT_MS);
+  // タイマーがプロセスの終了を妨げないようにする
+  fallbackTimer.unref();
+
+  if (telemetry) {
+    shutdownTelemetry(telemetry).then(
+      () => process.exit(0),
+      () => process.exit(0),
+    );
+  } else {
+    process.exit(0);
+  }
 });

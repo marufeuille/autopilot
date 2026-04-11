@@ -10,7 +10,8 @@ import { detectNoRemote } from './git';
 import { resolveRepoPath } from './config';
 import { RunnerDeps, createDefaultRunnerDeps } from './runner-deps';
 import { createTaskContext } from './pipeline/runner';
-import { taskPipeline } from './pipeline/task-pipeline';
+import { taskPipeline, createTaskPipeline } from './pipeline/task-pipeline';
+import { createPipelineHooksIfEnabled } from './telemetry';
 import { runStoryDocUpdate } from './story-doc-update';
 import { runMergePollingLoop } from './merge';
 import { createCommandLogger } from './logger';
@@ -50,8 +51,12 @@ export async function runTask(
   const d = deps ?? createDefaultRunnerDeps();
   const ctx = createTaskContext({ task, story, repoPath, notifier, deps: d });
 
+  // OTel フックが有効な場合はフック付きパイプラインを使用
+  const hooks = createPipelineHooksIfEnabled();
+  const pipeline = hooks ? createTaskPipeline(hooks) : taskPipeline;
+
   try {
-    const result = await taskPipeline(ctx);
+    const result = await pipeline(ctx);
     if (result === 'skipped') {
       d.updateFileStatus(task.filePath, 'Skipped');
     }
