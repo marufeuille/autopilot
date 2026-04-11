@@ -124,6 +124,59 @@ describe('RetryContext', () => {
       expect(retryCtx?.errorFindings).toHaveLength(1);
       expect(retryCtx?.errorFindings?.[0].severity).toBe('error');
     });
+
+    it('2回目以降の retry でも retryContext が最新の reason で更新される', async () => {
+      let callCount = 0;
+      const retriable = vi.fn(async (_ctx: TaskContext): Promise<FlowSignal> => {
+        callCount++;
+        if (callCount <= 2) {
+          return { kind: 'retry', from: 'a', reason: `attempt ${callCount} failed` };
+        }
+        return { kind: 'continue' };
+      });
+
+      const run = createPipeline([
+        step('a', vi.fn(async () => ({ kind: 'continue' }) as FlowSignal)),
+        step('b', retriable),
+      ]);
+
+      const ctx = makeCtx();
+      await run(ctx);
+
+      // 最後の retry の reason で retryContext が更新されている
+      expect(ctx.getRetryContext()).toEqual({ reason: 'attempt 2 failed' });
+      expect(ctx.getRetryReason()).toBe('attempt 2 failed');
+    });
+
+    it('2回目の retry で step が retryContext を設定した場合、その値が保持される', async () => {
+      let callCount = 0;
+      const retriable = vi.fn(async (ctx: TaskContext): Promise<FlowSignal> => {
+        callCount++;
+        if (callCount === 1) {
+          return { kind: 'retry', from: 'a', reason: 'first fail' };
+        }
+        if (callCount === 2) {
+          ctx.setRetryContext({
+            reason: 'レビューNG',
+            reviewSummary: '2回目のレビュー結果',
+          });
+          return { kind: 'retry', from: 'a', reason: 'レビューNG' };
+        }
+        return { kind: 'continue' };
+      });
+
+      const run = createPipeline([
+        step('a', vi.fn(async () => ({ kind: 'continue' }) as FlowSignal)),
+        step('b', retriable),
+      ]);
+
+      const ctx = makeCtx();
+      await run(ctx);
+
+      const retryCtx = ctx.getRetryContext();
+      expect(retryCtx?.reason).toBe('レビューNG');
+      expect(retryCtx?.reviewSummary).toBe('2回目のレビュー結果');
+    });
   });
 
   describe('RetryContext 型の構造', () => {
