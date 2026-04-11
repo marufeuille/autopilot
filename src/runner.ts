@@ -11,7 +11,8 @@ import { resolveRepoPath } from './config';
 import { RunnerDeps, createDefaultRunnerDeps } from './runner-deps';
 import { createTaskContext } from './pipeline/runner';
 import { taskPipeline, createTaskPipeline } from './pipeline/task-pipeline';
-import { createPipelineHooksIfEnabled } from './telemetry';
+import { createPipelineHooksIfEnabled, createOrchestratorHooksIfEnabled } from './telemetry';
+import type { OrchestratorHooks, TaskResult } from './pipeline/types';
 import { runStoryDocUpdate } from './story-doc-update';
 import { runMergePollingLoop } from './merge';
 import { createCommandLogger } from './logger';
@@ -47,12 +48,14 @@ export async function runTask(
   notifier: NotificationBackend,
   repoPath: string,
   deps?: RunnerDeps,
+  pipelineHooksOverride?: import('./pipeline/types').PipelineHooks,
 ): Promise<void> {
   const d = deps ?? createDefaultRunnerDeps();
   const ctx = createTaskContext({ task, story, repoPath, notifier, deps: d });
 
   // OTel フックが有効な場合はフック付きパイプラインを使用
-  const hooks = createPipelineHooksIfEnabled();
+  // orchestrator hooks 経由の場合は pipelineHooksOverride を優先
+  const hooks = pipelineHooksOverride ?? createPipelineHooksIfEnabled();
   const pipeline = hooks ? createTaskPipeline(hooks) : taskPipeline;
 
   try {
@@ -200,17 +203,25 @@ async function runTodoTasks(
   repoPath: string,
   notifier: NotificationBackend,
   deps: RunnerDeps,
+  orchestratorHooks?: OrchestratorHooks,
 ): Promise<'completed' | 'cancelled'> {
   let i = 0;
   while (i < todoTasks.length) {
     const task = todoTasks[i];
     let retryCount = 0;
     let succeeded = false;
+    let taskResult: TaskResult = 'done';
+
+    // Orchestrator: Task スパン開始
+    await orchestratorHooks?.onTaskStart?.(task, story);
+    // Pipeline hooks を orchestrator から取得（Task スパンの子として Step を生成するため）
+    const pipelineHooks = orchestratorHooks?.getPipelineHooks?.();
 
     while (!succeeded) {
       try {
-        await runTask(task, story, notifier, repoPath, deps);
+        await runTask(task, story, notifier, repoPath, deps, pipelineHooks);
         succeeded = true;
+        taskResult = 'done';
       } catch (error) {
         log.error('task failed', { taskSlug: task.slug, phase: 'task_execution' }, error);
 
@@ -225,6 +236,7 @@ async function runTodoTasks(
           log.info('skipping task', { taskSlug: task.slug, phase: 'task_execution' });
           await deps.updateFileStatus(task.filePath, 'Skipped');
           succeeded = true;
+          taskResult = 'skipped';
         } else if (action === 'cancel') {
           log.info('cancelling story', { storySlug: story.slug, phase: 'task_execution' });
           await deps.updateFileStatus(story.filePath, 'Cancelled');
@@ -232,6 +244,8 @@ async function runTodoTasks(
             `🚫 ストーリーがキャンセルされました: ${story.slug}`,
             story.slug,
           );
+          // Orchestrator: Task スパン終了（failed — キャンセルに伴う失敗）
+          await orchestratorHooks?.onTaskEnd?.(task, story, 'failed', { retryCount });
           return 'cancelled';
         } else {
           const _exhaustive: never = action;
@@ -239,6 +253,9 @@ async function runTodoTasks(
         }
       }
     }
+
+    // Orchestrator: Task スパン終了
+    await orchestratorHooks?.onTaskEnd?.(task, story, taskResult, { retryCount });
 
     i++;
   }
@@ -430,12 +447,13 @@ async function phaseExecuteTasks(
   repoPath: string,
   notifier: NotificationBackend,
   deps: RunnerDeps,
+  orchestratorHooks?: OrchestratorHooks,
 ): Promise<StoryPhaseResult> {
   const allCurrentTasks = await deps.getStoryTasks(story.project, story.slug);
   const todoTasks = allCurrentTasks.filter((t) => t.status === 'Todo');
 
   if (todoTasks.length > 0) {
-    const taskResult = await runTodoTasks(todoTasks, story, repoPath, notifier, deps);
+    const taskResult = await runTodoTasks(todoTasks, story, repoPath, notifier, deps, orchestratorHooks);
     if (taskResult === 'cancelled') {
       return { next: 'terminal', status: 'Cancelled' };
     }
@@ -545,6 +563,10 @@ export async function runStory(
 
   const tasks = await d.getStoryTasks(story.project, story.slug);
 
+  // Orchestrator フックの初期化（OTEL_ENABLED=true の場合のみ）
+  const orchestratorHooks = createOrchestratorHooksIfEnabled();
+  await orchestratorHooks?.onStoryStart?.(story, { taskCount: tasks.length });
+
   // スレッドセッション開始: 起点メッセージを投稿
   const originMessage = buildThreadOriginMessage(story.slug, tasks);
   await notifier.startThread(story.slug, originMessage);
@@ -572,7 +594,7 @@ export async function runStory(
         break;
       }
       case 'execute-tasks': {
-        const r = await phaseExecuteTasks(story, repoPath, notifier, d);
+        const r = await phaseExecuteTasks(story, repoPath, notifier, d, orchestratorHooks);
         if (r.next === 'terminal') {
           finalStatus = r.status;
           break loop;
@@ -602,6 +624,9 @@ export async function runStory(
       }
     }
   }
+
+  // Orchestrator: Story スパン終了
+  await orchestratorHooks?.onStoryEnd?.(story, finalStatus);
 
   // スレッドセッション終了: メモリを解放
   notifier.endSession(story.slug);
