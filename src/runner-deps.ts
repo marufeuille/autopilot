@@ -1,5 +1,4 @@
 import { execSync, execFileSync } from 'child_process';
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import { StoryFile, StoryStatus, TaskFile, TaskStatus, getStoryTasks } from './vault/reader';
 import { updateFileStatus, createTaskFile, TaskDraft, recordTaskCompletion, TaskCompletionRecord } from './vault/writer';
 import { decomposeTasks } from './decomposer';
@@ -8,8 +7,9 @@ import { runReviewLoop, ReviewLoopResult } from './review';
 import { runCIPollingLoop, CIPollingResult } from './ci';
 import { checkAcceptanceCriteria, AcceptanceCheckResult, AcceptanceGateDeps, CriterionResult, generateAdditionalTasks, AdditionalTasksDeps, defaultQueryAI } from './story-acceptance-gate';
 import { createCommandLogger } from './logger';
+import { createBackend } from './agent/backend';
+import { config } from './config';
 
-const runnerLog = createCommandLogger('runner');
 const depsLog = createCommandLogger('runner-deps');
 
 /**
@@ -68,27 +68,15 @@ export interface RunnerDeps {
  * 現行の実装（query, execSync, execFileSync 等）をそのままラップする。
  */
 export function createDefaultRunnerDeps(): RunnerDeps {
+  const backend = createBackend(config.agentBackends.implementation);
+
   return {
     runAgent: async (prompt: string, cwd: string): Promise<void> => {
-      for await (const message of query({
-        prompt,
-        options: {
-          cwd,
-          allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-          permissionMode: 'bypassPermissions',
-        },
-      })) {
-        if (message.type === 'assistant') {
-          const content = message.message?.content ?? [];
-          for (const block of content) {
-            if ('text' in block && block.text) {
-              process.stdout.write(`[claude] ${block.text}\n`);
-            }
-          }
-        } else if (message.type === 'result') {
-          runnerLog.info('agent result', { subtype: message.subtype, phase: 'agent_execution' });
-        }
-      }
+      await backend.run(prompt, {
+        cwd,
+        allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
+        permissionMode: 'bypassPermissions',
+      });
     },
 
     execGh: (args: string[], cwd: string): string => {

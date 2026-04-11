@@ -5,7 +5,15 @@ import type { NotificationBackend } from '../notification/types';
 // モック定義
 vi.mock('../config', () => ({
   resolveRepoPath: vi.fn((project: string) => `/Users/test/dev/${project}`),
-  config: { vaultPath: '/vault' },
+  config: {
+    vaultPath: '/vault',
+    agentBackends: {
+      implementation: { type: 'claude' },
+      review: { type: 'claude' },
+      planning: { type: 'claude' },
+      fix: { type: 'claude' },
+    },
+  },
   notifyBackend: 'local',
 }));
 
