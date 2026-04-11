@@ -9,7 +9,7 @@ function makeCtx(overrides: Partial<Pick<TaskContext, 'task' | 'story'>> = {}): 
   return createTaskContext({
     task: {
       filePath: '',
-      project: '',
+      project: 'test-project',
       storySlug: '',
       slug: 'test-task',
       status: 'Todo',
@@ -19,7 +19,7 @@ function makeCtx(overrides: Partial<Pick<TaskContext, 'task' | 'story'>> = {}): 
     },
     story: {
       filePath: '',
-      project: '',
+      project: 'test-project',
       slug: 'test-story',
       status: 'Doing',
       frontmatter: {},
@@ -63,7 +63,28 @@ describe('OtelPipelineHooks', () => {
     await hooks.onPipelineStart(ctx);
 
     expect(mockTracer.startSpan).toHaveBeenCalledWith('task', {
-      attributes: { 'task.slug': 'my-task', 'task.project': '' },
+      attributes: { 'task.slug': 'my-task', 'task.project': 'test-project' },
+    });
+  });
+
+  it('onPipelineStart で task.project 属性が設定される', async () => {
+    const mockSpan = {
+      setAttribute: vi.fn(),
+      setStatus: vi.fn(),
+      end: vi.fn(),
+    };
+    const mockTracer = {
+      startSpan: vi.fn().mockReturnValue(mockSpan),
+    };
+    vi.spyOn(trace, 'getTracer').mockReturnValue(mockTracer as any);
+
+    hooks = new OtelPipelineHooks();
+    const ctx = makeCtx({ task: { slug: 'my-task', project: 'stash' } as any });
+
+    await hooks.onPipelineStart(ctx);
+
+    expect(mockTracer.startSpan).toHaveBeenCalledWith('task', {
+      attributes: expect.objectContaining({ 'task.project': 'stash' }),
     });
   });
 
@@ -367,19 +388,28 @@ describe('OtelPipelineHooks', () => {
     await hooks.onStepEnd(ctx, { name: 'implementation', signal: 'continue' });
     await hooks.onPipelineEnd(ctx, 'done');
 
-    // すべての setAttribute 呼び出しを検証
-    const allKeys = setAttributeCalls.map(([k]) => k);
-    const allValues = setAttributeCalls.map(([_, v]) => String(v));
+    // 許可されたキーのリスト
+    const allowedKeys = new Set([
+      'task.slug', 'task.project', 'task.result',
+      'step.name', 'step.signal',
+    ]);
 
-    // 許可されたキーのみ
-    for (const key of allKeys) {
-      expect(['task.slug', 'task.result', 'step.name', 'step.signal']).toContain(key);
+    // startSpan の attributes を検証
+    const allStartSpanCalls = mockTracer.startSpan.mock.calls;
+    for (const call of allStartSpanCalls) {
+      const attrs = call[1]?.attributes ?? {};
+      for (const [key, value] of Object.entries(attrs)) {
+        expect(allowedKeys).toContain(key);
+        expect(String(value)).not.toContain('/secret/path');
+        expect(String(value)).not.toContain('secret conversation');
+      }
     }
 
-    // ファイルパス・コンテンツが値に含まれない
-    for (const value of allValues) {
-      expect(value).not.toContain('/secret/path');
-      expect(value).not.toContain('secret conversation');
+    // setAttribute 呼び出しを検証
+    for (const [key, value] of setAttributeCalls) {
+      expect(allowedKeys).toContain(key);
+      expect(String(value)).not.toContain('/secret/path');
+      expect(String(value)).not.toContain('secret conversation');
     }
   });
 });
