@@ -1,7 +1,8 @@
-import { query, type SDKResultSuccess } from '@anthropic-ai/claude-agent-sdk';
 import { StoryFile, TaskFile } from './vault/reader';
 import { TaskDraft } from './vault/writer';
 import { validateTaskDrafts } from './decomposer';
+import { ClaudeBackend } from './agent/backend';
+import type { AgentBackend } from './agent/backend';
 
 // --- 型定義 ---
 
@@ -217,32 +218,17 @@ export function parseAIResponse(responseText: string): CriterionResult[] {
 // --- デフォルト AI クエリ実装 ---
 
 /**
- * Claude Agent SDK を使用してプロンプトを送信し、テキスト応答を返すデフォルト実装。
+ * AgentBackend を使用してプロンプトを送信し、テキスト応答を返すデフォルト実装。
  *
- * SDK の query() が返す AsyncGenerator を消費し、最終的な SDKResultSuccess.result
- * からテキストを取得する。ツールは無効化し、permissionMode: 'bypassPermissions' で
- * 権限チェックをスキップする。
+ * ツールは無効化し、permissionMode: 'bypassPermissions' で権限チェックをスキップする。
+ * 内部的に {@link ClaudeBackend} を使用して query SDK を呼び出す。
  */
-export async function defaultQueryAI(prompt: string): Promise<string> {
-  let resultText = '';
-
-  for await (const message of query({
-    prompt,
-    options: {
-      tools: [],
-      permissionMode: 'bypassPermissions',
-      allowDangerouslySkipPermissions: true,
-    },
-  })) {
-    if (message.type === 'result') {
-      if (message.subtype === 'success') {
-        resultText = (message as SDKResultSuccess).result;
-      } else {
-        // result が error の場合、エラー情報をスローする
-        throw new Error('AI query returned an error result');
-      }
-    }
-  }
+export async function defaultQueryAI(prompt: string, backend?: AgentBackend): Promise<string> {
+  const agent = backend ?? new ClaudeBackend();
+  const resultText = await agent.run(prompt, {
+    allowedTools: [],
+    permissionMode: 'bypassPermissions',
+  });
 
   if (!resultText) {
     throw new Error('AI query returned an empty response');

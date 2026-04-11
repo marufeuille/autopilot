@@ -45,7 +45,7 @@ describe('ClaudeBackend', () => {
     backend = new ClaudeBackend();
   });
 
-  it('assistant メッセージのテキストを結合して返す', async () => {
+  it('result メッセージの result フィールドのみを返す（assistant メッセージは無視）', async () => {
     mockedQuery.mockReturnValue(
       fakeStream([
         {
@@ -54,27 +54,12 @@ describe('ClaudeBackend', () => {
             content: [{ text: 'Hello' }, { text: ' World' }],
           },
         },
-        { type: 'result', subtype: 'success' },
-      ]) as ReturnType<typeof query>,
-    );
-
-    const result = await backend.run('test prompt', { cwd: '/tmp' });
-    expect(result).toBe('Hello\n World');
-  });
-
-  it('result メッセージの result フィールドも取得する', async () => {
-    mockedQuery.mockReturnValue(
-      fakeStream([
-        {
-          type: 'assistant',
-          message: { content: [{ text: 'step output' }] },
-        },
         { type: 'result', subtype: 'success', result: 'final answer' },
       ]) as ReturnType<typeof query>,
     );
 
-    const result = await backend.run('test', { cwd: '/tmp' });
-    expect(result).toBe('step output\nfinal answer');
+    const result = await backend.run('test prompt', { cwd: '/tmp' });
+    expect(result).toBe('final answer');
   });
 
   it('空のストリームでは空文字列を返す', async () => {
@@ -99,8 +84,10 @@ describe('ClaudeBackend', () => {
       prompt: 'my prompt',
       options: {
         cwd: '/workspace',
+        tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
         allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
         permissionMode: 'bypassPermissions',
+        allowDangerouslySkipPermissions: true,
       },
     });
   });
@@ -119,13 +106,36 @@ describe('ClaudeBackend', () => {
       prompt: 'prompt',
       options: {
         cwd: '/workspace',
+        tools: ['Read', 'Grep'],
         allowedTools: ['Read', 'Grep'],
         permissionMode: 'bypassPermissions',
+        allowDangerouslySkipPermissions: true,
       },
     });
   });
 
-  it('permissionMode を明示的に default に指定した場合はそれが使われる', async () => {
+  it('allowedTools が空配列の場合は tools も空になりビルトインツールが無効化される', async () => {
+    mockedQuery.mockReturnValue(
+      fakeStream([{ type: 'result', subtype: 'success' }]) as ReturnType<typeof query>,
+    );
+
+    await backend.run('prompt', {
+      allowedTools: [],
+      permissionMode: 'bypassPermissions',
+    });
+
+    expect(mockedQuery).toHaveBeenCalledWith({
+      prompt: 'prompt',
+      options: {
+        tools: [],
+        allowedTools: [],
+        permissionMode: 'bypassPermissions',
+        allowDangerouslySkipPermissions: true,
+      },
+    });
+  });
+
+  it('permissionMode を明示的に default に指定した場合はそれが使われる（allowDangerouslySkipPermissions なし）', async () => {
     mockedQuery.mockReturnValue(
       fakeStream([{ type: 'result', subtype: 'success' }]) as ReturnType<typeof query>,
     );
@@ -139,13 +149,14 @@ describe('ClaudeBackend', () => {
       prompt: 'prompt',
       options: {
         cwd: '/workspace',
+        tools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
         allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
         permissionMode: 'default',
       },
     });
   });
 
-  it('content が空の assistant メッセージをスキップする', async () => {
+  it('assistant メッセージは無視し result のみ返す', async () => {
     mockedQuery.mockReturnValue(
       fakeStream([
         { type: 'assistant', message: { content: [] } },
@@ -153,9 +164,9 @@ describe('ClaudeBackend', () => {
         { type: 'assistant' },
         {
           type: 'assistant',
-          message: { content: [{ text: 'actual output' }] },
+          message: { content: [{ text: 'intermediate output' }] },
         },
-        { type: 'result', subtype: 'success' },
+        { type: 'result', subtype: 'success', result: 'actual output' },
       ]) as ReturnType<typeof query>,
     );
 
@@ -163,15 +174,28 @@ describe('ClaudeBackend', () => {
     expect(result).toBe('actual output');
   });
 
-  it('error subtype の result メッセージでは result フィールドを取得しない', async () => {
+  it('error subtype の result メッセージではエラーをスローする', async () => {
     mockedQuery.mockReturnValue(
       fakeStream([
-        { type: 'result', subtype: 'error', result: 'should not appear' },
+        { type: 'result', subtype: 'error_during_execution', errors: ['something went wrong'] },
       ]) as ReturnType<typeof query>,
     );
 
-    const result = await backend.run('test', { cwd: '/tmp' });
-    expect(result).toBe('');
+    await expect(backend.run('test', { cwd: '/tmp' })).rejects.toThrow(
+      'Claude Code execution ended with error_during_execution: something went wrong',
+    );
+  });
+
+  it('error subtype で errors が空の場合でもエラーをスローする', async () => {
+    mockedQuery.mockReturnValue(
+      fakeStream([
+        { type: 'result', subtype: 'error_max_turns' },
+      ]) as ReturnType<typeof query>,
+    );
+
+    await expect(backend.run('test', { cwd: '/tmp' })).rejects.toThrow(
+      'Claude Code execution ended with error_max_turns: unknown error',
+    );
   });
 
   it('query が例外を throw した場合はログ出力して再 throw する', async () => {
@@ -191,6 +215,40 @@ describe('ClaudeBackend', () => {
     });
 
     await expect(backend.run('test', { cwd: '/tmp' })).rejects.toThrow('Authentication failed');
+  });
+
+  it('AbortSignal のリスナーが処理完了後にクリーンアップされる（メモリリーク防止）', async () => {
+    mockedQuery.mockReturnValue(
+      fakeStream([{ type: 'result', subtype: 'success', result: 'done' }]) as ReturnType<typeof query>,
+    );
+
+    const ac = new AbortController();
+    const signal = ac.signal;
+    const removeEventListenerSpy = vi.spyOn(signal, 'removeEventListener');
+
+    await backend.run('test', { cwd: '/tmp', abortSignal: signal });
+
+    // signal が abort されなくてもリスナーが解除されていることを確認
+    expect(removeEventListenerSpy).toHaveBeenCalledWith('abort', expect.any(Function));
+    removeEventListenerSpy.mockRestore();
+  });
+
+  it('AbortSignal のリスナーがエラー時にもクリーンアップされる', async () => {
+    mockedQuery.mockReturnValue(
+      fakeStream([
+        { type: 'result', subtype: 'error_during_execution', errors: ['fail'] },
+      ]) as ReturnType<typeof query>,
+    );
+
+    const ac = new AbortController();
+    const signal = ac.signal;
+    const removeEventListenerSpy = vi.spyOn(signal, 'removeEventListener');
+
+    await expect(backend.run('test', { cwd: '/tmp', abortSignal: signal })).rejects.toThrow();
+
+    // エラー時もリスナーが解除されていることを確認
+    expect(removeEventListenerSpy).toHaveBeenCalledWith('abort', expect.any(Function));
+    removeEventListenerSpy.mockRestore();
   });
 });
 

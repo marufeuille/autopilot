@@ -1,6 +1,7 @@
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import { StoryFile } from './vault/reader';
 import { TaskDraft } from './vault/writer';
+import { ClaudeBackend } from './agent/backend';
+import type { AgentBackend } from './agent/backend';
 
 // --- バリデーション ---
 
@@ -139,26 +140,21 @@ ${retrySection}
 priority は "high" | "medium" | "low"、effort は "low" | "medium" | "high" のいずれかを使用してください。`;
 }
 
-export async function decomposeTasks(story: StoryFile, retryReason?: string): Promise<TaskDraft[]> {
-  const prompt = buildDecompositionPrompt(story, retryReason);
-  let fullText = '';
+/** モジュールレベルのデフォルトバックエンド（テスト時に差し替え可能） */
+let defaultBackend: AgentBackend | undefined;
 
-  for await (const message of query({
-    prompt,
-    options: {
-      allowedTools: [],
-      permissionMode: 'bypassPermissions',
-    },
-  })) {
-    if (message.type === 'assistant') {
-      const content = message.message?.content ?? [];
-      for (const block of content) {
-        if ('text' in block && block.text) {
-          fullText += block.text;
-        }
-      }
-    }
-  }
+/** テスト用: デフォルトバックエンドを設定する */
+export function setDefaultBackend(backend: AgentBackend | undefined): void {
+  defaultBackend = backend;
+}
+
+export async function decomposeTasks(story: StoryFile, retryReason?: string, backend?: AgentBackend): Promise<TaskDraft[]> {
+  const prompt = buildDecompositionPrompt(story, retryReason);
+  const agent = backend ?? defaultBackend ?? new ClaudeBackend();
+  const fullText = await agent.run(prompt, {
+    allowedTools: [],
+    permissionMode: 'bypassPermissions',
+  });
 
   // コードブロックを除去してJSONを抽出
   const jsonMatch = fullText.match(/```(?:json)?\s*([\s\S]*?)```/);

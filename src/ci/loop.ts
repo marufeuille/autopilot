@@ -1,5 +1,4 @@
 import { execSync } from 'child_process';
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import {
   CIPollingOptions,
   CIPollingResult,
@@ -8,6 +7,8 @@ import {
   CIPollingTimeoutError,
 } from './types';
 import { pollCIStatus, hasCIWorkflows } from './poller';
+import { ClaudeBackend } from '../agent/backend';
+import type { AgentBackend } from '../agent/backend';
 
 const DEFAULT_MAX_RETRIES = 3;
 
@@ -41,30 +42,15 @@ ${failureLogs}
 }
 
 /**
- * CI 修正エージェントを実行する
+ * CI 修正エージェントを実行する（AgentBackend 経由）
  */
-async function runCIFixAgent(prompt: string, cwd: string): Promise<string> {
-  let output = '';
-
-  for await (const message of query({
-    prompt,
-    options: {
-      cwd,
-      allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-      permissionMode: 'bypassPermissions',
-    },
-  })) {
-    if (message.type === 'assistant') {
-      const content = message.message?.content ?? [];
-      for (const block of content) {
-        if ('text' in block && block.text) {
-          output += block.text;
-          process.stdout.write(`[ci-fix-agent] ${block.text}\n`);
-        }
-      }
-    }
-  }
-
+async function runCIFixAgent(prompt: string, cwd: string, backend?: AgentBackend): Promise<string> {
+  const agent = backend ?? new ClaudeBackend();
+  const output = await agent.run(prompt, {
+    cwd,
+    allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
+    permissionMode: 'bypassPermissions',
+  });
   return output;
 }
 

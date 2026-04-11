@@ -7,9 +7,9 @@
  * 入力 JSON: { diff: string, taskDescription?: string }
  * 出力 JSON: ReviewResult
  */
-import { query } from '@anthropic-ai/claude-agent-sdk';
 import { buildReviewPrompt } from './prompt';
 import { ReviewResult } from './types';
+import { ClaudeBackend } from '../agent/backend';
 
 interface WorkerInput {
   diff: string;
@@ -91,22 +91,11 @@ async function main(): Promise<void> {
   let agentOutput = '';
 
   try {
-    for await (const message of query({
-      prompt,
-      options: {
-        allowedTools: [],
-        permissionMode: 'bypassPermissions',
-      },
-    })) {
-      if (message.type === 'assistant') {
-        const content = message.message?.content ?? [];
-        for (const block of content) {
-          if ('text' in block && block.text) {
-            agentOutput += block.text;
-          }
-        }
-      }
-    }
+    const backend = new ClaudeBackend();
+    agentOutput = await backend.run(prompt, {
+      allowedTools: [],
+      permissionMode: 'bypassPermissions',
+    });
   } catch (err) {
     const error = {
       error: `Agent execution failed: ${err instanceof Error ? err.message : String(err)}`,
