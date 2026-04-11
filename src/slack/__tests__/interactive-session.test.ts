@@ -18,6 +18,7 @@ function makeSession(overrides: Partial<InteractiveSession> = {}): InteractiveSe
     type: 'story',
     phase: 'drafting',
     description: 'テスト用ストーリー',
+    project: 'test-project',
     conversationHistory: [],
     ...overrides,
   };
@@ -40,6 +41,14 @@ describe('InteractiveSessionManager', () => {
     expect(retrieved!.phase).toBe('drafting');
     expect(retrieved!.type).toBe('story');
     expect(retrieved!.description).toBe('テスト用ストーリー');
+  });
+
+  it('セッションに project フィールドが含まれる', () => {
+    const session = makeSession({ project: 'my-project' });
+    manager.startSession(session);
+
+    const retrieved = manager.getSession('1234567890.123456');
+    expect(retrieved!.project).toBe('my-project');
   });
 
   it('存在しないスレッドIDの場合はundefinedを返す', () => {

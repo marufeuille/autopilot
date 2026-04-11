@@ -42,7 +42,15 @@ export const config = {
         serverUrl: process.env.NTFY_SERVER_URL ?? 'https://ntfy.sh',
         callbackBaseUrl: process.env.NTFY_CALLBACK_BASE_URL ?? '',
       },
-  watchProject: process.env.WATCH_PROJECT ?? 'claude-workflow-kit',
+  /** カンマ区切りで複数プロジェクトを指定可能（例: WATCH_PROJECT=stash,hoge） */
+  watchProjects: (process.env.WATCH_PROJECT ?? 'claude-workflow-kit')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0),
+  /** 後方互換: watchProjects[0] を返す getter */
+  get watchProject(): string {
+    return this.watchProjects[0];
+  },
 };
 
 /**

@@ -170,6 +170,7 @@ export async function handleFixInternal(
       type: 'fix',
       phase: 'drafting',
       description: bugDescription,
+      project: config.watchProject,
       conversationHistory: [
         { role: 'user', content: bugDescription },
         { role: 'assistant', content: analysis },

@@ -1,14 +1,23 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import * as path from 'path';
 import { createFakeVault, FakeVaultResult } from '../../__tests__/helpers/fake-vault';
-import { readStoryFile, getStoryTasks, getProjectReadmePath } from '../reader';
+import { readStoryFile, getStoryTasks, getProjectReadmePath, readStoryBySlug } from '../reader';
 
 // getStoryTasks は内部で vaultTasksPath(project, storySlug) を使うため、
 // config の vaultPath をフェイク Vault のパスに差し替える
 vi.mock('../../config', () => ({
+  config: {
+    get watchProject() {
+      return 'default-project';
+    },
+  },
   vaultProjectPath: (project: string) => {
     const vaultPath = (globalThis as Record<string, unknown>).__TEST_VAULT_PATH__ as string;
     return path.join(vaultPath, 'Projects', project);
+  },
+  vaultStoriesPath: (project: string) => {
+    const vaultPath = (globalThis as Record<string, unknown>).__TEST_VAULT_PATH__ as string;
+    return path.join(vaultPath, 'Projects', project, 'stories');
   },
   vaultTasksPath: (project: string, storySlug: string) => {
     const vaultPath = (globalThis as Record<string, unknown>).__TEST_VAULT_PATH__ as string;
@@ -195,6 +204,55 @@ describe('vault/reader', () => {
 
       expect(tasks).toHaveLength(0);
       expect(tasks).toEqual([]);
+    });
+  });
+
+  // ─── readStoryBySlug ────────────────────────────────
+
+  describe('readStoryBySlug', () => {
+    it('project パラメータ指定時にそのプロジェクトのストーリーを読む', () => {
+      vault = createFakeVault({
+        project: 'specific-project',
+        story: { slug: 'target-story', status: 'Doing' },
+      });
+      (globalThis as Record<string, unknown>).__TEST_VAULT_PATH__ = vault.vaultPath;
+
+      const story = readStoryBySlug('target-story', 'specific-project');
+
+      expect(story.slug).toBe('target-story');
+      expect(story.status).toBe('Doing');
+      expect(story.project).toBe('specific-project');
+    });
+
+    it('project 未指定時は config.watchProject（default-project）にフォールバックする', () => {
+      vault = createFakeVault({
+        project: 'default-project',
+        story: { slug: 'fallback-story', status: 'Todo' },
+      });
+      (globalThis as Record<string, unknown>).__TEST_VAULT_PATH__ = vault.vaultPath;
+
+      const story = readStoryBySlug('fallback-story');
+
+      expect(story.slug).toBe('fallback-story');
+      expect(story.project).toBe('default-project');
+    });
+
+    it('存在しないストーリーの場合はエラーを throw する', () => {
+      vault = createFakeVault({
+        project: 'test-project',
+        story: { slug: 'existing-story' },
+      });
+      (globalThis as Record<string, unknown>).__TEST_VAULT_PATH__ = vault.vaultPath;
+
+      expect(() => readStoryBySlug('nonexistent', 'test-project')).toThrow(
+        'Story "nonexistent" が見つかりません',
+      );
+    });
+
+    it('不正なスラッグの場合はエラーを throw する', () => {
+      expect(() => readStoryBySlug('../traversal', 'test-project')).toThrow(
+        '不正なストーリースラッグです',
+      );
     });
   });
 

@@ -475,6 +475,7 @@ describe('/ap fix E2E integration', () => {
         type: 'fix',
         phase: 'executing',
         description: 'バグ修正',
+        project: 'test-project',
         conversationHistory: [],
       };
       interactiveSessionManager.startSession(session);
