@@ -10,3 +10,4 @@ export {
   ReviewLoopOptions,
   ReviewIteration,
 } from './loop';
+export { buildRetryContext } from './context';
