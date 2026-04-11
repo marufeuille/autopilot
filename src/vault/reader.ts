@@ -82,17 +82,18 @@ export async function getStoryTasks(project: string, storySlug: string): Promise
 /**
  * slug からストーリーファイルを読み込む。
  *
- * config.watchProject のストーリーディレクトリから `{slug}.md` を検索する。
+ * 指定されたプロジェクト（未指定時は config.watchProject）の
+ * ストーリーディレクトリから `{slug}.md` を検索する。
  * ファイルが存在しない場合はエラーを throw する。
  */
-export function readStoryBySlug(storySlug: string): StoryFile {
+export function readStoryBySlug(storySlug: string, project?: string): StoryFile {
   // パストラバーサル防止: slug に許可されない文字が含まれる場合は拒否
   if (!VALID_SLUG_PATTERN.test(storySlug)) {
     throw new Error(`不正なストーリースラッグです: "${storySlug}"`);
   }
 
-  const project = config.watchProject;
-  const filePath = path.join(vaultStoriesPath(project), `${storySlug}.md`);
+  const resolvedProject = project ?? config.watchProject;
+  const filePath = path.join(vaultStoriesPath(resolvedProject), `${storySlug}.md`);
   if (!fs.existsSync(filePath)) {
     throw new Error(`Story "${storySlug}" が見つかりません`);
   }

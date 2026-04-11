@@ -34,6 +34,8 @@ export interface InteractiveSession {
   phase: SessionPhase;
   /** ユーザーが最初に入力した説明文 */
   description: string;
+  /** 対象プロジェクト名 */
+  project: string;
   /** 会話履歴（マルチターン用） */
   conversationHistory: ConversationMessage[];
 }

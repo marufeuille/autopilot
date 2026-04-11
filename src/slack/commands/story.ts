@@ -153,6 +153,7 @@ export async function handleStoryInternal(
       type: 'story',
       phase: 'drafting',
       description,
+      project: config.watchProject,
       conversationHistory: [
         { role: 'user', content: description },
         { role: 'assistant', content: draft },

@@ -33,6 +33,7 @@ function makeSession(overrides: Partial<InteractiveSession> = {}): InteractiveSe
     type: 'fix',
     phase: 'executing',
     description: 'ログインで404エラー',
+    project: 'test-project',
     conversationHistory: [
       { role: 'user', content: 'ログインで404エラー' },
       { role: 'assistant', content: '### タイトル\nfix: Login 404 Error' },

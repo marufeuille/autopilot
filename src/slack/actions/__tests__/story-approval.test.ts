@@ -27,6 +27,7 @@ function makeSession(overrides: Partial<InteractiveSession> = {}): InteractiveSe
     type: 'story',
     phase: 'drafting',
     description: 'テスト用ストーリー',
+    project: 'test-project',
     conversationHistory: [
       { role: 'user', content: 'テスト用ストーリー' },
       {
