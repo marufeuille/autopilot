@@ -9,6 +9,7 @@ import { runMergePollingLoop } from '../../merge';
 import { NotificationContext, buildMergeReadyBlocks } from '../../notification';
 import { RunnerDeps, createDefaultRunnerDeps } from '../../runner-deps';
 import { detectNoRemote } from '../../git';
+import { traceOperation } from '../../telemetry/operation';
 
 /**
  * PR 本文用のセルフレビューサマリーを生成する
@@ -178,13 +179,16 @@ export async function handlePRLifecycle(ctx: TaskContext): Promise<FlowSignal> {
   }
 
   // PR 作成
-  const prUrl = createPullRequest(
-    repoPath,
-    branch,
-    task,
-    story,
-    reviewResult!,
-    deps,
+  const prUrl = await traceOperation(
+    { type: 'git-sync', waitType: 'agent' },
+    async () => createPullRequest(
+      repoPath,
+      branch,
+      task,
+      story,
+      reviewResult!,
+      deps,
+    ),
   );
   ctx.set('prUrl', prUrl);
 
@@ -194,7 +198,10 @@ export async function handlePRLifecycle(ctx: TaskContext): Promise<FlowSignal> {
   }
 
   // CI ポーリング
-  const ciResult = await deps.runCIPollingLoop(repoPath, branch, task.content);
+  const ciResult = await traceOperation(
+    { type: 'ci-poll', waitType: 'ci' },
+    () => deps.runCIPollingLoop(repoPath, branch, task.content),
+  );
   const ciMessage = formatCIPollingResult(ciResult);
   const ciRunUrl = ciResult.lastCIResult?.runUrl;
 
@@ -240,7 +247,10 @@ export async function handlePRLifecycle(ctx: TaskContext): Promise<FlowSignal> {
   }
 
   // MERGED ポーリング（ユーザーが手動マージするのを待機）
-  const pollingResult = await runMergePollingLoop(prUrl, repoPath, deps);
+  const pollingResult = await traceOperation(
+    { type: 'slack-approval', waitType: 'human' },
+    () => runMergePollingLoop(prUrl, repoPath, deps),
+  );
 
   switch (pollingResult.finalStatus) {
     case 'merged':

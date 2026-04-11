@@ -1,6 +1,7 @@
 import path from 'path';
 import { FlowSignal, TaskContext } from '../types';
 import { GitSyncError, detectNoRemote } from '../../git';
+import { traceOperation } from '../../telemetry/operation';
 
 /**
  * worktree のベースディレクトリ。
@@ -38,7 +39,10 @@ export async function handleSyncMain(ctx: TaskContext): Promise<FlowSignal> {
     console.warn('[sync-main] リモートリポジトリが見つかりません。sync-main をスキップします');
   } else {
     try {
-      await deps.syncMainBranch(repoPath);
+      await traceOperation(
+        { type: 'git-sync', waitType: 'agent' },
+        () => deps.syncMainBranch(repoPath),
+      );
     } catch (error) {
       if (error instanceof GitSyncError) {
         await notifier.notify(
@@ -56,7 +60,10 @@ export async function handleSyncMain(ctx: TaskContext): Promise<FlowSignal> {
   const worktreePath = path.join(WORKTREE_BASE_DIR, safeSlug);
   const branch = `feature/${safeSlug}`;
   try {
-    await deps.createWorktree(repoPath, worktreePath, branch);
+    await traceOperation(
+      { type: 'git-sync', waitType: 'agent' },
+      async () => { await deps.createWorktree(repoPath, worktreePath, branch); },
+    );
     ctx.set('worktreePath', worktreePath);
   } catch (error) {
     if (error instanceof GitSyncError) {

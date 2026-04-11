@@ -1,6 +1,7 @@
 import { trace, Span, context, SpanStatusCode, Context, Tracer } from '@opentelemetry/api';
 import type { PipelineHooks, TaskContext, StepEndInfo, PipelineResult, StepName, OrchestratorHooks, TaskResult } from '../pipeline/types';
 import type { StoryFile, StoryStatus, TaskFile } from '../vault/reader';
+import { setCurrentStepContext } from './operation';
 
 const TRACER_NAME = 'autopilot.pipeline';
 
@@ -65,6 +66,10 @@ export class OtelPipelineHooks implements PipelineHooks {
       this.taskContext,
     );
     this.stepSpans.set(stepName, span);
+
+    // Operation スパンの親コンテキストとして Step スパンを設定
+    const stepContext = trace.setSpan(this.taskContext, span);
+    setCurrentStepContext(stepContext);
   }
 
   async onStepEnd(_ctx: TaskContext, info: StepEndInfo): Promise<void> {
@@ -77,6 +82,9 @@ export class OtelPipelineHooks implements PipelineHooks {
     }
     span.end();
     this.stepSpans.delete(info.name);
+
+    // Step 終了時に Operation 用コンテキストをクリア
+    setCurrentStepContext(undefined);
   }
 }
 
@@ -119,6 +127,10 @@ export class OtelStepHooks implements PipelineHooks {
       this.parentContext,
     );
     this.stepSpans.set(stepName, span);
+
+    // Operation スパンの親コンテキストとして Step スパンを設定
+    const stepContext = trace.setSpan(this.parentContext, span);
+    setCurrentStepContext(stepContext);
   }
 
   async onStepEnd(_ctx: TaskContext, info: StepEndInfo): Promise<void> {
@@ -131,6 +143,9 @@ export class OtelStepHooks implements PipelineHooks {
     }
     span.end();
     this.stepSpans.delete(info.name);
+
+    // Step 終了時に Operation 用コンテキストをクリア
+    setCurrentStepContext(undefined);
   }
 }
 
