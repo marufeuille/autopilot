@@ -69,6 +69,11 @@ export function createPipeline<TCtx extends TaskContext>(steps: Step<TCtx>[], op
             }
 
             ctx.set('retryReason', signal.reason);
+            // retryContext が未設定の場合は reason のみで初期化
+            // （レビュー起因の retry では step 側で詳細な retryContext を事前にセットする）
+            if (!ctx.get('retryContext')) {
+              ctx.set('retryContext', { reason: signal.reason });
+            }
             stepIndex = targetIndex;
             break;
           }
@@ -116,5 +121,7 @@ export function createTaskContext(
     set: <K extends import('./types').TaskContextKey>(key: K, value: import('./types').TaskContextStore[K]) => { store.set(key, value); },
     getRetryReason: () => store.get('retryReason') as string | undefined,
     setRetryReason: (reason) => store.set('retryReason', reason),
+    getRetryContext: () => store.get('retryContext') as import('./types').RetryContext | undefined,
+    setRetryContext: (retryContext) => { store.set('retryContext', retryContext); store.set('retryReason', retryContext.reason); },
   };
 }
