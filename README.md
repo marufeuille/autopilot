@@ -133,6 +133,8 @@ cp .env.example .env
 VAULT_PATH=/path/to/your/obsidian/vault
 
 # 監視するVaultのプロジェクト名（Projects/{WATCH_PROJECT}/stories/ を監視する）
+# カンマ区切りで複数プロジェクトを指定可能（例: WATCH_PROJECT=stash,hoge）
+# 複数指定時は1プロセスで全プロジェクトを並行監視する
 WATCH_PROJECT=my-project
 
 # 通知・承認バックエンド（省略時は local）
@@ -243,12 +245,15 @@ Slackから autopilot を操作できます。
 
 | コマンド | 説明 |
 |---|---|
-| `/ap status` | 実行中のストーリー・タスク一覧を表示 |
-| `/ap retry <task-slug>` | 失敗タスクをTodoに戻して再実行 |
+| `/ap status` | 実行中のストーリー・タスク一覧を表示（全プロジェクトをプロジェクト別に表示） |
+| `/ap story --project=<name> <説明>` | ストーリーを作成（`--project` 未指定時は最初のプロジェクトにフォールバック） |
+| `/ap fix --project=<name> <説明>` | fix ストーリーを作成（`--project` 未指定時は最初のプロジェクトにフォールバック） |
+| `/ap retry <task-slug>` | 失敗タスクをTodoに戻して再実行（プロジェクト横断で検索） |
 
 例:
 ```
 /ap status
+/ap story --project=hoge 認証機能を実装する
 /ap retry my-feature-task-01
 ```
 
@@ -260,16 +265,16 @@ Slackから autopilot を操作できます。
 
 | コマンド | 説明 |
 |---|---|
-| `/queue add <story-slug>` | ストーリーを `Queued` にしてキュー末尾に追加 |
-| `/queue cancel <story-slug>` | キューから削除しストーリーを `Todo` に戻す |
-| `/queue list` | 現在のキューと順序を表示 |
+| `/queue add --project=<name> <story-slug>` | ストーリーを `Queued` にしてキュー末尾に追加（`--project` 未指定時は最初のプロジェクト） |
+| `/queue cancel --project=<name> <story-slug>` | キューから削除しストーリーを `Todo` に戻す |
+| `/queue list` | 全プロジェクトのキューと順序をまとめて表示 |
 
 例:
 ```
 /queue add auth-feature
-/queue add payment-integration
+/queue add --project=hoge payment-integration
 /queue list
-/queue cancel payment-integration
+/queue cancel --project=hoge payment-integration
 ```
 
 ## Vaultのファイル構造
