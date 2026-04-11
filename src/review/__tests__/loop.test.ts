@@ -4,6 +4,7 @@ import type { ReviewResult } from '../types';
 // child_process をモック
 vi.mock('child_process', () => ({
   execSync: vi.fn(),
+  execFileSync: vi.fn(),
 }));
 
 // Claude agent SDK をモック
@@ -16,7 +17,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: (...args: unknown[]) => mockQuery(...args),
 }));
 
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import {
   runReviewLoop,
   formatReviewLoopResult,
@@ -27,7 +28,7 @@ import {
 import { SubprocessReviewRunner } from '../subprocess-runner';
 import { ReviewError } from '../types';
 
-const mockedExecSync = vi.mocked(execSync);
+const mockedExecFileSync = vi.mocked(execFileSync);
 
 function createMockRunner(results: ReviewResult[]) {
   let callCount = 0;
@@ -61,7 +62,7 @@ describe('runReviewLoop', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // getDiff のデフォルト: diff がある状態
-    mockedExecSync.mockReturnValue('diff --git a/file.ts b/file.ts\n+some change');
+    mockedExecFileSync.mockReturnValue('diff --git a/file.ts b/file.ts\n+some change');
   });
 
   it('最初のレビューでOKならイテレーション1回で終了する', async () => {
@@ -137,7 +138,7 @@ describe('runReviewLoop', () => {
   });
 
   it('diff が空の場合はOKで即終了する', async () => {
-    mockedExecSync.mockReturnValue('');
+    mockedExecFileSync.mockReturnValue('');
     const runner = createMockRunner([]);
 
     const result = await runReviewLoop('/repo', 'feature/task-01', 'task desc', {
@@ -243,19 +244,19 @@ describe('getDiff', () => {
   });
 
   it('main...branch の diff を返す', () => {
-    mockedExecSync.mockReturnValue('diff content');
+    mockedExecFileSync.mockReturnValue('diff content');
 
     const result = getDiff('/repo', 'feature/task-01');
 
     expect(result).toBe('diff content');
-    expect(mockedExecSync).toHaveBeenCalledWith(
-      'git diff main...feature/task-01',
+    expect(mockedExecFileSync).toHaveBeenCalledWith(
+      'git', ['diff', 'main...feature/task-01'],
       expect.objectContaining({ cwd: '/repo' }),
     );
   });
 
   it('main...branch が失敗した場合は HEAD diff にフォールバック', () => {
-    mockedExecSync
+    mockedExecFileSync
       .mockImplementationOnce(() => {
         throw new Error('branch not found');
       })
@@ -267,7 +268,7 @@ describe('getDiff', () => {
   });
 
   it('両方失敗した場合は空文字を返す', () => {
-    mockedExecSync.mockImplementation(() => {
+    mockedExecFileSync.mockImplementation(() => {
       throw new Error('git error');
     });
 

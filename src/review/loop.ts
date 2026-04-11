@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { SubprocessReviewRunner } from './subprocess-runner';
 import { ReviewResult, ReviewFinding, ReviewError } from './types';
@@ -63,14 +63,14 @@ export const DIFF_STAT_MAX_CHARS = 2000;
 export function getDiffStat(repoPath: string, branch: string): string | undefined {
   let raw: string;
   try {
-    raw = execSync(`git diff --stat main...${branch}`, {
+    raw = execFileSync('git', ['diff', '--stat', `main...${branch}`], {
       cwd: repoPath,
       encoding: 'utf-8',
       maxBuffer: 10 * 1024 * 1024,
     });
   } catch {
     try {
-      raw = execSync('git diff --stat HEAD', {
+      raw = execFileSync('git', ['diff', '--stat', 'HEAD'], {
         cwd: repoPath,
         encoding: 'utf-8',
         maxBuffer: 10 * 1024 * 1024,
@@ -109,7 +109,7 @@ export function truncateDiffStat(raw: string): string {
  */
 export function getDiff(repoPath: string, branch: string): string {
   try {
-    return execSync(`git diff main...${branch}`, {
+    return execFileSync('git', ['diff', `main...${branch}`], {
       cwd: repoPath,
       encoding: 'utf-8',
       maxBuffer: 10 * 1024 * 1024, // 10MB
@@ -117,7 +117,7 @@ export function getDiff(repoPath: string, branch: string): string {
   } catch {
     // ブランチが存在しない等の場合は HEAD との diff を試行
     try {
-      return execSync('git diff HEAD', {
+      return execFileSync('git', ['diff', 'HEAD'], {
         cwd: repoPath,
         encoding: 'utf-8',
         maxBuffer: 10 * 1024 * 1024,

@@ -6,12 +6,13 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 
 vi.mock('child_process', () => ({
   execSync: vi.fn(),
+  execFileSync: vi.fn(),
 }));
 
 import { getDiffStat, truncateDiffStat, DIFF_STAT_MAX_LINES, DIFF_STAT_MAX_CHARS } from '../loop';
 import * as child_process from 'child_process';
 
-const mockedExecSync = vi.mocked(child_process.execSync);
+const mockedExecFileSync = vi.mocked(child_process.execFileSync);
 
 describe('getDiffStat', () => {
   beforeEach(() => {
@@ -20,11 +21,11 @@ describe('getDiffStat', () => {
 
   it('git diff --stat main...branch の出力を返す', () => {
     const stat = ' src/foo.ts | 10 +\n 1 file changed, 10 insertions(+)\n';
-    mockedExecSync.mockReturnValue(stat);
+    mockedExecFileSync.mockReturnValue(stat);
 
     const result = getDiffStat('/repo', 'feature/test');
 
-    expect(mockedExecSync).toHaveBeenCalledWith('git diff --stat main...feature/test', expect.objectContaining({
+    expect(mockedExecFileSync).toHaveBeenCalledWith('git', ['diff', '--stat', 'main...feature/test'], expect.objectContaining({
       cwd: '/repo',
       encoding: 'utf-8',
     }));
@@ -33,21 +34,21 @@ describe('getDiffStat', () => {
 
   it('main...branch が失敗した場合は HEAD にフォールバックする', () => {
     const stat = ' src/bar.ts | 5 +\n 1 file changed, 5 insertions(+)\n';
-    mockedExecSync
+    mockedExecFileSync
       .mockImplementationOnce(() => { throw new Error('not a git repository'); })
       .mockReturnValueOnce(stat);
 
     const result = getDiffStat('/repo', 'feature/test');
 
-    expect(mockedExecSync).toHaveBeenCalledTimes(2);
-    expect(mockedExecSync).toHaveBeenNthCalledWith(2, 'git diff --stat HEAD', expect.objectContaining({
+    expect(mockedExecFileSync).toHaveBeenCalledTimes(2);
+    expect(mockedExecFileSync).toHaveBeenNthCalledWith(2, 'git', ['diff', '--stat', 'HEAD'], expect.objectContaining({
       cwd: '/repo',
     }));
     expect(result).toBe(stat.trim());
   });
 
   it('両方の git コマンドが失敗した場合は undefined を返す', () => {
-    mockedExecSync
+    mockedExecFileSync
       .mockImplementationOnce(() => { throw new Error('fail1'); })
       .mockImplementationOnce(() => { throw new Error('fail2'); });
 
@@ -57,7 +58,7 @@ describe('getDiffStat', () => {
   });
 
   it('diff stat が空文字列の場合は undefined を返す', () => {
-    mockedExecSync.mockReturnValue('   \n');
+    mockedExecFileSync.mockReturnValue('   \n');
 
     const result = getDiffStat('/repo', 'feature/test');
 
@@ -70,7 +71,7 @@ describe('getDiffStat', () => {
     );
     const summaryLine = ' 60 files changed, 1830 insertions(+)';
     const raw = [...fileLines, summaryLine, ''].join('\n');
-    mockedExecSync.mockReturnValue(raw);
+    mockedExecFileSync.mockReturnValue(raw);
 
     const result = getDiffStat('/repo', 'feature/test');
 

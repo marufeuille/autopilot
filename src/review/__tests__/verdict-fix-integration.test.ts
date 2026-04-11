@@ -11,6 +11,7 @@ import { determineVerdict } from '../types';
 // child_process をモック
 vi.mock('child_process', () => ({
   execSync: vi.fn(),
+  execFileSync: vi.fn(),
 }));
 
 // Claude agent SDK をモック
@@ -23,11 +24,11 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: (...args: unknown[]) => mockQuery(...args),
 }));
 
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { runReviewLoop, buildFixPrompt } from '../loop';
 import { SubprocessReviewRunner } from '../subprocess-runner';
 
-const mockedExecSync = vi.mocked(execSync);
+const mockedExecFileSync = vi.mocked(execFileSync);
 
 function createMockRunner(results: ReviewResult[]) {
   let callCount = 0;
@@ -44,7 +45,7 @@ function createMockRunner(results: ReviewResult[]) {
 describe('verdict判定〜修正ループ 統合テスト', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockedExecSync.mockReturnValue('diff --git a/file.ts b/file.ts\n+some change');
+    mockedExecFileSync.mockReturnValue('diff --git a/file.ts b/file.ts\n+some change');
   });
 
   // ---------------------------------------------------------------
