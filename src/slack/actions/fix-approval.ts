@@ -389,38 +389,13 @@ export function createFixApprovalDepsFromApp(app: App): FixApprovalDeps {
     },
     writeFixStoryToVault,
     runFixAgent: async (prompt: string, signal?: AbortSignal) => {
-      let queryFn: typeof import('@anthropic-ai/claude-agent-sdk')['query'];
-      try {
-        const mod = await import('@anthropic-ai/claude-agent-sdk');
-        queryFn = mod.query;
-      } catch (importError) {
-        throw new Error(
-          `claude-agent-sdk のインポートに失敗しました: ${importError instanceof Error ? importError.message : String(importError)}`,
-        );
-      }
-      let fullText = '';
-      for await (const message of queryFn({
-        prompt,
-        options: {
-          allowedTools: ['Read', 'Write', 'Edit', 'Glob', 'Grep'],
-          permissionMode: 'plan',
-          ...(signal ? { abortSignal: signal } : {}),
-        },
-      })) {
-        // タイムアウトによるキャンセルをチェック
-        if (signal?.aborted) {
-          break;
-        }
-        if (message.type === 'assistant') {
-          const content = message.message?.content ?? [];
-          for (const block of content) {
-            if ('text' in block && typeof block.text === 'string') {
-              fullText += block.text;
-            }
-          }
-        }
-      }
-      return fullText;
+      const { ClaudeBackend } = await import('../../agent/backend');
+      const backend = new ClaudeBackend();
+      return backend.run(prompt, {
+        allowedTools: ['Read', 'Write', 'Edit', 'Glob', 'Grep'],
+        permissionMode: 'plan',
+        abortSignal: signal,
+      });
     },
   };
 }

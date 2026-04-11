@@ -86,25 +86,12 @@ export function createFixDepsFromApp(app: App): FixDraftDeps {
       return { ts: res.ts };
     },
     generateDraft: async (prompt: string) => {
-      const { query } = await import('@anthropic-ai/claude-agent-sdk');
-      let fullText = '';
-      for await (const message of query({
-        prompt,
-        options: {
-          allowedTools: [],
-          permissionMode: 'bypassPermissions',
-        },
-      })) {
-        if (message.type === 'assistant') {
-          const content = message.message?.content ?? [];
-          for (const block of content) {
-            if ('text' in block && block.text) {
-              fullText += block.text;
-            }
-          }
-        }
-      }
-      return fullText;
+      const { ClaudeBackend } = await import('../../agent/backend');
+      const backend = new ClaudeBackend();
+      return backend.run(prompt, {
+        allowedTools: [],
+        permissionMode: 'bypassPermissions',
+      });
     },
   };
 }
