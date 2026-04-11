@@ -42,13 +42,19 @@ export const handleRetry: SubcommandHandler = async (args, respond) => {
       return;
     }
 
-    const project = config.watchProject;
-    const task = await findTaskBySlug(project, taskSlug);
+    // 全プロジェクトを横断して検索
+    let task: TaskFile | undefined;
+    for (const project of config.watchProjects) {
+      task = await findTaskBySlug(project, taskSlug);
+      if (task) break;
+    }
 
     if (!task) {
       await respond(`⚠️ タスク \`${taskSlug}\` が見つかりませんでした。スラッグを確認してください。`);
       return;
     }
+
+    const project = task.project;
 
     if (task.status !== 'Failed') {
       await respond(

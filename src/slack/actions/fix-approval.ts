@@ -12,7 +12,6 @@
  */
 import type { App, BlockAction } from '@slack/bolt';
 import type { Block, KnownBlock } from '@slack/types';
-import { config } from '../../config';
 import { createCommandLogger, logInfo, logError } from '../../logger';
 import { interactiveSessionManager } from '../interactive-session';
 import { executeFixInternal, type FixExecutionDeps } from './fix-executor';
@@ -223,12 +222,12 @@ export async function handleFixApproveInternal(
     log.info('ドラフトパース完了', { phase: 'approve_parsed', slug });
 
     // fix用ストーリーファイル内容を構築（status: Doing）
-    const fileContent = buildFixStoryFileContent(parsed, slug, config.watchProject);
+    const fileContent = buildFixStoryFileContent(parsed, slug, session.project);
 
     // Vaultにファイルを作成
     log.info('Vault ファイル作成開始', { phase: 'vault_write_start', slug });
     const filePath = deps.writeFixStoryToVault(
-      config.watchProject,
+      session.project,
       fileContent,
       slug,
     );

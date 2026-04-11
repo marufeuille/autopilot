@@ -11,6 +11,7 @@ import {
   interactiveSessionManager,
   type InteractiveSession,
 } from '../interactive-session';
+import { extractProjectOption, resolveProject, InvalidProjectError } from './utils';
 
 /**
  * ストーリードラフト生成の依存インターフェース（テスト用DI）
@@ -112,15 +113,29 @@ export async function handleStoryInternal(
   respond: (msg: string) => Promise<void>,
   deps: StoryDraftDeps,
 ): Promise<void> {
+  // --project オプションを抽出
+  const { project: specifiedProject, remainingArgs } = extractProjectOption(args);
+
   // 引数バリデーション
-  if (args.length === 0) {
+  if (remainingArgs.length === 0) {
     await respond(
       '⚠️ ストーリーの概要を指定してください。\n使い方: `/ap story <概要>`',
     );
     return;
   }
 
-  const description = args.join(' ');
+  // プロジェクト名の解決・バリデーション
+  let project: string;
+  try {
+    project = resolveProject(specifiedProject);
+  } catch (error) {
+    if (error instanceof InvalidProjectError) {
+      await respond(`⚠️ ${error.message}`);
+      return;
+    }
+    throw error;
+  }
+  const description = remainingArgs.join(' ');
 
   try {
     // スレッド起点メッセージを投稿
@@ -153,7 +168,7 @@ export async function handleStoryInternal(
       type: 'story',
       phase: 'drafting',
       description,
-      project: config.watchProject,
+      project,
       conversationHistory: [
         { role: 'user', content: description },
         { role: 'assistant', content: draft },

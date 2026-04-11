@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../../../config', () => ({
   config: {
     watchProject: 'test-project',
+    watchProjects: ['test-project', 'hoge'],
     vaultPath: '/vault',
     slack: { channelId: 'C_TEST_CHANNEL' },
   },
@@ -147,4 +148,70 @@ describe('handleFixInternal', () => {
     const session = interactiveSessionManager.getSession('1111111111.111111');
     expect(session!.description).toBe('パスワード リセット リンクが 404になる');
   });
+
+  it('--project オプションでプロジェクトを指定できる', async () => {
+    const deps = createMockDeps();
+
+    await handleFixInternal(['--project=hoge', 'バグ説明'], respond, deps);
+
+    const session = interactiveSessionManager.getSession('1111111111.111111');
+    expect(session).toBeDefined();
+    expect(session!.project).toBe('hoge');
+    expect(session!.description).toBe('バグ説明');
+  });
+
+  it('--project 未指定時は watchProjects[0] にフォールバックする', async () => {
+    const deps = createMockDeps();
+
+    await handleFixInternal(['バグ説明'], respond, deps);
+
+    const session = interactiveSessionManager.getSession('1111111111.111111');
+    expect(session).toBeDefined();
+    expect(session!.project).toBe('test-project');
+  });
+
+  it('--project オプションが説明文に含まれない', async () => {
+    const deps = createMockDeps();
+
+    await handleFixInternal(['--project=hoge', 'バグ', '説明'], respond, deps);
+
+    const rootCall = (deps.postMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(rootCall.text).toContain('バグ 説明');
+    expect(rootCall.text).not.toContain('--project');
+  });
+
+  it('--project のみで説明がない場合はエラーメッセージを返す', async () => {
+    const deps = createMockDeps();
+
+    await handleFixInternal(['--project=hoge'], respond, deps);
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const msg = respond.mock.calls[0][0] as string;
+    expect(msg).toContain('バグの説明を指定してください');
+    expect(deps.postMessage).not.toHaveBeenCalled();
+  });
+
+  it('--project に不正な値（パストラバーサル）を指定した場合はエラーを返す', async () => {
+    const deps = createMockDeps();
+
+    await handleFixInternal(['--project=../../malicious', 'バグ説明'], respond, deps);
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const msg = respond.mock.calls[0][0] as string;
+    expect(msg).toContain('不正なプロジェクト名です');
+    expect(deps.postMessage).not.toHaveBeenCalled();
+  });
+
+  it('--project に登録されていないプロジェクトを指定した場合はエラーを返す', async () => {
+    const deps = createMockDeps();
+
+    await handleFixInternal(['--project=unknown-proj', 'バグ説明'], respond, deps);
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const msg = respond.mock.calls[0][0] as string;
+    expect(msg).toContain('登録されていません');
+    expect(deps.postMessage).not.toHaveBeenCalled();
+  });
 });
+
+// extractProjectOption のテストは __tests__/utils.test.ts に集約

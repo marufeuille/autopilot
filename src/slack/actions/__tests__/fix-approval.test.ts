@@ -298,6 +298,19 @@ describe('handleFixApproveInternal', () => {
     consoleSpy.mockRestore();
   });
 
+  it('セッションのプロジェクトがVault書き込みに使用される', async () => {
+    const session = makeSession({ project: 'custom-project' });
+    interactiveSessionManager.startSession(session);
+    const deps = createMockDeps();
+
+    await handleFixApproveInternal(threadTs, messageTs, deps, 'U_TEST');
+
+    const [project, content] = (deps.writeFixStoryToVault as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(project).toBe('custom-project');
+    // ファイル内容にもプロジェクト名が反映される
+    expect(content).toContain('project: custom-project');
+  });
+
   it('マルチターン後の最終分析が使用される', async () => {
     const session = makeSession({
       conversationHistory: [

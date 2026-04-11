@@ -15,6 +15,7 @@ import {
   type InteractiveSession,
 } from '../interactive-session';
 import { buildApprovalBlocks } from '../thread-handler';
+import { extractProjectOption, resolveProject, InvalidProjectError } from './utils';
 
 /**
  * fix分析生成の依存インターフェース（テスト用DI）
@@ -120,8 +121,11 @@ export async function handleFixInternal(
 ): Promise<void> {
   const log = createCommandLogger('fix-command', { command: 'fix' });
 
+  // --project オプションを抽出
+  const { project: specifiedProject, remainingArgs } = extractProjectOption(args);
+
   // 引数バリデーション
-  if (args.length === 0) {
+  if (remainingArgs.length === 0) {
     log.warn('引数なしでコマンド実行', { phase: 'command_received' });
     await respond(
       '⚠️ バグの説明を指定してください。\n使い方: `/ap fix <バグ説明>`',
@@ -129,7 +133,18 @@ export async function handleFixInternal(
     return;
   }
 
-  const bugDescription = args.join(' ');
+  // プロジェクト名の解決・バリデーション
+  let project: string;
+  try {
+    project = resolveProject(specifiedProject);
+  } catch (error) {
+    if (error instanceof InvalidProjectError) {
+      await respond(`⚠️ ${error.message}`);
+      return;
+    }
+    throw error;
+  }
+  const bugDescription = remainingArgs.join(' ');
   log.info('コマンド受信', { phase: 'command_received', description: bugDescription });
 
   try {
@@ -170,7 +185,7 @@ export async function handleFixInternal(
       type: 'fix',
       phase: 'drafting',
       description: bugDescription,
-      project: config.watchProject,
+      project,
       conversationHistory: [
         { role: 'user', content: bugDescription },
         { role: 'assistant', content: analysis },

@@ -18,6 +18,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.mock('../../config', () => ({
   config: {
     watchProject: 'test-project',
+    watchProjects: ['test-project'],
     vaultPath: '/vault',
     slack: { channelId: 'C_E2E_CHANNEL' },
   },
