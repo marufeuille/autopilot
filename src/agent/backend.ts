@@ -11,6 +11,8 @@ export interface AgentRunOptions {
   cwd: string;
   /** 許可するツール一覧（省略時はバックエンド既定） */
   allowedTools?: string[];
+  /** 権限モード（省略時は 'default'）。'bypassPermissions' を使う場合は明示的に指定すること。 */
+  permissionMode?: 'default' | 'bypassPermissions';
 }
 
 /**
@@ -28,30 +30,35 @@ export class ClaudeBackend implements AgentBackend {
   async run(prompt: string, options: AgentRunOptions): Promise<string> {
     const chunks: string[] = [];
 
-    for await (const message of query({
-      prompt,
-      options: {
-        cwd: options.cwd,
-        allowedTools: options.allowedTools ?? ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-        permissionMode: 'bypassPermissions',
-      },
-    })) {
-      if (message.type === 'assistant') {
-        const content = message.message?.content ?? [];
-        for (const block of content) {
-          if ('text' in block && block.text) {
-            chunks.push(block.text);
+    try {
+      for await (const message of query({
+        prompt,
+        options: {
+          cwd: options.cwd,
+          allowedTools: options.allowedTools ?? ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
+          permissionMode: options.permissionMode ?? 'default',
+        },
+      })) {
+        if (message.type === 'assistant') {
+          const content = message.message?.content ?? [];
+          for (const block of content) {
+            if ('text' in block && block.text) {
+              chunks.push(block.text);
+            }
           }
-        }
-      } else if (message.type === 'result') {
-        log.info('agent result', { subtype: message.subtype, phase: 'agent_execution' });
-        if (message.subtype === 'success' && 'result' in message) {
-          const resultText = (message as { result?: string }).result;
-          if (resultText) {
-            chunks.push(resultText);
+        } else if (message.type === 'result') {
+          log.info('agent result', { subtype: message.subtype, phase: 'agent_execution' });
+          if (message.subtype === 'success' && 'result' in message) {
+            const resultText = (message as { result?: string }).result;
+            if (resultText) {
+              chunks.push(resultText);
+            }
           }
         }
       }
+    } catch (error) {
+      log.error('query execution failed', { error, phase: 'agent_execution' });
+      throw error;
     }
 
     return chunks.join('\n');

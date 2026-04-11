@@ -100,7 +100,7 @@ describe('ClaudeBackend', () => {
       options: {
         cwd: '/workspace',
         allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
-        permissionMode: 'bypassPermissions',
+        permissionMode: 'default',
       },
     });
   });
@@ -120,6 +120,26 @@ describe('ClaudeBackend', () => {
       options: {
         cwd: '/workspace',
         allowedTools: ['Read', 'Grep'],
+        permissionMode: 'default',
+      },
+    });
+  });
+
+  it('permissionMode を明示的に指定した場合はそれが使われる', async () => {
+    mockedQuery.mockReturnValue(
+      fakeStream([{ type: 'result', subtype: 'success' }]) as ReturnType<typeof query>,
+    );
+
+    await backend.run('prompt', {
+      cwd: '/workspace',
+      permissionMode: 'bypassPermissions',
+    });
+
+    expect(mockedQuery).toHaveBeenCalledWith({
+      prompt: 'prompt',
+      options: {
+        cwd: '/workspace',
+        allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
         permissionMode: 'bypassPermissions',
       },
     });
@@ -153,14 +173,34 @@ describe('ClaudeBackend', () => {
     const result = await backend.run('test', { cwd: '/tmp' });
     expect(result).toBe('');
   });
+
+  it('query が例外を throw した場合はログ出力して再 throw する', async () => {
+    const networkError = new Error('Network connection failed');
+    mockedQuery.mockReturnValue(
+      (async function* () {
+        throw networkError;
+      })() as ReturnType<typeof query>,
+    );
+
+    await expect(backend.run('test', { cwd: '/tmp' })).rejects.toThrow('Network connection failed');
+  });
+
+  it('query が同期的に throw した場合もログ出力して再 throw する', async () => {
+    mockedQuery.mockImplementation(() => {
+      throw new Error('Authentication failed');
+    });
+
+    await expect(backend.run('test', { cwd: '/tmp' })).rejects.toThrow('Authentication failed');
+  });
 });
 
 describe('AgentRunOptions', () => {
   it('cwd は必須、allowedTools はオプショナル', () => {
     // 型レベルの検証: コンパイルが通ることが確認
     const minimal: AgentRunOptions = { cwd: '/tmp' };
-    const full: AgentRunOptions = { cwd: '/tmp', allowedTools: ['Bash'] };
+    const full: AgentRunOptions = { cwd: '/tmp', allowedTools: ['Bash'], permissionMode: 'bypassPermissions' };
     expect(minimal.cwd).toBe('/tmp');
     expect(full.allowedTools).toEqual(['Bash']);
+    expect(full.permissionMode).toBe('bypassPermissions');
   });
 });
