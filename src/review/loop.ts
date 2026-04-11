@@ -1,6 +1,7 @@
 import { execSync } from 'child_process';
 import { SubprocessReviewRunner } from './subprocess-runner';
 import { ReviewResult, ReviewFinding, ReviewError } from './types';
+import { createBackend } from '../agent/backend';
 import type { AgentBackend } from '../agent/backend';
 
 /**
@@ -238,9 +239,10 @@ export async function runReviewLoop(
     // NG の場合: 修正エージェントを起動
     console.log(`[review-loop] iteration ${iterationNumber}: NG - launching fix agent`);
     const fixPrompt = buildFixPrompt(reviewResult, taskDescription, repoPath);
+    const fixBackend = options.fixBackend ?? createBackend({ type: 'claude' });
     let fixDescription: string;
     try {
-      fixDescription = await runFixAgent(options.fixBackend!, fixPrompt, repoPath);
+      fixDescription = await runFixAgent(fixBackend, fixPrompt, repoPath);
     } catch (error) {
       console.error(`[review-loop] fix agent failed at iteration ${iterationNumber}:`, error);
       fixDescription = `Fix agent failed: ${error instanceof Error ? error.message : String(error)}`;

@@ -7,6 +7,14 @@ vi.mock('child_process', () => ({
   execSync: vi.fn(),
 }));
 
+// agent/backend をモック（createBackend のフォールバックテスト用）
+const mockDefaultBackend: AgentBackend & { run: ReturnType<typeof vi.fn> } = {
+  run: vi.fn().mockResolvedValue('fix applied by default backend'),
+};
+vi.mock('../../agent/backend', () => ({
+  createBackend: vi.fn(() => mockDefaultBackend),
+}));
+
 import { execSync } from 'child_process';
 import {
   runReviewLoop,
@@ -241,6 +249,27 @@ describe('runReviewLoop', () => {
     expect(result.escalationRequired).toBe(false);
     expect(result.iterations).toHaveLength(3);
     expect(mockFixBackend.run).toHaveBeenCalledTimes(2); // 修正エージェント2回
+  });
+
+  it('fixBackend 未指定時は createBackend でフォールバックする', async () => {
+    const runner = createMockRunner([ngResult(), okResult()]);
+    mockDefaultBackend.run.mockClear();
+
+    const { createBackend } = await import('../../agent/backend');
+    const mockedCreateBackend = vi.mocked(createBackend);
+    mockedCreateBackend.mockClear();
+
+    const result = await runReviewLoop('/repo', 'feature/task-01', 'task desc', {
+      reviewRunner: runner,
+      // fixBackend を指定しない
+    });
+
+    expect(result.finalVerdict).toBe('OK');
+    expect(result.iterations).toHaveLength(2);
+    // createBackend がデフォルト設定で呼ばれた
+    expect(mockedCreateBackend).toHaveBeenCalledWith({ type: 'claude' });
+    // デフォルトバックエンドの run が呼ばれた
+    expect(mockDefaultBackend.run).toHaveBeenCalledTimes(1);
   });
 
   it('fixBackend.run に正しい引数が渡される', async () => {
