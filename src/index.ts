@@ -13,6 +13,9 @@ import { initTelemetry, shutdownTelemetry, TelemetryHandle } from './telemetry';
 // 実行中ストーリーの重複起動防止
 const runningStories = new Set<string>();
 
+// OTel ハンドル（module スコープで保持し SIGINT ハンドラからアクセス可能にする）
+let telemetry: TelemetryHandle | undefined;
+
 async function handleStoryFile(
   filePath: string,
   project: string,
@@ -53,40 +56,46 @@ async function handleStoryFile(
 
 async function main(): Promise<void> {
   // OTel 初期化（OTEL_ENABLED=true の場合のみトレース送信）
-  const telemetry = initTelemetry();
+  telemetry = initTelemetry();
 
-  // キューマネージャーを生成（全バックエンドで共有）
-  const queueManager = new StoryQueueManager({ readStoryBySlug, updateFileStatus });
+  try {
+    // キューマネージャーを生成（全バックエンドで共有）
+    const queueManager = new StoryQueueManager({ readStoryBySlug, updateFileStatus });
 
-  // ファクトリ経由で通知バックエンドを生成（環境変数 NOTIFY_BACKEND で切り替え）
-  // Slack バックエンドの場合、共有 QueueManager を Slack コマンドにも渡す
-  const notifier = await createNotificationBackend({ queueManager });
-  const backendType = process.env.NOTIFY_BACKEND ?? 'local';
-  console.log(`[notification] backend started: ${backendType}`);
+    // ファクトリ経由で通知バックエンドを生成（環境変数 NOTIFY_BACKEND で切り替え）
+    // Slack バックエンドの場合、共有 QueueManager を Slack コマンドにも渡す
+    const notifier = await createNotificationBackend({ queueManager });
+    const backendType = process.env.NOTIFY_BACKEND ?? 'local';
+    console.log(`[notification] backend started: ${backendType}`);
 
-  const project = config.watchProject;
-  const storiesPath = vaultStoriesPath(project);
+    const project = config.watchProject;
+    const storiesPath = vaultStoriesPath(project);
 
-  if (!fs.existsSync(storiesPath)) {
-    throw new Error(`[vault] stories dir not found: ${storiesPath}`);
+    if (!fs.existsSync(storiesPath)) {
+      throw new Error(`[vault] stories dir not found: ${storiesPath}`);
+    }
+
+    console.log(`[vault] watching: ${storiesPath}`);
+
+    const watcher = chokidar.watch(storiesPath, {
+      ignoreInitial: false,
+      depth: 1,
+    });
+
+    watcher.on('add', (filePath) => {
+      handleStoryFile(path.resolve(filePath), project, notifier, queueManager).catch(console.error);
+    });
+
+    watcher.on('change', (filePath) => {
+      handleStoryFile(path.resolve(filePath), project, notifier, queueManager).catch(console.error);
+    });
+
+    console.log('[orchestrator] ready');
+  } catch (err) {
+    // 初期化失敗時もバッファをフラッシュしてからスパンを失わない
+    await shutdownTelemetry(telemetry);
+    throw err;
   }
-
-  console.log(`[vault] watching: ${storiesPath}`);
-
-  const watcher = chokidar.watch(storiesPath, {
-    ignoreInitial: false,
-    depth: 1,
-  });
-
-  watcher.on('add', (filePath) => {
-    handleStoryFile(path.resolve(filePath), project, notifier, queueManager).catch(console.error);
-  });
-
-  watcher.on('change', (filePath) => {
-    handleStoryFile(path.resolve(filePath), project, notifier, queueManager).catch(console.error);
-  });
-
-  console.log('[orchestrator] ready');
 }
 
 main().catch((err) => {
@@ -96,7 +105,8 @@ main().catch((err) => {
 
 // Graceful shutdown: プロセス終了時に OTel バッファをフラッシュ
 process.on('SIGINT', async () => {
-  // telemetry は main() 内のローカル変数だが、shutdown は initTelemetry の戻り値に依存
-  // ここでは安全にプロセスを終了するだけ（SDK の内部フックが shutdown を処理）
+  if (telemetry) {
+    await shutdownTelemetry(telemetry);
+  }
   process.exit(0);
 });
