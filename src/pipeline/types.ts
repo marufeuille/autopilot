@@ -1,6 +1,7 @@
 import { StoryFile, StoryStatus, TaskFile } from '../vault/reader';
 import { NotificationBackend } from '../notification/types';
 import { RunnerDeps } from '../runner-deps';
+import type { ReviewFinding } from '../review/types';
 
 export type StepName = string;
 
@@ -75,6 +76,22 @@ export interface Step<TCtx> {
 }
 
 /**
+ * retry 時に渡す構造化文脈。
+ * reason のみ必須。diffStat / reviewSummary / errorFindings は
+ * レビュー起因の retry 時にのみ設定される。
+ */
+export interface RetryContext {
+  /** リトライ理由（従来の retryReason 相当） */
+  reason: string;
+  /** git diff --stat の出力（変更ファイル一覧と行数） */
+  diffStat?: string;
+  /** レビューの summary */
+  reviewSummary?: string;
+  /** severity === 'error' の指摘のみ */
+  errorFindings?: ReviewFinding[];
+}
+
+/**
  * Pipeline の各 step 間で受け渡される型付きフィールド。
  */
 export interface TaskContextStore {
@@ -86,8 +103,10 @@ export interface TaskContextStore {
   commitSha?: string;
   /** セルフレビュー結果 */
   reviewResult?: import('../review').ReviewLoopResult;
-  /** リトライ理由（pipeline 内部で使用） */
+  /** リトライ理由（pipeline 内部で使用）@deprecated retryContext.reason を使用 */
   retryReason?: string;
+  /** retry 時の構造化文脈 */
+  retryContext?: RetryContext;
   /** PR却下理由（rejected 時に implementation step へ引き継ぐ） */
   rejectionReason?: string;
   /** git worktree の作業ディレクトリパス */
@@ -109,6 +128,10 @@ export interface TaskContext {
   readonly deps: RunnerDeps;
   get<K extends TaskContextKey>(key: K): TaskContextStore[K];
   set<K extends TaskContextKey>(key: K, value: TaskContextStore[K]): void;
+  /** @deprecated getRetryContext() を使用 */
   getRetryReason(): string | undefined;
+  /** @deprecated setRetryContext() を使用 */
   setRetryReason(reason: string): void;
+  getRetryContext(): RetryContext | undefined;
+  setRetryContext(retryContext: RetryContext): void;
 }

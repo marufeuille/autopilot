@@ -34,6 +34,8 @@ export function createPipeline<TCtx extends TaskContext>(steps: Step<TCtx>[], op
         const current = steps[stepIndex];
 
         await hooks.onStepStart?.(ctx, current.name);
+        // step 実行前の retryContext を記録し、step 側で設定されたか判定に使う
+        const prevRetryContext = ctx.get('retryContext');
         const signal: FlowSignal = await current.handler(ctx);
         await hooks.onStepEnd?.(ctx, { name: current.name, signal: signal.kind });
 
@@ -69,6 +71,11 @@ export function createPipeline<TCtx extends TaskContext>(steps: Step<TCtx>[], op
             }
 
             ctx.set('retryReason', signal.reason);
+            // step 実行中に retryContext が変更されていなければ reason のみで fallback 設定する。
+            // （レビュー起因の retry では step 側で詳細な retryContext を事前にセットする）
+            if (ctx.get('retryContext') === prevRetryContext) {
+              ctx.set('retryContext', { reason: signal.reason });
+            }
             stepIndex = targetIndex;
             break;
           }
@@ -116,5 +123,7 @@ export function createTaskContext(
     set: <K extends import('./types').TaskContextKey>(key: K, value: import('./types').TaskContextStore[K]) => { store.set(key, value); },
     getRetryReason: () => store.get('retryReason') as string | undefined,
     setRetryReason: (reason) => store.set('retryReason', reason),
+    getRetryContext: () => store.get('retryContext') as import('./types').RetryContext | undefined,
+    setRetryContext: (retryContext) => { store.set('retryContext', retryContext); store.set('retryReason', retryContext.reason); },
   };
 }
