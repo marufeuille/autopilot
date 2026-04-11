@@ -591,6 +591,45 @@ describe('handleImplementation', () => {
     expect(prompt).not.toContain('## 修正が必要なエラー');
   });
 
+  it('retryContext に全フィールドがある場合、セクションが正しい順序で含まれる', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({ depsOverrides: { runAgent } });
+    ctx.setRetryContext({
+      reason: 'セルフレビュー未通過',
+      diffStat: ' src/foo.ts | 10 +\n 1 file changed',
+      reviewSummary: 'テストカバレッジが不足しています',
+      errorFindings: [
+        { file: 'src/handler.ts', line: 42, severity: 'error', message: '未使用変数' },
+        { file: 'src/utils.ts', severity: 'error', message: 'エラーハンドリング不足' },
+      ],
+    });
+    await handleImplementation(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+
+    // 全セクションが含まれる
+    expect(prompt).toContain('## 修正依頼');
+    expect(prompt).toContain('## 前回の変更概要');
+    expect(prompt).toContain('## レビュー結果サマリ');
+    expect(prompt).toContain('## 修正が必要なエラー');
+    expect(prompt).toContain('## 重要');
+
+    // セクション順序: 修正依頼 → 前回の変更概要 → レビュー結果サマリ → 修正が必要なエラー → 重要
+    const orderIndices = [
+      prompt.indexOf('## 修正依頼'),
+      prompt.indexOf('## 前回の変更概要'),
+      prompt.indexOf('## レビュー結果サマリ'),
+      prompt.indexOf('## 修正が必要なエラー'),
+      prompt.indexOf('## 重要'),
+    ];
+    for (let i = 0; i < orderIndices.length - 1; i++) {
+      expect(orderIndices[i]).toBeLessThan(orderIndices[i + 1]);
+    }
+
+    // errorFindings がリスト形式で含まれる
+    expect(prompt).toContain('- **src/handler.ts:42**: 未使用変数');
+    expect(prompt).toContain('- **src/utils.ts**: エラーハンドリング不足');
+  });
+
   it('レビューNG時に retryContext が ctx にセットされる', async () => {
     const execCommand = vi.fn().mockReturnValue(' src/foo.ts | 5 +\n 1 file changed');
     const { ctx } = makeCtx({
@@ -644,6 +683,59 @@ describe('handleImplementation', () => {
     const retryCtx = ctx.getRetryContext();
     expect(retryCtx).toBeDefined();
     expect(retryCtx!.errorFindings).toBeUndefined();
+  });
+
+  it('レビューNG後のリトライで retryContext の全情報がプロンプトに反映される（E2Eフロー）', async () => {
+    // 1回目: レビューNG → retryContext がセットされる
+    const execCommand = vi.fn().mockReturnValue(' src/foo.ts | 5 +\n 1 file changed');
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    let reviewCallCount = 0;
+    const runReviewLoop = vi.fn().mockImplementation(() => {
+      reviewCallCount++;
+      if (reviewCallCount === 1) {
+        return {
+          finalVerdict: 'NG',
+          escalationRequired: false,
+          iterations: [],
+          lastReviewResult: {
+            verdict: 'NG',
+            summary: 'テストが不足しています',
+            findings: [
+              { file: 'src/handler.ts', line: 42, severity: 'error', message: '未使用変数' },
+              { file: 'src/utils.ts', line: 10, severity: 'warning', message: '命名が不明瞭' },
+            ],
+          },
+          warnings: [],
+        };
+      }
+      return defaultReviewLoopResult();
+    });
+
+    const { ctx } = makeCtx({
+      depsOverrides: { runAgent, execCommand, runReviewLoop },
+    });
+
+    // 1回目: レビューNG → retry
+    const signal1 = await handleImplementation(ctx);
+    expect(signal1.kind).toBe('retry');
+
+    // 2回目: retryContext を使ってリトライプロンプトが生成される
+    await handleImplementation(ctx);
+    const retryPrompt = runAgent.mock.calls[1][0] as string;
+
+    // diffStat が含まれる
+    expect(retryPrompt).toContain('## 前回の変更概要');
+    expect(retryPrompt).toContain('src/foo.ts | 5 +');
+
+    // reviewSummary が含まれる
+    expect(retryPrompt).toContain('## レビュー結果サマリ');
+    expect(retryPrompt).toContain('テストが不足しています');
+
+    // ERROR 指摘のみ含まれる（WARNING は除外）
+    expect(retryPrompt).toContain('## 修正が必要なエラー');
+    expect(retryPrompt).toContain('src/handler.ts:42');
+    expect(retryPrompt).toContain('未使用変数');
+    expect(retryPrompt).not.toContain('命名が不明瞭');
   });
 
   it('diffStat 取得失敗でも retry は継続する', async () => {
