@@ -328,10 +328,10 @@ describe('handleImplementation', () => {
     expect(escalationNotif).toBeDefined();
   });
 
-  it('retryReason があればリトライ用プロンプトでエージェントを呼ぶ', async () => {
+  it('retryContext があればリトライ用プロンプトでエージェントを呼ぶ', async () => {
     const runAgent = vi.fn().mockResolvedValue(undefined);
     const { ctx } = makeCtx({ depsOverrides: { runAgent } });
-    ctx.setRetryReason('CIが失敗しました');
+    ctx.setRetryContext({ reason: 'CIが失敗しました' });
     await handleImplementation(ctx);
     const prompt = runAgent.mock.calls[0][0] as string;
     expect(prompt).toContain('修正依頼');
@@ -411,7 +411,7 @@ describe('handleImplementation', () => {
       depsOverrides: { runAgent },
       ctxStore: { worktreePath: '/tmp/autopilot/test-task' },
     });
-    ctx.setRetryReason('テスト失敗');
+    ctx.setRetryContext({ reason: 'テスト失敗' });
     await handleImplementation(ctx);
     const prompt = runAgent.mock.calls[0][0] as string;
     expect(prompt).toContain('作業ディレクトリ: /tmp/autopilot/test-task');
@@ -423,7 +423,7 @@ describe('handleImplementation', () => {
       depsOverrides: { runAgent },
       ctxStore: { rejectionReason: 'テストが不足しています' },
     });
-    ctx.setRetryReason('却下理由: テストが不足しています');
+    ctx.setRetryContext({ reason: '却下理由: テストが不足しています' });
     await handleImplementation(ctx);
     const prompt = runAgent.mock.calls[0][0] as string;
     expect(prompt).toContain('## 前回の却下理由');
@@ -434,7 +434,7 @@ describe('handleImplementation', () => {
   it('rejectionReason が設定されていない場合、「前回の却下理由」セクションは追記されない', async () => {
     const runAgent = vi.fn().mockResolvedValue(undefined);
     const { ctx } = makeCtx({ depsOverrides: { runAgent } });
-    ctx.setRetryReason('CI未通過: failure');
+    ctx.setRetryContext({ reason: 'CI未通過: failure' });
     await handleImplementation(ctx);
     const prompt = runAgent.mock.calls[0][0] as string;
     expect(prompt).not.toContain('前回の却下理由');
@@ -446,7 +446,7 @@ describe('handleImplementation', () => {
       depsOverrides: { runAgent },
       ctxStore: { rejectionReason: 'ロジックが間違っている' },
     });
-    ctx.setRetryReason('却下理由: ロジックが間違っている');
+    ctx.setRetryContext({ reason: '却下理由: ロジックが間違っている' });
     await handleImplementation(ctx);
     expect(ctx.get('rejectionReason')).toBeUndefined();
   });
@@ -475,24 +475,24 @@ describe('handleImplementation', () => {
     expect(prompt).toContain('パフォーマンスが悪い');
   });
 
-  it('worktreePath なし + retryReason あり の場合、既存ブランチへの checkout 指示が含まれる（却下後リトライの主要ケース）', async () => {
+  it('worktreePath なし + retryContext あり の場合、既存ブランチへの checkout 指示が含まれる（却下後リトライの主要ケース）', async () => {
     const runAgent = vi.fn().mockResolvedValue(undefined);
     const { ctx } = makeCtx({ depsOverrides: { runAgent } });
     // worktreePath は設定しない（pr-lifecycle でクリーン済みを想定）
-    ctx.setRetryReason('却下理由: エラーハンドリングが不十分');
+    ctx.setRetryContext({ reason: '却下理由: エラーハンドリングが不十分' });
     await handleImplementation(ctx);
     const prompt = runAgent.mock.calls[0][0] as string;
     expect(prompt).toContain('git checkout feature/test-task');
     expect(prompt).not.toContain('ワークツリーは既に');
   });
 
-  it('worktreePath あり + retryReason あり の場合、ワークツリー直接作業の指示が含まれる', async () => {
+  it('worktreePath あり + retryContext あり の場合、ワークツリー直接作業の指示が含まれる', async () => {
     const runAgent = vi.fn().mockResolvedValue(undefined);
     const { ctx } = makeCtx({
       depsOverrides: { runAgent },
       ctxStore: { worktreePath: '/tmp/autopilot/test-task' },
     });
-    ctx.setRetryReason('セルフレビュー未通過');
+    ctx.setRetryContext({ reason: 'セルフレビュー未通過' });
     await handleImplementation(ctx);
     const prompt = runAgent.mock.calls[0][0] as string;
     expect(prompt).toContain('ワークツリーは既に feature/test-task ブランチで作成済みです');
@@ -510,10 +510,161 @@ describe('handleImplementation', () => {
   it('リトライプロンプトにも既存テストスイート実行・確認のルールが含まれる', async () => {
     const runAgent = vi.fn().mockResolvedValue(undefined);
     const { ctx } = makeCtx({ depsOverrides: { runAgent } });
-    ctx.setRetryReason('CIが失敗しました');
+    ctx.setRetryContext({ reason: 'CIが失敗しました' });
     await handleImplementation(ctx);
     const prompt = runAgent.mock.calls[0][0] as string;
     expect(prompt).toContain('実装完了前に既存のテストスイートを実行し、既存テストが壊れていないことを確認すること');
+  });
+
+  // -------- Context Carry-Over テスト --------
+
+  it('retryContext に reviewSummary がある場合、プロンプトに「レビュー結果サマリ」セクションが含まれる', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({ depsOverrides: { runAgent } });
+    ctx.setRetryContext({
+      reason: 'セルフレビュー未通過',
+      reviewSummary: 'テストカバレッジが不足しています',
+    });
+    await handleImplementation(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).toContain('## レビュー結果サマリ');
+    expect(prompt).toContain('テストカバレッジが不足しています');
+  });
+
+  it('retryContext に diffStat がある場合、プロンプトに「前回の変更概要」セクションが含まれる', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({ depsOverrides: { runAgent } });
+    ctx.setRetryContext({
+      reason: 'セルフレビュー未通過',
+      diffStat: ' src/foo.ts | 10 +\n 1 file changed, 10 insertions(+)',
+    });
+    await handleImplementation(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).toContain('## 前回の変更概要');
+    expect(prompt).toContain('src/foo.ts | 10 +');
+  });
+
+  it('retryContext に errorFindings がある場合、プロンプトに「修正が必要なエラー」セクションが含まれる', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({ depsOverrides: { runAgent } });
+    ctx.setRetryContext({
+      reason: 'セルフレビュー未通過',
+      errorFindings: [
+        { file: 'src/handler.ts', line: 42, severity: 'error', message: '未使用変数があります' },
+        { file: 'src/utils.ts', severity: 'error', message: 'エラーハンドリング不足' },
+      ],
+    });
+    await handleImplementation(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).toContain('## 修正が必要なエラー');
+    expect(prompt).toContain('src/handler.ts:42');
+    expect(prompt).toContain('未使用変数があります');
+    expect(prompt).toContain('src/utils.ts');
+    expect(prompt).toContain('エラーハンドリング不足');
+  });
+
+  it('retryContext に WARNING は含まれない（errorFindings は error のみ）', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({ depsOverrides: { runAgent } });
+    ctx.setRetryContext({
+      reason: 'セルフレビュー未通過',
+      errorFindings: [
+        { file: 'src/a.ts', line: 10, severity: 'error', message: 'エラー指摘' },
+      ],
+    });
+    await handleImplementation(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).not.toContain('warning');
+    expect(prompt).toContain('エラー指摘');
+  });
+
+  it('retryContext が reason のみの場合（CI失敗等）、追加セクションなしでプロンプトが生成される', async () => {
+    const runAgent = vi.fn().mockResolvedValue(undefined);
+    const { ctx } = makeCtx({ depsOverrides: { runAgent } });
+    ctx.setRetryContext({ reason: 'CI未通過: failure' });
+    await handleImplementation(ctx);
+    const prompt = runAgent.mock.calls[0][0] as string;
+    expect(prompt).toContain('修正依頼');
+    expect(prompt).toContain('CI未通過: failure');
+    expect(prompt).not.toContain('## 前回の変更概要');
+    expect(prompt).not.toContain('## レビュー結果サマリ');
+    expect(prompt).not.toContain('## 修正が必要なエラー');
+  });
+
+  it('レビューNG時に retryContext が ctx にセットされる', async () => {
+    const execCommand = vi.fn().mockReturnValue(' src/foo.ts | 5 +\n 1 file changed');
+    const { ctx } = makeCtx({
+      depsOverrides: {
+        execCommand,
+        runReviewLoop: vi.fn().mockResolvedValue({
+          finalVerdict: 'NG',
+          escalationRequired: false,
+          iterations: [],
+          lastReviewResult: {
+            verdict: 'NG',
+            summary: 'エラーあり',
+            findings: [
+              { file: 'src/a.ts', line: 1, severity: 'error', message: 'エラー' },
+              { file: 'src/b.ts', line: 2, severity: 'warning', message: '警告' },
+            ],
+          },
+          warnings: [],
+        }),
+      },
+    });
+    await handleImplementation(ctx);
+    const retryCtx = ctx.getRetryContext();
+    expect(retryCtx).toBeDefined();
+    expect(retryCtx!.reason).toBe('セルフレビュー未通過');
+    expect(retryCtx!.reviewSummary).toBe('エラーあり');
+    expect(retryCtx!.errorFindings).toHaveLength(1);
+    expect(retryCtx!.errorFindings![0].severity).toBe('error');
+    expect(retryCtx!.diffStat).toBe('src/foo.ts | 5 +\n 1 file changed');
+  });
+
+  it('レビューNG時に WARNING が retryContext に含まれない', async () => {
+    const { ctx } = makeCtx({
+      depsOverrides: {
+        runReviewLoop: vi.fn().mockResolvedValue({
+          finalVerdict: 'NG',
+          escalationRequired: false,
+          iterations: [],
+          lastReviewResult: {
+            verdict: 'NG',
+            summary: '問題あり',
+            findings: [
+              { severity: 'warning', message: '警告のみ' },
+            ],
+          },
+          warnings: [],
+        }),
+      },
+    });
+    await handleImplementation(ctx);
+    const retryCtx = ctx.getRetryContext();
+    expect(retryCtx).toBeDefined();
+    expect(retryCtx!.errorFindings).toBeUndefined();
+  });
+
+  it('diffStat 取得失敗でも retry は継続する', async () => {
+    const execCommand = vi.fn().mockImplementation(() => { throw new Error('git error'); });
+    const { ctx } = makeCtx({
+      depsOverrides: {
+        execCommand,
+        runReviewLoop: vi.fn().mockResolvedValue({
+          finalVerdict: 'NG',
+          escalationRequired: false,
+          iterations: [],
+          lastReviewResult: { verdict: 'NG', summary: 'NG', findings: [] },
+          warnings: [],
+        }),
+      },
+    });
+    const signal = await handleImplementation(ctx);
+    expect(signal.kind).toBe('retry');
+    const retryCtx = ctx.getRetryContext();
+    expect(retryCtx).toBeDefined();
+    expect(retryCtx!.diffStat).toBeUndefined();
   });
 });
 

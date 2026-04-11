@@ -88,10 +88,14 @@ const mockRunReviewLoop = vi.fn().mockResolvedValue({
   lastReviewResult: { verdict: 'OK', summary: 'All good', findings: [] },
 });
 const mockFormatReviewLoopResult = vi.fn().mockReturnValue('✅ セルフレビュー通過');
-vi.mock('../review', () => ({
-  runReviewLoop: (...args: unknown[]) => mockRunReviewLoop(...args),
-  formatReviewLoopResult: (...args: unknown[]) => mockFormatReviewLoopResult(...args),
-}));
+vi.mock('../review', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../review')>();
+  return {
+    ...actual,
+    runReviewLoop: (...args: unknown[]) => mockRunReviewLoop(...args),
+    formatReviewLoopResult: (...args: unknown[]) => mockFormatReviewLoopResult(...args),
+  };
+});
 
 // story-acceptance-gate をモック
 vi.mock('../story-acceptance-gate', () => ({

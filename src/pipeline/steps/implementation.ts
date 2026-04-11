@@ -1,7 +1,8 @@
-import { FlowSignal, TaskContext } from '../types';
+import { FlowSignal, RetryContext, TaskContext } from '../types';
 import { StoryFile, TaskFile } from '../../vault/reader';
-import { formatReviewLoopResult } from '../../review';
+import { formatReviewLoopResult, buildRetryContext } from '../../review';
 import { traceOperation } from '../../telemetry/operation';
+import type { ReviewFinding } from '../../review/types';
 
 /**
  * タスク実装のプロンプトを生成する
@@ -38,15 +39,64 @@ ${prerequisite}
 それでは実装を開始してください。`;
 }
 
+/** diff stat の最大文字数（トークン量制御） */
+const MAX_DIFF_STAT_LENGTH = 2000;
+
+/**
+ * diff stat を安全に切り詰める。
+ * 上限を超えた場合は先頭行を残し、末尾に省略メッセージを付与する。
+ */
+export function truncateDiffStat(diffStat: string, maxLength: number = MAX_DIFF_STAT_LENGTH): string {
+  if (diffStat.length <= maxLength) return diffStat;
+  const truncated = diffStat.slice(0, maxLength);
+  // 最後の完全な行まで切り詰める
+  const lastNewline = truncated.lastIndexOf('\n');
+  const clean = lastNewline > 0 ? truncated.slice(0, lastNewline) : truncated;
+  return `${clean}\n... (以降省略)`;
+}
+
+/**
+ * ReviewFinding[] をリスト形式に整形する
+ */
+export function formatErrorFindings(findings: ReviewFinding[]): string {
+  return findings
+    .map((f) => {
+      const location = f.file
+        ? f.line
+          ? `${f.file}:${f.line}`
+          : f.file
+        : '(ファイル不明)';
+      return `- **${location}**: ${f.message}`;
+    })
+    .join('\n');
+}
+
 /**
  * retry時のプロンプトを生成する
  */
-function buildRetryPrompt(task: TaskFile, cwd: string, reason: string, useWorktree: boolean): string {
+function buildRetryPrompt(task: TaskFile, cwd: string, retryContext: RetryContext, useWorktree: boolean): string {
   const branchInstruction = useWorktree
     ? `- ワークツリーは既に feature/${task.slug} ブランチで作成済みです。直接作業してください。git checkout main や git pull は実行しないでください。`
     : `- feature/${task.slug} ブランチが既に存在します。\`git checkout feature/${task.slug}\` してから作業を開始してください。git checkout main や新規ブランチ作成（git checkout -b）は不要です。`;
 
-  return `前回の実装を修正してください。タスク: ${task.slug}\n\n${task.content}\n\n作業ディレクトリ: ${cwd}\n\n## 前提条件\n${branchInstruction}\n\n## 修正依頼\n${reason}\n\n## 重要\n- プロジェクトのCLAUDE.mdとREADMEを読み、設計思想・規約に沿ってシンプルに実装すること。既存設計から逸脱した過剰な実装は避けること\n- 実装には必ず対応するテストを作成すること。テストはユニットテストを基本とし、必要に応じて統合テストも書くこと。既存テストが壊れていないことも確認すること\n- 実装完了前に既存のテストスイートを実行し、既存テストが壊れていないことを確認すること\n- PRの作成は自動で行われるため、\`gh pr create\` は実行しないこと\n\n上記の修正依頼を踏まえて、完了条件を再確認しながら修正してください。`;
+  let prompt = `前回の実装を修正してください。タスク: ${task.slug}\n\n${task.content}\n\n作業ディレクトリ: ${cwd}\n\n## 前提条件\n${branchInstruction}\n\n## 修正依頼\n${retryContext.reason}`;
+
+  // レビュー文脈がある場合は構造化セクションを追加
+  if (retryContext.diffStat) {
+    prompt += `\n\n## 前回の変更概要\n\`\`\`\n${truncateDiffStat(retryContext.diffStat)}\n\`\`\``;
+  }
+
+  if (retryContext.reviewSummary) {
+    prompt += `\n\n## レビュー結果サマリ\n${retryContext.reviewSummary}`;
+  }
+
+  if (retryContext.errorFindings && retryContext.errorFindings.length > 0) {
+    prompt += `\n\n## 修正が必要なエラー\n${formatErrorFindings(retryContext.errorFindings)}`;
+  }
+
+  prompt += `\n\n## 重要\n- プロジェクトのCLAUDE.mdとREADMEを読み、設計思想・規約に沿ってシンプルに実装すること。既存設計から逸脱した過剰な実装は避けること\n- 実装には必ず対応するテストを作成すること。テストはユニットテストを基本とし、必要に応じて統合テストも書くこと。既存テストが壊れていないことも確認すること\n- 実装完了前に既存のテストスイートを実行し、既存テストが壊れていないことを確認すること\n- PRの作成は自動で行われるため、\`gh pr create\` は実行しないこと\n\n上記の修正依頼を踏まえて、完了条件を再確認しながら修正してください。`;
+
+  return prompt;
 }
 
 /**
@@ -65,11 +115,11 @@ export async function handleImplementation(ctx: TaskContext): Promise<FlowSignal
 
   deps.updateFileStatus(task.filePath, 'Doing');
 
-  const retryReason = ctx.getRetryReason();
+  const retryContext = ctx.getRetryContext();
   const rejectionReason = ctx.get('rejectionReason');
 
-  let prompt = retryReason
-    ? buildRetryPrompt(task, cwd, retryReason, useWorktree)
+  let prompt = retryContext
+    ? buildRetryPrompt(task, cwd, retryContext, useWorktree)
     : buildTaskPrompt(task, story, cwd, useWorktree);
 
   // 却下理由がある場合はプロンプトに追記
@@ -99,7 +149,22 @@ export async function handleImplementation(ctx: TaskContext): Promise<FlowSignal
     return { kind: 'continue' };
   }
 
-  // レビューNG: escalation有無にかかわらず通知してretry
+  // レビューNG: retryContext を組み立てて ctx にセット
+  const retryCtx = buildRetryContext(reviewResult);
+
+  // diffStat を取得（失敗しても retry は継続する）
+  try {
+    const diffStat = deps.execCommand(`git diff main...${branch} --stat`, cwd);
+    if (diffStat.trim()) {
+      retryCtx.diffStat = diffStat.trim();
+    }
+  } catch {
+    // diffStat 取得失敗は無視（retry の必須情報ではない）
+  }
+
+  ctx.setRetryContext(retryCtx);
+
+  // escalation有無にかかわらず通知してretry
   if (reviewResult.escalationRequired) {
     await notifier.notify(
       `⚠️ *セルフレビュー未通過（エスカレーション）*: ${task.slug}\n\n${reviewMessage}`,
