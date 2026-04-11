@@ -4,7 +4,7 @@ import { TaskContext, FlowSignal, RetryContext } from '../../pipeline/types';
 import { FakeNotifier } from '../helpers/fake-notifier';
 import { createFakeDeps, defaultReviewLoopResult } from '../helpers/fake-deps';
 import { buildRetryContext } from '../../review/context';
-import { truncateDiffStat, formatErrorFindings } from '../../pipeline/steps/implementation';
+import { truncateDiffStat, formatErrorFindings, MAX_DIFF_STAT_LENGTH, MAX_DIFF_STAT_LINES } from '../../pipeline/steps/implementation';
 import type { ReviewLoopResult } from '../../review/loop';
 import type { ReviewFinding } from '../../review/types';
 
@@ -294,8 +294,8 @@ describe('Context Carry-Over 統合テスト', () => {
 
   describe('巨大 diff stat のトークン量ガード', () => {
 
-    it('巨大 diff stat が切り詰められる', async () => {
-      // 2000 文字を超える巨大 diff stat を生成
+    it('文字数上限を超える diff stat がサマリ行のみに切り詰められる', () => {
+      // MAX_DIFF_STAT_LENGTH を超える巨大 diff stat を生成
       const lines: string[] = [];
       for (let i = 0; i < 200; i++) {
         lines.push(` src/very/long/path/to/file-${i.toString().padStart(3, '0')}.ts | 100 ++++++`);
@@ -303,17 +303,36 @@ describe('Context Carry-Over 統合テスト', () => {
       lines.push(' 200 files changed, 20000 insertions(+)');
       const hugeDiffStat = lines.join('\n');
 
-      // 2000 文字を超えていることを確認
-      expect(hugeDiffStat.length).toBeGreaterThan(2000);
+      expect(hugeDiffStat.length).toBeGreaterThan(MAX_DIFF_STAT_LENGTH);
 
       const truncated = truncateDiffStat(hugeDiffStat);
 
-      // 切り詰められている
-      expect(truncated.length).toBeLessThanOrEqual(hugeDiffStat.length);
-      expect(truncated).toContain('... (以降省略)');
+      // サマリ行のみが残る
+      expect(truncated).toContain('200 files changed, 20000 insertions(+)');
+      expect(truncated).toContain('詳細省略');
+      // 個別ファイル行は含まれない
+      expect(truncated).not.toContain('src/very/long/path/to/file-000.ts');
+    });
 
-      // 先頭行は残っている
-      expect(truncated).toContain('src/very/long/path/to/file-000.ts');
+    it('行数上限を超える diff stat がサマリ行のみに切り詰められる', () => {
+      // MAX_DIFF_STAT_LINES を超えるが文字数は短い diff stat
+      const lines: string[] = [];
+      for (let i = 0; i < MAX_DIFF_STAT_LINES + 10; i++) {
+        lines.push(` f${i}.ts | 1 +`);
+      }
+      lines.push(` ${MAX_DIFF_STAT_LINES + 10} files changed`);
+      const manyLinesDiffStat = lines.join('\n');
+
+      // 行数が上限を超えている
+      expect(manyLinesDiffStat.split('\n').length).toBeGreaterThan(MAX_DIFF_STAT_LINES);
+
+      const truncated = truncateDiffStat(manyLinesDiffStat);
+
+      // サマリ行のみが残る
+      expect(truncated).toContain(`${MAX_DIFF_STAT_LINES + 10} files changed`);
+      expect(truncated).toContain('詳細省略');
+      // 個別ファイル行は含まれない
+      expect(truncated).not.toContain('f0.ts');
     });
 
     it('巨大 diff stat がプロンプト経由でも切り詰められる', async () => {
@@ -344,17 +363,23 @@ describe('Context Carry-Over 統合テスト', () => {
       await handleImplementation(ctx);
       const retryPrompt = runAgent.mock.calls[1][0] as string;
 
-      // プロンプトに切り詰めメッセージが含まれる
-      expect(retryPrompt).toContain('... (以降省略)');
-      // 先頭行は残っている
-      expect(retryPrompt).toContain('src/very/long/path/to/file-000.ts');
+      // プロンプトにサマリ行と切り詰めメッセージが含まれる
+      expect(retryPrompt).toContain('200 files changed, 20000 insertions(+)');
+      expect(retryPrompt).toContain('詳細省略');
+      // 個別ファイル行はプロンプトに含まれない
+      expect(retryPrompt).not.toContain('src/very/long/path/to/file-000.ts');
     });
 
-    it('2000文字以内の diff stat はそのまま保持される', () => {
+    it('上限以内の diff stat はそのまま保持される', () => {
       const normalDiffStat = ' src/foo.ts | 10 +\n 1 file changed, 10 insertions(+)';
       const result = truncateDiffStat(normalDiffStat);
       expect(result).toBe(normalDiffStat);
       expect(result).not.toContain('省略');
+    });
+
+    it('閾値が定数として export されている', () => {
+      expect(MAX_DIFF_STAT_LENGTH).toBe(2000);
+      expect(MAX_DIFF_STAT_LINES).toBe(50);
     });
   });
 
