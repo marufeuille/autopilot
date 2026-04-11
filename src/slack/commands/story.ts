@@ -11,6 +11,7 @@ import {
   interactiveSessionManager,
   type InteractiveSession,
 } from '../interactive-session';
+import { extractProjectOption, resolveProject, InvalidProjectError } from './utils';
 
 /**
  * ストーリードラフト生成の依存インターフェース（テスト用DI）
@@ -107,27 +108,6 @@ export function createDepsFromApp(app: App): StoryDraftDeps {
  *
  * テスト可能にするために deps を受け取る。
  */
-/**
- * args から --project=xxx オプションを抽出する
- */
-export function extractProjectOption(
-  args: string[],
-): { project: string | undefined; remainingArgs: string[] } {
-  const remainingArgs: string[] = [];
-  let project: string | undefined;
-
-  for (const arg of args) {
-    const match = arg.match(/^--project=(.+)$/);
-    if (match) {
-      project = match[1];
-    } else {
-      remainingArgs.push(arg);
-    }
-  }
-
-  return { project, remainingArgs };
-}
-
 export async function handleStoryInternal(
   args: string[],
   respond: (msg: string) => Promise<void>,
@@ -144,7 +124,17 @@ export async function handleStoryInternal(
     return;
   }
 
-  const project = specifiedProject ?? config.watchProjects[0];
+  // プロジェクト名の解決・バリデーション
+  let project: string;
+  try {
+    project = resolveProject(specifiedProject);
+  } catch (error) {
+    if (error instanceof InvalidProjectError) {
+      await respond(`⚠️ ${error.message}`);
+      return;
+    }
+    throw error;
+  }
   const description = remainingArgs.join(' ');
 
   try {

@@ -3,13 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../../../config', () => ({
   config: {
     watchProject: 'test-project',
-    watchProjects: ['test-project'],
+    watchProjects: ['test-project', 'hoge'],
     vaultPath: '/vault',
     slack: { channelId: 'C_TEST_CHANNEL' },
   },
 }));
 
-import { handleStoryInternal, buildStoryDraftPrompt, extractProjectOption, type StoryDraftDeps } from '../story';
+import { handleStoryInternal, buildStoryDraftPrompt, type StoryDraftDeps } from '../story';
 import { interactiveSessionManager } from '../../interactive-session';
 
 function createMockDeps(overrides: Partial<StoryDraftDeps> = {}): StoryDraftDeps {
@@ -228,30 +228,28 @@ describe('handleStoryInternal', () => {
     expect(msg).toContain('ストーリーの概要を指定してください');
     expect(deps.postMessage).not.toHaveBeenCalled();
   });
-});
 
-describe('extractProjectOption', () => {
-  it('--project=xxx を抽出して残りの引数を返す', () => {
-    const result = extractProjectOption(['--project=hoge', 'テスト', '概要']);
-    expect(result.project).toBe('hoge');
-    expect(result.remainingArgs).toEqual(['テスト', '概要']);
+  it('--project に不正な値（パストラバーサル）を指定した場合はエラーを返す', async () => {
+    const deps = createMockDeps();
+
+    await handleStoryInternal(['--project=../../malicious', 'テスト概要'], respond, deps);
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const msg = respond.mock.calls[0][0] as string;
+    expect(msg).toContain('不正なプロジェクト名です');
+    expect(deps.postMessage).not.toHaveBeenCalled();
   });
 
-  it('--project がない場合は undefined を返す', () => {
-    const result = extractProjectOption(['テスト', '概要']);
-    expect(result.project).toBeUndefined();
-    expect(result.remainingArgs).toEqual(['テスト', '概要']);
-  });
+  it('--project に登録されていないプロジェクトを指定した場合はエラーを返す', async () => {
+    const deps = createMockDeps();
 
-  it('引数の途中に --project がある場合も抽出する', () => {
-    const result = extractProjectOption(['テスト', '--project=foo', '概要']);
-    expect(result.project).toBe('foo');
-    expect(result.remainingArgs).toEqual(['テスト', '概要']);
-  });
+    await handleStoryInternal(['--project=unknown-proj', 'テスト概要'], respond, deps);
 
-  it('空の引数リストを処理する', () => {
-    const result = extractProjectOption([]);
-    expect(result.project).toBeUndefined();
-    expect(result.remainingArgs).toEqual([]);
+    expect(respond).toHaveBeenCalledTimes(1);
+    const msg = respond.mock.calls[0][0] as string;
+    expect(msg).toContain('登録されていません');
+    expect(deps.postMessage).not.toHaveBeenCalled();
   });
 });
+
+// extractProjectOption のテストは __tests__/utils.test.ts に集約
