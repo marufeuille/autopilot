@@ -1,4 +1,4 @@
-import { StoryFile, TaskFile } from '../vault/reader';
+import { StoryFile, StoryStatus, TaskFile } from '../vault/reader';
 import { NotificationBackend } from '../notification/types';
 import { RunnerDeps } from '../runner-deps';
 
@@ -41,6 +41,32 @@ export interface PipelineHooks {
 export interface PipelineOptions {
   maxRetries?: number;
   hooks?: PipelineHooks;
+}
+
+/**
+ * タスクの最終結果（Orchestrator レベル）。
+ */
+export type TaskResult = 'done' | 'failed' | 'skipped';
+
+/**
+ * Orchestrator（Story → Task 制御）のライフサイクルフック。
+ * 計装（OTel 等）をビジネスロジックに依存させずに差し込むためのインターフェース。
+ * すべて optional — 未登録時は no-op。
+ */
+export interface OrchestratorHooks {
+  /** Story 実行開始時に呼ばれる */
+  onStoryStart?: (story: StoryFile, info: { taskCount: number }) => void | Promise<void>;
+  /** Story 実行終了時に呼ばれる */
+  onStoryEnd?: (story: StoryFile, result: StoryStatus) => void | Promise<void>;
+  /** Task 実行開始時に呼ばれる */
+  onTaskStart?: (task: TaskFile, story: StoryFile) => void | Promise<void>;
+  /** Task 実行終了時に呼ばれる */
+  onTaskEnd?: (task: TaskFile, story: StoryFile, result: TaskResult, info: { retryCount: number }) => void | Promise<void>;
+  /**
+   * Pipeline 実行時に使用するフックを返す。
+   * OTel の場合、Task スパンを親として Step スパンを生成するために使用する。
+   */
+  getPipelineHooks?: () => PipelineHooks | undefined;
 }
 
 export interface Step<TCtx> {
