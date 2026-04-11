@@ -204,6 +204,47 @@ describe('OtelPipelineHooks', () => {
     expect(mockStepSpan.setStatus).toHaveBeenCalledWith({ code: SpanStatusCode.ERROR });
   });
 
+  it('同名ステップが未終了の場合、防御的に前のスパンを終了してから新しいスパンを開始する', async () => {
+    const mockTaskSpan = {
+      setAttribute: vi.fn(),
+      setStatus: vi.fn(),
+      end: vi.fn(),
+    };
+    const mockStepSpan1 = {
+      setAttribute: vi.fn(),
+      setStatus: vi.fn(),
+      end: vi.fn(),
+    };
+    const mockStepSpan2 = {
+      setAttribute: vi.fn(),
+      setStatus: vi.fn(),
+      end: vi.fn(),
+    };
+    const mockTracer = {
+      startSpan: vi.fn()
+        .mockReturnValueOnce(mockTaskSpan)
+        .mockReturnValueOnce(mockStepSpan1)
+        .mockReturnValueOnce(mockStepSpan2),
+    };
+    vi.spyOn(trace, 'getTracer').mockReturnValue(mockTracer as any);
+    vi.spyOn(trace, 'setSpan').mockReturnValue(context.active());
+
+    hooks = new OtelPipelineHooks();
+    const ctx = makeCtx();
+
+    await hooks.onPipelineStart(ctx);
+    await hooks.onStepStart(ctx, 'same-step');
+    // onStepEnd を呼ばずに同名ステップを再開始
+    await hooks.onStepStart(ctx, 'same-step');
+
+    // 前のスパンが防御的に終了されている
+    expect(mockStepSpan1.setStatus).toHaveBeenCalledWith({
+      code: SpanStatusCode.ERROR,
+      message: 'step overwritten before end',
+    });
+    expect(mockStepSpan1.end).toHaveBeenCalled();
+  });
+
   it('onPipelineStart 前に onStepStart を呼んでも例外が発生しない', async () => {
     const ctx = makeCtx();
     await expect(hooks.onStepStart(ctx, 'test')).resolves.toBeUndefined();

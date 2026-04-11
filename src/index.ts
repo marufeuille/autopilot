@@ -104,9 +104,22 @@ main().catch((err) => {
 });
 
 // Graceful shutdown: プロセス終了時に OTel バッファをフラッシュ
-process.on('SIGINT', async () => {
+// Note: シグナルハンドラは async を待てないため then() チェーンで処理し、
+// フラッシュが完了しない場合に備えて setTimeout でフォールバック終了する。
+process.on('SIGINT', () => {
+  const SHUTDOWN_TIMEOUT_MS = 5000;
+  const fallbackTimer = setTimeout(() => {
+    process.exit(0);
+  }, SHUTDOWN_TIMEOUT_MS);
+  // タイマーがプロセスの終了を妨げないようにする
+  fallbackTimer.unref();
+
   if (telemetry) {
-    await shutdownTelemetry(telemetry);
+    shutdownTelemetry(telemetry).then(
+      () => process.exit(0),
+      () => process.exit(0),
+    );
+  } else {
+    process.exit(0);
   }
-  process.exit(0);
 });

@@ -17,7 +17,7 @@ export class OtelPipelineHooks implements PipelineHooks {
   private readonly tracer = trace.getTracer(TRACER_NAME);
   private taskSpan: Span | undefined;
   private taskContext: Context | undefined;
-  private stepSpan: Span | undefined;
+  private readonly stepSpans = new Map<StepName, Span>();
 
   async onPipelineStart(ctx: TaskContext): Promise<void> {
     this.taskSpan = this.tracer.startSpan('task', {
@@ -30,6 +30,13 @@ export class OtelPipelineHooks implements PipelineHooks {
 
   async onPipelineEnd(_ctx: TaskContext, result: PipelineResult | undefined): Promise<void> {
     if (!this.taskSpan) return;
+
+    // 未終了のステップスパンを防御的に終了する
+    for (const [name, span] of this.stepSpans) {
+      span.setStatus({ code: SpanStatusCode.ERROR, message: 'step not ended before pipeline end' });
+      span.end();
+      this.stepSpans.delete(name);
+    }
 
     if (result) {
       this.taskSpan.setAttribute('task.result', result);
@@ -44,22 +51,31 @@ export class OtelPipelineHooks implements PipelineHooks {
   async onStepStart(_ctx: TaskContext, stepName: StepName): Promise<void> {
     if (!this.taskContext) return;
 
-    this.stepSpan = this.tracer.startSpan(
+    // 同名ステップが未終了の場合は防御的に終了してからリークを防ぐ
+    const existing = this.stepSpans.get(stepName);
+    if (existing) {
+      existing.setStatus({ code: SpanStatusCode.ERROR, message: 'step overwritten before end' });
+      existing.end();
+    }
+
+    const span = this.tracer.startSpan(
       `step:${stepName}`,
       { attributes: { 'step.name': stepName } },
       this.taskContext,
     );
+    this.stepSpans.set(stepName, span);
   }
 
   async onStepEnd(_ctx: TaskContext, info: StepEndInfo): Promise<void> {
-    if (!this.stepSpan) return;
+    const span = this.stepSpans.get(info.name);
+    if (!span) return;
 
-    this.stepSpan.setAttribute('step.signal', info.signal);
+    span.setAttribute('step.signal', info.signal);
     if (info.signal === 'abort') {
-      this.stepSpan.setStatus({ code: SpanStatusCode.ERROR });
+      span.setStatus({ code: SpanStatusCode.ERROR });
     }
-    this.stepSpan.end();
-    this.stepSpan = undefined;
+    span.end();
+    this.stepSpans.delete(info.name);
   }
 }
 
