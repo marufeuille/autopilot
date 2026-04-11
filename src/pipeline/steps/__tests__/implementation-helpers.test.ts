@@ -18,39 +18,51 @@ vi.mock('glob', () => ({
   glob: vi.fn(),
 }));
 
-import { truncateDiffStat, formatErrorFindings } from '../implementation';
+import { truncateDiffStat, formatErrorFindings, MAX_DIFF_STAT_LENGTH, MAX_DIFF_STAT_LINES } from '../implementation';
 import type { ReviewFinding } from '../../../review/types';
 
 describe('truncateDiffStat', () => {
-  it('上限以下��場合はそのまま返す', () => {
+  it('上限以下の場合はそのまま返す', () => {
     const stat = ' src/foo.ts | 10 +\n 1 file changed';
     expect(truncateDiffStat(stat)).toBe(stat);
   });
 
-  it('上限を超えた場合は切り詰めて省略メッセージを付与する', () => {
+  it('文字数上限を超えた場合はサマリ行のみに切り詰める', () => {
     const lines = Array.from({ length: 100 }, (_, i) => ` src/file-${i}.ts | ${i} +`);
+    lines.push(' 100 files changed, 500 insertions(+)');
     const stat = lines.join('\n');
     const result = truncateDiffStat(stat, 100);
-    expect(result.length).toBeLessThan(stat.length);
-    expect(result).toContain('... (以降省略)');
+    expect(result).toContain('100 files changed, 500 insertions(+)');
+    expect(result).toContain('詳細省略');
+    expect(result).not.toContain('src/file-0.ts');
   });
 
-  it('行の途中で切れずに最後の完全な行まで切り詰め���', () => {
-    const stat = 'line1\nline2\nline3\nline4';
-    const result = truncateDiffStat(stat, 15);
-    expect(result).toContain('line1\nline2');
-    expect(result).toContain('... (以降省略)');
-    expect(result).not.toContain('line3');
+  it('行数上限を超えた場合はサマリ行のみに切り詰める', () => {
+    const lines = Array.from({ length: 60 }, (_, i) => ` f${i}.ts | 1 +`);
+    lines.push(' 60 files changed');
+    const stat = lines.join('\n');
+    // 文字数は上限以内だが行数が上限超過
+    const result = truncateDiffStat(stat, 100000, 50);
+    expect(result).toContain('60 files changed');
+    expect(result).toContain('詳細省略');
+    expect(result).not.toContain('f0.ts');
   });
 
   it('カスタム maxLength を指定できる', () => {
-    const stat = 'a'.repeat(500);
-    const result = truncateDiffStat(stat, 100);
-    expect(result.length).toBeLessThan(500);
+    const lines = [' a.ts | 1 +', ' b.ts | 1 +', ' 2 files changed'];
+    const stat = lines.join('\n');
+    const result = truncateDiffStat(stat, 10);
+    expect(result).toContain('2 files changed');
+    expect(result).toContain('詳細省略');
   });
 
   it('空文字列はそのまま返す', () => {
     expect(truncateDiffStat('')).toBe('');
+  });
+
+  it('閾値定数が正しい値で定義されている', () => {
+    expect(MAX_DIFF_STAT_LENGTH).toBe(2000);
+    expect(MAX_DIFF_STAT_LINES).toBe(50);
   });
 });
 
@@ -79,7 +91,7 @@ describe('formatErrorFindings', () => {
     expect(result).toBe('- **(ファイル不明)**: 全般的なエラー');
   });
 
-  it('複数の指摘を改行区切りでリスト形式にす��', () => {
+  it('複数の指摘を改行区切りでリスト形式にする', () => {
     const findings: ReviewFinding[] = [
       { file: 'src/a.ts', line: 10, severity: 'error', message: 'エラー1' },
       { file: 'src/b.ts', severity: 'error', message: 'エラー2' },
@@ -93,7 +105,7 @@ describe('formatErrorFindings', () => {
     expect(lines[2]).toBe('- **(ファイル不明)**: エラー3');
   });
 
-  it('空配列の場合は空文��列を返す', () => {
+  it('空配列の場合は空文字列を返す', () => {
     expect(formatErrorFindings([])).toBe('');
   });
 });

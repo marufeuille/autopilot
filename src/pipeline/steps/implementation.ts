@@ -40,19 +40,26 @@ ${prerequisite}
 }
 
 /** diff stat の最大文字数（トークン量制御） */
-const MAX_DIFF_STAT_LENGTH = 2000;
+export const MAX_DIFF_STAT_LENGTH = 2000;
+
+/** diff stat の最大行数（トークン量制御） */
+export const MAX_DIFF_STAT_LINES = 50;
 
 /**
  * diff stat を安全に切り詰める。
- * 上限を超えた場合は先頭行を残し、末尾に省略メッセージを付与する。
+ * 行数または文字数の上限を超えた場合は、サマリ行（末尾の 'N files changed, ...' 行）のみに切り詰める。
  */
-export function truncateDiffStat(diffStat: string, maxLength: number = MAX_DIFF_STAT_LENGTH): string {
-  if (diffStat.length <= maxLength) return diffStat;
-  const truncated = diffStat.slice(0, maxLength);
-  // 最後の完全な行まで切り詰める
-  const lastNewline = truncated.lastIndexOf('\n');
-  const clean = lastNewline > 0 ? truncated.slice(0, lastNewline) : truncated;
-  return `${clean}\n... (以降省略)`;
+export function truncateDiffStat(
+  diffStat: string,
+  maxLength: number = MAX_DIFF_STAT_LENGTH,
+  maxLines: number = MAX_DIFF_STAT_LINES,
+): string {
+  const lines = diffStat.split('\n');
+  if (diffStat.length <= maxLength && lines.length <= maxLines) return diffStat;
+
+  // サマリ行を抽出（末尾の非空行、通常 "N files changed, ..." の形式）
+  const summaryLine = lines.filter((l) => l.trim()).pop() ?? diffStat;
+  return `${summaryLine}\n(詳細省略: 出力が上限を超えたためサマリ行のみ表示)`;
 }
 
 /**
