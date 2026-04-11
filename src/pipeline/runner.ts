@@ -27,6 +27,8 @@ export function createPipeline<TCtx extends TaskContext>(steps: Step<TCtx>[], op
 
     await hooks.onPipelineStart?.(ctx);
 
+    let pipelineEndCalled = false;
+
     try {
       while (stepIndex < steps.length) {
         const current = steps[stepIndex];
@@ -42,6 +44,7 @@ export function createPipeline<TCtx extends TaskContext>(steps: Step<TCtx>[], op
 
           case 'skip':
             result = 'skipped';
+            pipelineEndCalled = true;
             await hooks.onPipelineEnd?.(ctx, result);
             return result;
 
@@ -73,10 +76,17 @@ export function createPipeline<TCtx extends TaskContext>(steps: Step<TCtx>[], op
       }
 
       result = 'done';
+      pipelineEndCalled = true;
       await hooks.onPipelineEnd?.(ctx, result);
       return result;
     } catch (error) {
-      await hooks.onPipelineEnd?.(ctx, undefined);
+      if (!pipelineEndCalled) {
+        try {
+          await hooks.onPipelineEnd?.(ctx, undefined);
+        } catch {
+          // フック自体のエラーは無視し、元のエラーを優先して re-throw する
+        }
+      }
       throw error;
     }
   };
