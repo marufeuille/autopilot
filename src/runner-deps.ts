@@ -68,11 +68,12 @@ export interface RunnerDeps {
  * 現行の実装（query, execSync, execFileSync 等）をそのままラップする。
  */
 export function createDefaultRunnerDeps(): RunnerDeps {
-  const backend = createBackend(config.agentBackends.implementation);
+  const implementationBackend = createBackend(config.agentBackends.implementation);
+  const fixBackend = createBackend(config.agentBackends.fix);
 
   return {
     runAgent: async (prompt: string, cwd: string): Promise<void> => {
-      await backend.run(prompt, {
+      await implementationBackend.run(prompt, {
         cwd,
         allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
         permissionMode: 'bypassPermissions',
@@ -104,7 +105,8 @@ export function createDefaultRunnerDeps(): RunnerDeps {
       });
     },
 
-    runReviewLoop,
+    runReviewLoop: (repoPath: string, branch: string, taskContent: string) =>
+      runReviewLoop(repoPath, branch, taskContent, { fixBackend }),
     runCIPollingLoop,
     decomposeTasks,
     createTaskFile,

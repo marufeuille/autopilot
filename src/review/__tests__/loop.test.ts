@@ -1,19 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ReviewResult } from '../types';
+import type { AgentBackend } from '../../agent/backend';
 
 // child_process をモック
 vi.mock('child_process', () => ({
   execSync: vi.fn(),
-}));
-
-// Claude agent SDK をモック
-const mockQuery = vi.fn(() => ({
-  [Symbol.asyncIterator]: () => ({
-    next: () => Promise.resolve({ done: true, value: undefined }),
-  }),
-}));
-vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
-  query: (...args: unknown[]) => mockQuery(...args),
 }));
 
 import { execSync } from 'child_process';
@@ -28,6 +19,13 @@ import { SubprocessReviewRunner } from '../subprocess-runner';
 import { ReviewError } from '../types';
 
 const mockedExecSync = vi.mocked(execSync);
+
+/** モック AgentBackend を生成する */
+function createMockFixBackend(): AgentBackend & { run: ReturnType<typeof vi.fn> } {
+  return {
+    run: vi.fn().mockResolvedValue('fix applied'),
+  };
+}
 
 function createMockRunner(results: ReviewResult[]) {
   let callCount = 0;
@@ -58,10 +56,13 @@ function ngResult(summary = 'Issues found'): ReviewResult {
 }
 
 describe('runReviewLoop', () => {
+  let mockFixBackend: ReturnType<typeof createMockFixBackend>;
+
   beforeEach(() => {
     vi.clearAllMocks();
     // getDiff のデフォルト: diff がある状態
     mockedExecSync.mockReturnValue('diff --git a/file.ts b/file.ts\n+some change');
+    mockFixBackend = createMockFixBackend();
   });
 
   it('最初のレビューでOKならイテレーション1回で終了する', async () => {
@@ -69,6 +70,7 @@ describe('runReviewLoop', () => {
 
     const result = await runReviewLoop('/repo', 'feature/task-01', 'task desc', {
       reviewRunner: runner,
+      fixBackend: mockFixBackend,
     });
 
     expect(result.finalVerdict).toBe('OK');
@@ -86,6 +88,7 @@ describe('runReviewLoop', () => {
     const result = await runReviewLoop('/repo', 'feature/task-01', 'task desc', {
       reviewRunner: runner,
       maxRetries: 3,
+      fixBackend: mockFixBackend,
     });
 
     expect(result.finalVerdict).toBe('OK');
@@ -97,8 +100,8 @@ describe('runReviewLoop', () => {
     // 2回目: OK
     expect(result.iterations[1].reviewResult.verdict).toBe('OK');
     expect(result.iterations[1].fixDescription).toBeUndefined();
-    // 修正エージェントが1回呼ばれた
-    expect(mockQuery).toHaveBeenCalledTimes(1);
+    // 修正エージェント（fixBackend）が1回呼ばれた
+    expect(mockFixBackend.run).toHaveBeenCalledTimes(1);
   });
 
   it('最大リトライ回数到達でエスカレーションされる', async () => {
@@ -112,6 +115,7 @@ describe('runReviewLoop', () => {
     const result = await runReviewLoop('/repo', 'feature/task-01', 'task desc', {
       reviewRunner: runner,
       maxRetries: 3,
+      fixBackend: mockFixBackend,
     });
 
     expect(result.finalVerdict).toBe('NG');
@@ -119,7 +123,7 @@ describe('runReviewLoop', () => {
     // 初回 + 3回リトライ = 4回
     expect(result.iterations).toHaveLength(4);
     // 修正エージェントは3回呼ばれた（最後のNGでは修正しない）
-    expect(mockQuery).toHaveBeenCalledTimes(3);
+    expect(mockFixBackend.run).toHaveBeenCalledTimes(3);
   });
 
   it('maxRetries=0 の場合、1回だけレビューして結果を返す', async () => {
@@ -128,12 +132,13 @@ describe('runReviewLoop', () => {
     const result = await runReviewLoop('/repo', 'feature/task-01', 'task desc', {
       reviewRunner: runner,
       maxRetries: 0,
+      fixBackend: mockFixBackend,
     });
 
     expect(result.finalVerdict).toBe('NG');
     expect(result.escalationRequired).toBe(true);
     expect(result.iterations).toHaveLength(1);
-    expect(mockQuery).not.toHaveBeenCalled(); // 修正エージェントは呼ばれない
+    expect(mockFixBackend.run).not.toHaveBeenCalled(); // 修正エージェントは呼ばれない
   });
 
   it('diff が空の場合はOKで即終了する', async () => {
@@ -142,6 +147,7 @@ describe('runReviewLoop', () => {
 
     const result = await runReviewLoop('/repo', 'feature/task-01', 'task desc', {
       reviewRunner: runner,
+      fixBackend: mockFixBackend,
     });
 
     expect(result.finalVerdict).toBe('OK');
@@ -160,6 +166,7 @@ describe('runReviewLoop', () => {
 
     const result = await runReviewLoop('/repo', 'feature/task-01', 'task desc', {
       reviewRunner: runner,
+      fixBackend: mockFixBackend,
     });
 
     expect(result.finalVerdict).toBe('NG');
@@ -178,6 +185,7 @@ describe('runReviewLoop', () => {
     await expect(
       runReviewLoop('/repo', 'feature/task-01', 'task desc', {
         reviewRunner: runner,
+        fixBackend: mockFixBackend,
       }),
     ).rejects.toThrow('unexpected');
   });
@@ -187,6 +195,7 @@ describe('runReviewLoop', () => {
 
     const result = await runReviewLoop('/repo', 'feature/task-01', 'task desc', {
       reviewRunner: runner,
+      fixBackend: mockFixBackend,
     });
 
     for (const iter of result.iterations) {
@@ -198,16 +207,13 @@ describe('runReviewLoop', () => {
     const runner = createMockRunner([ngResult(), okResult()]);
 
     // 修正エージェントがエラーを投げる
-    mockQuery.mockImplementationOnce(() => ({
-      [Symbol.asyncIterator]: () => ({
-        next: () => Promise.reject(new Error('agent crash')),
-      }),
-    }));
+    mockFixBackend.run.mockRejectedValueOnce(new Error('agent crash'));
 
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const result = await runReviewLoop('/repo', 'feature/task-01', 'task desc', {
       reviewRunner: runner,
+      fixBackend: mockFixBackend,
     });
 
     // エラーがあっても次のイテレーションに進む
@@ -228,12 +234,31 @@ describe('runReviewLoop', () => {
     const result = await runReviewLoop('/repo', 'feature/task-01', 'task desc', {
       reviewRunner: runner,
       maxRetries: 3,
+      fixBackend: mockFixBackend,
     });
 
     expect(result.finalVerdict).toBe('OK');
     expect(result.escalationRequired).toBe(false);
     expect(result.iterations).toHaveLength(3);
-    expect(mockQuery).toHaveBeenCalledTimes(2); // 修正エージェント2回
+    expect(mockFixBackend.run).toHaveBeenCalledTimes(2); // 修正エージェント2回
+  });
+
+  it('fixBackend.run に正しい引数が渡される', async () => {
+    const runner = createMockRunner([ngResult(), okResult()]);
+
+    await runReviewLoop('/repo', 'feature/task-01', 'task desc', {
+      reviewRunner: runner,
+      fixBackend: mockFixBackend,
+    });
+
+    expect(mockFixBackend.run).toHaveBeenCalledWith(
+      expect.stringContaining('Bug found'),
+      expect.objectContaining({
+        cwd: '/repo',
+        allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
+        permissionMode: 'bypassPermissions',
+      }),
+    );
   });
 });
 

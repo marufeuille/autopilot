@@ -1,6 +1,7 @@
 import { spawn, ChildProcess } from 'child_process';
 import * as path from 'path';
 import { ReviewResult, ReviewError, ReviewTimeoutError, determineVerdict } from './types';
+import type { AgentBackend } from '../agent/backend';
 
 /**
  * サブプロセスレビューランナーの設定
@@ -12,6 +13,8 @@ export interface SubprocessRunnerOptions {
   tsNodePath?: string;
   /** ワーカースクリプトのパス。デフォルト: 自動解決 */
   workerPath?: string;
+  /** レビュー用 AgentBackend（DI用。将来的に subprocess 以外のバックエンドに差し替え可能） */
+  reviewBackend?: AgentBackend;
 }
 
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5分
@@ -26,6 +29,8 @@ export class SubprocessReviewRunner {
   private readonly timeoutMs: number;
   private readonly tsNodePath: string;
   private readonly workerPath: string;
+  /** レビュー用 AgentBackend（将来的に subprocess 以外のバックエンドに差し替え可能） */
+  readonly reviewBackend?: AgentBackend;
 
   constructor(options: SubprocessRunnerOptions = {}) {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -35,6 +40,7 @@ export class SubprocessReviewRunner {
       options.tsNodePath ?? path.join(projectRoot, 'node_modules', '.bin', 'ts-node');
     this.workerPath =
       options.workerPath ?? path.resolve(__dirname, 'worker.ts');
+    this.reviewBackend = options.reviewBackend;
   }
 
   /**

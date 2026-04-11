@@ -7,20 +7,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ReviewResult, ReviewFinding } from '../types';
 import { determineVerdict } from '../types';
+import type { AgentBackend } from '../../agent/backend';
 
 // child_process をモック
 vi.mock('child_process', () => ({
   execSync: vi.fn(),
-}));
-
-// Claude agent SDK をモック
-const mockQuery = vi.fn(() => ({
-  [Symbol.asyncIterator]: () => ({
-    next: () => Promise.resolve({ done: true, value: undefined }),
-  }),
-}));
-vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
-  query: (...args: unknown[]) => mockQuery(...args),
 }));
 
 import { execSync } from 'child_process';
@@ -28,6 +19,13 @@ import { runReviewLoop, buildFixPrompt } from '../loop';
 import { SubprocessReviewRunner } from '../subprocess-runner';
 
 const mockedExecSync = vi.mocked(execSync);
+
+/** モック AgentBackend を生成する */
+function createMockFixBackend(): AgentBackend & { run: ReturnType<typeof vi.fn> } {
+  return {
+    run: vi.fn().mockResolvedValue('fix applied'),
+  };
+}
 
 function createMockRunner(results: ReviewResult[]) {
   let callCount = 0;
@@ -42,9 +40,12 @@ function createMockRunner(results: ReviewResult[]) {
 }
 
 describe('verdict判定〜修正ループ 統合テスト', () => {
+  let mockFixBackend: ReturnType<typeof createMockFixBackend>;
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockedExecSync.mockReturnValue('diff --git a/file.ts b/file.ts\n+some change');
+    mockFixBackend = createMockFixBackend();
   });
 
   // ---------------------------------------------------------------
@@ -77,6 +78,7 @@ describe('verdict判定〜修正ループ 統合テスト', () => {
       const result = await runReviewLoop('/repo', 'feature/test', 'task desc', {
         reviewRunner: runner,
         maxRetries: 3,
+        fixBackend: mockFixBackend,
       });
 
       // NG → 修正 → OK の2イテレーション
@@ -85,8 +87,8 @@ describe('verdict判定〜修正ループ 統合テスト', () => {
       expect(result.iterations[0].reviewResult.verdict).toBe('NG');
       expect(result.iterations[0].fixDescription).toBeDefined();
 
-      // 修正エージェントが呼ばれた（=修正ループが起動した）
-      expect(mockQuery).toHaveBeenCalledTimes(1);
+      // 修正エージェント（fixBackend）が呼ばれた（=修正ループが起動した）
+      expect(mockFixBackend.run).toHaveBeenCalledTimes(1);
 
       // buildFixPrompt に error のみ含まれることを検証
       const fixPrompt = buildFixPrompt(ngReview, 'task desc', '/repo');
@@ -122,6 +124,7 @@ describe('verdict判定〜修正ループ 統合テスト', () => {
       const result = await runReviewLoop('/repo', 'feature/test', 'task desc', {
         reviewRunner: runner,
         maxRetries: 3,
+        fixBackend: mockFixBackend,
       });
 
       // 1イテレーションで即OK
@@ -130,7 +133,7 @@ describe('verdict判定〜修正ループ 統合テスト', () => {
       expect(result.iterations[0].fixDescription).toBeUndefined();
 
       // 修正エージェントは呼ばれない
-      expect(mockQuery).not.toHaveBeenCalled();
+      expect(mockFixBackend.run).not.toHaveBeenCalled();
 
       // warning は ReviewLoopResult.warnings に格納される
       expect(result.warnings).toHaveLength(1);
@@ -163,6 +166,7 @@ describe('verdict判定〜修正ループ 統合テスト', () => {
       const result = await runReviewLoop('/repo', 'feature/test', 'task desc', {
         reviewRunner: runner,
         maxRetries: 3,
+        fixBackend: mockFixBackend,
       });
 
       // 1イテレーションで即OK
@@ -173,7 +177,7 @@ describe('verdict判定〜修正ループ 統合テスト', () => {
       expect(result.iterations[0].fixDescription).toBeUndefined();
 
       // 修正エージェントが呼ばれていない
-      expect(mockQuery).not.toHaveBeenCalled();
+      expect(mockFixBackend.run).not.toHaveBeenCalled();
 
       // レビューは1回だけ実行された
       expect(runner.review).toHaveBeenCalledTimes(1);
@@ -202,6 +206,7 @@ describe('verdict判定〜修正ループ 統合テスト', () => {
       const result = await runReviewLoop('/repo', 'feature/test', 'task desc', {
         reviewRunner: runner,
         maxRetries: 3,
+        fixBackend: mockFixBackend,
       });
 
       // 1イテレーションで即OK
@@ -212,7 +217,7 @@ describe('verdict判定〜修正ループ 統合テスト', () => {
       expect(result.iterations[0].fixDescription).toBeUndefined();
 
       // 修正エージェントが呼ばれていない
-      expect(mockQuery).not.toHaveBeenCalled();
+      expect(mockFixBackend.run).not.toHaveBeenCalled();
 
       // レビューは1回だけ実行された
       expect(runner.review).toHaveBeenCalledTimes(1);

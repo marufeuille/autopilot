@@ -228,4 +228,18 @@ describe('SubprocessReviewRunner', () => {
     const defaultRunner = new SubprocessReviewRunner();
     expect(defaultRunner).toBeInstanceOf(SubprocessReviewRunner);
   });
+
+  it('should accept reviewBackend via constructor DI', () => {
+    const mockBackend = { run: vi.fn().mockResolvedValue('result') };
+    const runnerWithBackend = new SubprocessReviewRunner({
+      reviewBackend: mockBackend,
+    });
+    expect(runnerWithBackend).toBeInstanceOf(SubprocessReviewRunner);
+    expect(runnerWithBackend.reviewBackend).toBe(mockBackend);
+  });
+
+  it('should have undefined reviewBackend when not provided', () => {
+    const defaultRunner = new SubprocessReviewRunner();
+    expect(defaultRunner.reviewBackend).toBeUndefined();
+  });
 });

@@ -1,8 +1,7 @@
 import { execSync } from 'child_process';
 import { SubprocessReviewRunner } from './subprocess-runner';
 import { ReviewResult, ReviewFinding, ReviewError } from './types';
-import { createBackend } from '../agent/backend';
-import { config } from '../config';
+import type { AgentBackend } from '../agent/backend';
 
 /**
  * レビューループの各イテレーション記録
@@ -47,6 +46,8 @@ export interface ReviewLoopOptions {
   reviewRunner?: SubprocessReviewRunner;
   /** レビュータイムアウト（ミリ秒） */
   reviewTimeoutMs?: number;
+  /** 修正エージェント用の AgentBackend（DI用） */
+  fixBackend?: AgentBackend;
 }
 
 const DEFAULT_MAX_RETRIES = 3;
@@ -118,8 +119,7 @@ ${findings}
 /**
  * 修正エージェントを実行する（AgentBackend 経由）
  */
-async function runFixAgent(prompt: string, cwd: string): Promise<string> {
-  const backend = createBackend(config.agentBackends.fix);
+async function runFixAgent(backend: AgentBackend, prompt: string, cwd: string): Promise<string> {
   return backend.run(prompt, {
     cwd,
     allowedTools: ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
@@ -240,7 +240,7 @@ export async function runReviewLoop(
     const fixPrompt = buildFixPrompt(reviewResult, taskDescription, repoPath);
     let fixDescription: string;
     try {
-      fixDescription = await runFixAgent(fixPrompt, repoPath);
+      fixDescription = await runFixAgent(options.fixBackend!, fixPrompt, repoPath);
     } catch (error) {
       console.error(`[review-loop] fix agent failed at iteration ${iterationNumber}:`, error);
       fixDescription = `Fix agent failed: ${error instanceof Error ? error.message : String(error)}`;
