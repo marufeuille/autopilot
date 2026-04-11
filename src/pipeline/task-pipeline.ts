@@ -7,7 +7,16 @@ import {
   handleDocUpdate,
   handleDone,
 } from './steps';
-import { TaskContext } from './types';
+import { PipelineHooks, TaskContext } from './types';
+
+const TASK_STEPS = [
+  step<TaskContext>('start-approval', handleStartApproval),
+  step<TaskContext>('sync-main', handleSyncMain),
+  step<TaskContext>('implementation', handleImplementation),
+  step<TaskContext>('pr-lifecycle', handlePRLifecycle),
+  step<TaskContext>('doc-update', handleDocUpdate),
+  step<TaskContext>('done', handleDone),
+];
 
 /**
  * タスク実行パイプライン定義
@@ -22,13 +31,18 @@ import { TaskContext } from './types';
  */
 // パイプライン全体のリトライ上限: コスト保護および無限ループ防止のため明示的に設定
 export const taskPipeline = createPipeline<TaskContext>(
-  [
-    step('start-approval', handleStartApproval),
-    step('sync-main', handleSyncMain),
-    step('implementation', handleImplementation),
-    step('pr-lifecycle', handlePRLifecycle),
-    step('doc-update', handleDocUpdate),
-    step('done', handleDone),
-  ],
+  TASK_STEPS,
   { maxRetries: 10 },
 );
+
+/**
+ * フック付きタスク実行パイプラインを生成するファクトリ。
+ * OTel 等の計装フックを注入する場合に使用する。
+ * hooks が undefined の場合は通常の taskPipeline と同等。
+ */
+export function createTaskPipeline(hooks?: PipelineHooks) {
+  return createPipeline<TaskContext>(
+    TASK_STEPS,
+    { maxRetries: 10, hooks },
+  );
+}

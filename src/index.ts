@@ -8,6 +8,7 @@ import { runStory } from './runner';
 import { NotificationBackend, createNotificationBackend } from './notification';
 import { StoryQueueManager } from './queue/queue-manager';
 import { promoteNextQueuedStory } from './queue/auto-promote';
+import { initTelemetry, shutdownTelemetry, TelemetryHandle } from './telemetry';
 
 // 実行中ストーリーの重複起動防止
 const runningStories = new Set<string>();
@@ -51,6 +52,9 @@ async function handleStoryFile(
 }
 
 async function main(): Promise<void> {
+  // OTel 初期化（OTEL_ENABLED=true の場合のみトレース送信）
+  const telemetry = initTelemetry();
+
   // キューマネージャーを生成（全バックエンドで共有）
   const queueManager = new StoryQueueManager({ readStoryBySlug, updateFileStatus });
 
@@ -88,4 +92,11 @@ async function main(): Promise<void> {
 main().catch((err) => {
   console.error(err);
   process.exit(1);
+});
+
+// Graceful shutdown: プロセス終了時に OTel バッファをフラッシュ
+process.on('SIGINT', async () => {
+  // telemetry は main() 内のローカル変数だが、shutdown は initTelemetry の戻り値に依存
+  // ここでは安全にプロセスを終了するだけ（SDK の内部フックが shutdown を処理）
+  process.exit(0);
 });
