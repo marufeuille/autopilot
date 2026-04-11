@@ -50,6 +50,60 @@ export interface ReviewLoopOptions {
 
 const DEFAULT_MAX_RETRIES = 3;
 
+/** diff stat の最大行数。超えた場合はサマリ行のみに切り詰める */
+export const DIFF_STAT_MAX_LINES = 50;
+/** diff stat の最大文字数。超えた場合はサマリ行のみに切り詰める */
+export const DIFF_STAT_MAX_CHARS = 2000;
+
+/**
+ * git diff --stat を取得する。
+ * 出力が上限（行数または文字数）を超えた場合はサマリ行（末尾の 'N files changed, ...' 行）のみに切り詰める。
+ * git コマンド失敗時は undefined を返す。
+ */
+export function getDiffStat(repoPath: string, branch: string): string | undefined {
+  let raw: string;
+  try {
+    raw = execSync(`git diff --stat main...${branch}`, {
+      cwd: repoPath,
+      encoding: 'utf-8',
+      maxBuffer: 10 * 1024 * 1024,
+    });
+  } catch {
+    try {
+      raw = execSync('git diff --stat HEAD', {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        maxBuffer: 10 * 1024 * 1024,
+      });
+    } catch {
+      return undefined;
+    }
+  }
+
+  if (!raw.trim()) {
+    return undefined;
+  }
+
+  return truncateDiffStat(raw);
+}
+
+/**
+ * diff stat 出力を上限ガードし、必要に応じてサマリ行のみに切り詰める。
+ */
+export function truncateDiffStat(raw: string): string {
+  const lines = raw.split('\n');
+  // 末尾空行を除いた行数で判定
+  const nonEmptyLines = lines.filter((l) => l.trim() !== '');
+
+  if (nonEmptyLines.length <= DIFF_STAT_MAX_LINES && raw.length <= DIFF_STAT_MAX_CHARS) {
+    return raw.trim();
+  }
+
+  // サマリ行は末尾の非空行（例: " 5 files changed, 100 insertions(+), 20 deletions(-)"）
+  const summaryLine = nonEmptyLines[nonEmptyLines.length - 1];
+  return summaryLine?.trim() ?? raw.trim();
+}
+
 /**
  * diff を取得する
  */

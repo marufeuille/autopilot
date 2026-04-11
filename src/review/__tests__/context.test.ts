@@ -87,6 +87,23 @@ describe('buildRetryContext', () => {
     expect(result.reason).toBe('セルフレビュー未通過');
   });
 
+  it('diffStat オプションが渡された場合に RetryContext に含まれる', () => {
+    const diffStat = ' src/foo.ts | 10 +\n 1 file changed, 10 insertions(+)';
+    const result = buildRetryContext(
+      makeResult({
+        lastReviewResult: { verdict: 'NG', summary: 'NG', findings: [{ severity: 'error', message: 'err' }] },
+      }),
+      { diffStat },
+    );
+
+    expect(result.diffStat).toBe(diffStat);
+  });
+
+  it('diffStat オプションが省略された場合は undefined', () => {
+    const result = buildRetryContext(makeResult());
+    expect(result.diffStat).toBeUndefined();
+  });
+
   it('error 指摘のファイル・行番号情報が保持される', () => {
     const findings: ReviewFinding[] = [
       { file: 'src/handler.ts', line: 42, severity: 'error', message: '未使用変数' },

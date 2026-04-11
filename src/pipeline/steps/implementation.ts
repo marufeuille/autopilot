@@ -1,6 +1,6 @@
 import { FlowSignal, TaskContext } from '../types';
 import { StoryFile, TaskFile } from '../../vault/reader';
-import { formatReviewLoopResult } from '../../review';
+import { formatReviewLoopResult, getDiffStat, buildRetryContext } from '../../review';
 import { traceOperation } from '../../telemetry/operation';
 
 /**
@@ -111,6 +111,11 @@ export async function handleImplementation(ctx: TaskContext): Promise<FlowSignal
       story.slug,
     );
   }
+
+  // 構造化された retry 文脈を組み立てて設定（pipeline の fallback より先に設定する）
+  const diffStat = getDiffStat(cwd, branch);
+  const retryCtx = buildRetryContext(reviewResult, { diffStat });
+  ctx.setRetryContext(retryCtx);
 
   return { kind: 'retry', from: 'implementation', reason: 'セルフレビュー未通過' };
 }
