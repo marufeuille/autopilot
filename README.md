@@ -88,6 +88,12 @@ return { kind: 'retry', from: 'implementation', reason: `CI未通過: ${ciResult
 return { kind: 'retry', from: 'implementation', reason: `PRクローズ: ${reason}` }
 ```
 
+### パイプラインオブザーバビリティ
+
+Pipeline runner はフックポイント（`onStepStart` / `onStepEnd` 等）を備えており、ビジネスロジックに手を入れずに計装を差し込めます。`OTEL_ENABLED=true` にすると OpenTelemetry でトレースが収集され、Jaeger UI で Story → Task → Step → Operation の4階層でパイプラインの挙動を可視化できます。
+
+セキュリティ上、会話テキスト・ファイルパス・コマンド内容は一切記録せず、トークン数や所要時間など数値のみを収集します。
+
 ### 実装ファイル構成
 
 ```
@@ -154,6 +160,10 @@ SLACK_CHANNEL_ID=C0XXXXXXXXX
 # pretty: 人間が読みやすい形式 [timestamp] [LEVEL] [module] message {context}
 # json: JSON形式（Datadog, CloudWatch等のログ収集基盤向け）
 # LOG_FORMAT=json
+
+# パイプラインの OTel トレース送信（省略時は false）
+# true にすると Jaeger にトレースが送信され、パイプラインの実行状況を可視化できる
+# OTEL_ENABLED=true
 ```
 
 ### 3. 通知バックエンドの選択
@@ -201,7 +211,19 @@ Slackバックエンドを使う場合のみ、以下の設定が必要です。
 /invite @YourBotName
 ```
 
-### 5. 起動
+### 5. パイプラインオブザーバビリティの起動（任意）
+
+パイプラインの実行状況（各ステップの所要時間、リトライ頻度、ボトルネック箇所）を Jaeger UI で可視化できます。
+
+```bash
+docker compose -f docker-compose.otel.yml up -d
+```
+
+`.env` に `OTEL_ENABLED=true` を設定すると、パイプライン実行時に OpenTelemetry トレースが Jaeger に送信されます。Jaeger UI は [localhost:16686](http://localhost:16686) でアクセスできます。
+
+`OTEL_ENABLED` が未設定または `false` の場合、トレースは生成されずパイプラインの動作に影響はありません。
+
+### 6. 起動
 
 ```bash
 # 開発モード
