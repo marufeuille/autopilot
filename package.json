@@ -18,6 +18,11 @@
     "gray-matter": "^4.0.3"
   },
   "devDependencies": {
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/exporter-trace-otlp-grpc": "^0.214.0",
+    "@opentelemetry/resources": "^2.6.1",
+    "@opentelemetry/sdk-node": "^0.214.0",
+    "@opentelemetry/semantic-conventions": "^1.40.0",
     "@types/glob": "^8.1.0",
     "@types/node": "^22.0.0",
     "@vitest/coverage-v8": "^4.1.1",
