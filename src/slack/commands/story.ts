@@ -107,20 +107,45 @@ export function createDepsFromApp(app: App): StoryDraftDeps {
  *
  * テスト可能にするために deps を受け取る。
  */
+/**
+ * args から --project=xxx オプションを抽出する
+ */
+export function extractProjectOption(
+  args: string[],
+): { project: string | undefined; remainingArgs: string[] } {
+  const remainingArgs: string[] = [];
+  let project: string | undefined;
+
+  for (const arg of args) {
+    const match = arg.match(/^--project=(.+)$/);
+    if (match) {
+      project = match[1];
+    } else {
+      remainingArgs.push(arg);
+    }
+  }
+
+  return { project, remainingArgs };
+}
+
 export async function handleStoryInternal(
   args: string[],
   respond: (msg: string) => Promise<void>,
   deps: StoryDraftDeps,
 ): Promise<void> {
+  // --project オプションを抽出
+  const { project: specifiedProject, remainingArgs } = extractProjectOption(args);
+
   // 引数バリデーション
-  if (args.length === 0) {
+  if (remainingArgs.length === 0) {
     await respond(
       '⚠️ ストーリーの概要を指定してください。\n使い方: `/ap story <概要>`',
     );
     return;
   }
 
-  const description = args.join(' ');
+  const project = specifiedProject ?? config.watchProjects[0];
+  const description = remainingArgs.join(' ');
 
   try {
     // スレッド起点メッセージを投稿
@@ -153,7 +178,7 @@ export async function handleStoryInternal(
       type: 'story',
       phase: 'drafting',
       description,
-      project: config.watchProject,
+      project,
       conversationHistory: [
         { role: 'user', content: description },
         { role: 'assistant', content: draft },

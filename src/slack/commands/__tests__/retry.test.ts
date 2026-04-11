@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { TaskFile, TaskStatus } from '../../../vault/reader';
 
 // モック設定
@@ -15,14 +15,15 @@ vi.mock('../../../vault/writer', () => ({
 }));
 
 vi.mock('../../../config', () => ({
-  config: { watchProject: 'test-project', vaultPath: '/vault' },
-  vaultProjectPath: vi.fn(() => '/vault/Projects/test-project'),
-  vaultStoriesPath: vi.fn(() => '/vault/Projects/test-project/stories'),
+  config: { watchProject: 'test-project', watchProjects: ['test-project'], vaultPath: '/vault' },
+  vaultProjectPath: vi.fn((project: string) => `/vault/Projects/${project}`),
+  vaultStoriesPath: vi.fn((project: string) => `/vault/Projects/${project}/stories`),
 }));
 
 import { glob } from 'glob';
 import { getStoryTasks } from '../../../vault/reader';
 import { updateFileStatus } from '../../../vault/writer';
+import { config } from '../../../config';
 import { handleRetry, findTaskBySlug } from '../retry';
 
 const mockGlob = vi.mocked(glob);
@@ -253,5 +254,44 @@ describe('handleRetry', () => {
     const msg = respond.mock.calls[0][0] as string;
     expect(msg).toContain('エラー');
     expect(msg).toContain('disk read error');
+  });
+});
+
+describe('handleRetry - multi-project', () => {
+  let respond: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    respond = vi.fn().mockResolvedValue(undefined);
+    // watchProjects を複数プロジェクトに設定
+    (config as any).watchProjects = ['project-a', 'project-b'];
+  });
+
+  afterEach(() => {
+    // 元に戻す
+    (config as any).watchProjects = ['test-project'];
+  });
+
+  it('複数プロジェクトを横断してタスクを検索する', async () => {
+    // project-a にはタスクなし
+    mockGlob
+      .mockResolvedValueOnce([] as never)  // project-a の tasks ディレクトリ
+      .mockResolvedValueOnce([             // project-b の tasks ディレクトリ
+        '/vault/Projects/project-b/tasks/my-story',
+      ] as never);
+
+    mockGetStoryTasks
+      .mockResolvedValueOnce([
+        makeTask('my-story', 'target-task', 'Failed'),
+      ]);
+
+    mockUpdateFileStatus.mockResolvedValue(undefined as never);
+
+    await handleRetry(['target-task'], respond);
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const msg = respond.mock.calls[0][0] as string;
+    expect(msg).toContain('target-task');
+    expect(msg).toContain('再実行をトリガーしました');
   });
 });

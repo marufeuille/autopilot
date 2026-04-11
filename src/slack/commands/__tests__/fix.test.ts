@@ -3,12 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../../../config', () => ({
   config: {
     watchProject: 'test-project',
+    watchProjects: ['test-project'],
     vaultPath: '/vault',
     slack: { channelId: 'C_TEST_CHANNEL' },
   },
 }));
 
-import { handleFixInternal, buildFixAnalysisPrompt, type FixDraftDeps } from '../fix';
+import { handleFixInternal, buildFixAnalysisPrompt, extractProjectOption, type FixDraftDeps } from '../fix';
 import { interactiveSessionManager } from '../../interactive-session';
 
 function createMockDeps(overrides: Partial<FixDraftDeps> = {}): FixDraftDeps {
@@ -146,5 +147,61 @@ describe('handleFixInternal', () => {
 
     const session = interactiveSessionManager.getSession('1111111111.111111');
     expect(session!.description).toBe('パスワード リセット リンクが 404になる');
+  });
+
+  it('--project オプションでプロジェクトを指定できる', async () => {
+    const deps = createMockDeps();
+
+    await handleFixInternal(['--project=hoge', 'バグ説明'], respond, deps);
+
+    const session = interactiveSessionManager.getSession('1111111111.111111');
+    expect(session).toBeDefined();
+    expect(session!.project).toBe('hoge');
+    expect(session!.description).toBe('バグ説明');
+  });
+
+  it('--project 未指定時は watchProjects[0] にフォールバックする', async () => {
+    const deps = createMockDeps();
+
+    await handleFixInternal(['バグ説明'], respond, deps);
+
+    const session = interactiveSessionManager.getSession('1111111111.111111');
+    expect(session).toBeDefined();
+    expect(session!.project).toBe('test-project');
+  });
+
+  it('--project オプションが説明文に含まれない', async () => {
+    const deps = createMockDeps();
+
+    await handleFixInternal(['--project=hoge', 'バグ', '説明'], respond, deps);
+
+    const rootCall = (deps.postMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(rootCall.text).toContain('バグ 説明');
+    expect(rootCall.text).not.toContain('--project');
+  });
+
+  it('--project のみで説明がない場合はエラーメッセージを返す', async () => {
+    const deps = createMockDeps();
+
+    await handleFixInternal(['--project=hoge'], respond, deps);
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    const msg = respond.mock.calls[0][0] as string;
+    expect(msg).toContain('バグの説明を指定してください');
+    expect(deps.postMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('extractProjectOption', () => {
+  it('--project=xxx を抽出して残りの引数を返す', () => {
+    const result = extractProjectOption(['--project=hoge', 'バグ', '説明']);
+    expect(result.project).toBe('hoge');
+    expect(result.remainingArgs).toEqual(['バグ', '説明']);
+  });
+
+  it('--project がない場合は undefined を返す', () => {
+    const result = extractProjectOption(['バグ', '説明']);
+    expect(result.project).toBeUndefined();
+    expect(result.remainingArgs).toEqual(['バグ', '説明']);
   });
 });

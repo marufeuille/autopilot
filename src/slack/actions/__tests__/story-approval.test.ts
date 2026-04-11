@@ -247,6 +247,17 @@ describe('handleApproveInternal', () => {
     consoleSpy.mockRestore();
   });
 
+  it('セッションのプロジェクトがVault書き込みに使用される', async () => {
+    const session = makeSession({ project: 'custom-project' });
+    interactiveSessionManager.startSession(session);
+    const deps = createMockDeps();
+
+    await handleApproveInternal(threadTs, messageTs, deps);
+
+    const [project] = (deps.writeStoryToVault as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(project).toBe('custom-project');
+  });
+
   it('マルチターン後の最終ドラフトが使用される', async () => {
     const session = makeSession({
       conversationHistory: [

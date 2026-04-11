@@ -11,7 +11,6 @@
  */
 import type { App, BlockAction } from '@slack/bolt';
 import type { Block, KnownBlock } from '@slack/types';
-import { config } from '../../config';
 import { interactiveSessionManager } from '../interactive-session';
 import {
   parseStoryDraft,
@@ -111,7 +110,7 @@ export async function handleApproveInternal(
     // Vaultにストーリーファイルを作成
     const slug = generateSlug(parsed.title);
     const filePath = deps.writeStoryToVault(
-      config.watchProject,
+      session.project,
       parsed,
       slug,
     );

@@ -113,6 +113,27 @@ export function createFixDepsFromApp(app: App): FixDraftDeps {
  *
  * テスト可能にするために deps を受け取る。
  */
+/**
+ * args から --project=xxx オプションを抽出する
+ */
+export function extractProjectOption(
+  args: string[],
+): { project: string | undefined; remainingArgs: string[] } {
+  const remainingArgs: string[] = [];
+  let project: string | undefined;
+
+  for (const arg of args) {
+    const match = arg.match(/^--project=(.+)$/);
+    if (match) {
+      project = match[1];
+    } else {
+      remainingArgs.push(arg);
+    }
+  }
+
+  return { project, remainingArgs };
+}
+
 export async function handleFixInternal(
   args: string[],
   respond: (msg: string) => Promise<void>,
@@ -120,8 +141,11 @@ export async function handleFixInternal(
 ): Promise<void> {
   const log = createCommandLogger('fix-command', { command: 'fix' });
 
+  // --project オプションを抽出
+  const { project: specifiedProject, remainingArgs } = extractProjectOption(args);
+
   // 引数バリデーション
-  if (args.length === 0) {
+  if (remainingArgs.length === 0) {
     log.warn('引数なしでコマンド実行', { phase: 'command_received' });
     await respond(
       '⚠️ バグの説明を指定してください。\n使い方: `/ap fix <バグ説明>`',
@@ -129,7 +153,8 @@ export async function handleFixInternal(
     return;
   }
 
-  const bugDescription = args.join(' ');
+  const project = specifiedProject ?? config.watchProjects[0];
+  const bugDescription = remainingArgs.join(' ');
   log.info('コマンド受信', { phase: 'command_received', description: bugDescription });
 
   try {
@@ -170,7 +195,7 @@ export async function handleFixInternal(
       type: 'fix',
       phase: 'drafting',
       description: bugDescription,
-      project: config.watchProject,
+      project,
       conversationHistory: [
         { role: 'user', content: bugDescription },
         { role: 'assistant', content: analysis },

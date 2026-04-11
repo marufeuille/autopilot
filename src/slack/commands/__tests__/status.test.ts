@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { StoryFile, TaskFile, TaskStatus } from '../../../vault/reader';
 
 // モック設定
@@ -13,11 +13,12 @@ vi.mock('../../../vault/reader', () => ({
 
 vi.mock('../../../config', () => ({
   config: { watchProject: 'test-project', watchProjects: ['test-project'], vaultPath: '/vault' },
-  vaultStoriesPath: vi.fn(() => '/vault/Projects/test-project/stories'),
+  vaultStoriesPath: vi.fn((project: string) => `/vault/Projects/${project}/stories`),
 }));
 
 import { glob } from 'glob';
 import { readStoryFile, getStoryTasks } from '../../../vault/reader';
+import { config } from '../../../config';
 import { handleStatus, summarizeTaskStatuses, formatStatusSummary } from '../status';
 
 const mockGlob = vi.mocked(glob);
@@ -216,5 +217,52 @@ describe('handleStatus', () => {
     const msg = respond.mock.calls[0][0] as string;
     expect(msg).toContain('エラー');
     expect(msg).toContain('disk error');
+  });
+});
+
+describe('handleStatus - multi-project', () => {
+  let respond: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    respond = vi.fn().mockResolvedValue(undefined);
+    (config as any).watchProjects = ['project-a', 'project-b'];
+  });
+
+  afterEach(() => {
+    (config as any).watchProjects = ['test-project'];
+  });
+
+  it('全プロジェクトのDoingストーリーをプロジェクト別に表示する', async () => {
+    // project-a のストーリー
+    mockGlob
+      .mockResolvedValueOnce(['/vault/Projects/project-a/stories/story-a.md'] as never)
+      // project-b のストーリー
+      .mockResolvedValueOnce(['/vault/Projects/project-b/stories/story-b.md'] as never);
+
+    mockReadStoryFile
+      .mockReturnValueOnce({
+        ...makeStory('story-a', 'Doing'),
+        filePath: '/vault/Projects/project-a/stories/story-a.md',
+        project: 'project-a',
+      })
+      .mockReturnValueOnce({
+        ...makeStory('story-b', 'Doing'),
+        filePath: '/vault/Projects/project-b/stories/story-b.md',
+        project: 'project-b',
+      });
+
+    mockGetStoryTasks
+      .mockResolvedValueOnce([makeTask('story-a', 'a-task-01', 'Doing')])
+      .mockResolvedValueOnce([makeTask('story-b', 'b-task-01', 'Todo')]);
+
+    await handleStatus([], respond);
+
+    const msg = respond.mock.calls[0][0] as string;
+    expect(msg).toContain('story-a');
+    expect(msg).toContain('story-b');
+    expect(msg).toContain('[project-a]');
+    expect(msg).toContain('[project-b]');
+    expect(msg).toContain('2');
   });
 });
