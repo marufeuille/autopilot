@@ -1054,6 +1054,7 @@ describe('runTask', () => {
       '/tmp/autopilot/task-01',
       'feature/task-01',
       task.content,
+      expect.objectContaining({ fixBackend: expect.any(Object) }),
     );
     // レビュー結果の通知が送信されたことを確認
     expect(notifier.notify).toHaveBeenCalledWith(
