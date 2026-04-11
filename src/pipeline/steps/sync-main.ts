@@ -62,7 +62,7 @@ export async function handleSyncMain(ctx: TaskContext): Promise<FlowSignal> {
   try {
     await traceOperation(
       { type: 'git-sync', waitType: 'agent' },
-      () => deps.createWorktree(repoPath, worktreePath, branch),
+      async () => { await deps.createWorktree(repoPath, worktreePath, branch); },
     );
     ctx.set('worktreePath', worktreePath);
   } catch (error) {
