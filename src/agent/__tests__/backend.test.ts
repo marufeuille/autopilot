@@ -45,7 +45,7 @@ describe('ClaudeBackend', () => {
     backend = new ClaudeBackend();
   });
 
-  it('assistant メッセージのテキストを結合して返す', async () => {
+  it('result メッセージの result フィールドのみを返す（assistant メッセージは無視）', async () => {
     mockedQuery.mockReturnValue(
       fakeStream([
         {
@@ -54,27 +54,12 @@ describe('ClaudeBackend', () => {
             content: [{ text: 'Hello' }, { text: ' World' }],
           },
         },
-        { type: 'result', subtype: 'success' },
-      ]) as ReturnType<typeof query>,
-    );
-
-    const result = await backend.run('test prompt', { cwd: '/tmp' });
-    expect(result).toBe('Hello\n World');
-  });
-
-  it('result メッセージの result フィールドも取得する', async () => {
-    mockedQuery.mockReturnValue(
-      fakeStream([
-        {
-          type: 'assistant',
-          message: { content: [{ text: 'step output' }] },
-        },
         { type: 'result', subtype: 'success', result: 'final answer' },
       ]) as ReturnType<typeof query>,
     );
 
-    const result = await backend.run('test', { cwd: '/tmp' });
-    expect(result).toBe('step output\nfinal answer');
+    const result = await backend.run('test prompt', { cwd: '/tmp' });
+    expect(result).toBe('final answer');
   });
 
   it('空のストリームでは空文字列を返す', async () => {
@@ -145,7 +130,7 @@ describe('ClaudeBackend', () => {
     });
   });
 
-  it('content が空の assistant メッセージをスキップする', async () => {
+  it('assistant メッセージは無視し result のみ返す', async () => {
     mockedQuery.mockReturnValue(
       fakeStream([
         { type: 'assistant', message: { content: [] } },
@@ -153,9 +138,9 @@ describe('ClaudeBackend', () => {
         { type: 'assistant' },
         {
           type: 'assistant',
-          message: { content: [{ text: 'actual output' }] },
+          message: { content: [{ text: 'intermediate output' }] },
         },
-        { type: 'result', subtype: 'success' },
+        { type: 'result', subtype: 'success', result: 'actual output' },
       ]) as ReturnType<typeof query>,
     );
 
@@ -163,15 +148,28 @@ describe('ClaudeBackend', () => {
     expect(result).toBe('actual output');
   });
 
-  it('error subtype の result メッセージでは result フィールドを取得しない', async () => {
+  it('error subtype の result メッセージではエラーをスローする', async () => {
     mockedQuery.mockReturnValue(
       fakeStream([
-        { type: 'result', subtype: 'error', result: 'should not appear' },
+        { type: 'result', subtype: 'error_during_execution', errors: ['something went wrong'] },
       ]) as ReturnType<typeof query>,
     );
 
-    const result = await backend.run('test', { cwd: '/tmp' });
-    expect(result).toBe('');
+    await expect(backend.run('test', { cwd: '/tmp' })).rejects.toThrow(
+      'Claude Code execution ended with error_during_execution: something went wrong',
+    );
+  });
+
+  it('error subtype で errors が空の場合でもエラーをスローする', async () => {
+    mockedQuery.mockReturnValue(
+      fakeStream([
+        { type: 'result', subtype: 'error_max_turns' },
+      ]) as ReturnType<typeof query>,
+    );
+
+    await expect(backend.run('test', { cwd: '/tmp' })).rejects.toThrow(
+      'Claude Code execution ended with error_max_turns: unknown error',
+    );
   });
 
   it('query が例外を throw した場合はログ出力して再 throw する', async () => {

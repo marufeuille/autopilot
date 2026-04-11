@@ -1,4 +1,5 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
+import type { Options as QueryOptions } from '@anthropic-ai/claude-agent-sdk';
 import { createCommandLogger } from '../logger';
 import type { AgentBackendConfig } from '../config';
 
@@ -58,47 +59,54 @@ export interface AgentBackend {
  * このクラスがコードベース内で `query()` SDK を直接呼び出す唯一の場所となる。
  * 他のモジュールは必ず {@link AgentBackend} インターフェース経由で呼び出すこと。
  */
+/**
+ * AbortSignal を AbortController にラップする。
+ * SDK は AbortController を受け取るため、外部から渡された AbortSignal を変換する必要がある。
+ */
+function wrapSignalAsController(signal: AbortSignal): AbortController {
+  const controller = new AbortController();
+  if (signal.aborted) {
+    controller.abort(signal.reason);
+  } else {
+    signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
+  }
+  return controller;
+}
+
 export class ClaudeBackend implements AgentBackend {
   async run(prompt: string, options: AgentRunOptions): Promise<string> {
-    const chunks: string[] = [];
-
     try {
-      const queryOptions: Record<string, unknown> = {
+      const queryOptions: QueryOptions = {
         ...(options.cwd ? { cwd: options.cwd } : {}),
         allowedTools: options.allowedTools ?? ['Bash', 'Read', 'Write', 'Edit', 'Glob', 'Grep'],
         permissionMode: options.permissionMode ?? 'bypassPermissions',
+        ...(options.abortSignal ? { abortController: wrapSignalAsController(options.abortSignal) } : {}),
       };
-      if (options.abortSignal) {
-        queryOptions.abortSignal = options.abortSignal;
-      }
+
+      let resultText: string | undefined;
 
       for await (const message of query({
         prompt,
         options: queryOptions,
       })) {
-        if (message.type === 'assistant') {
-          const content = message.message?.content ?? [];
-          for (const block of content) {
-            if ('text' in block && block.text) {
-              chunks.push(block.text);
-            }
-          }
-        } else if (message.type === 'result') {
+        if (message.type === 'result') {
           log.info('agent result', { subtype: message.subtype, phase: 'agent_execution' });
-          if (message.subtype === 'success' && 'result' in message) {
-            const resultText = (message as { result?: string }).result;
-            if (resultText) {
-              chunks.push(resultText);
-            }
+          if (message.subtype === 'success') {
+            resultText = message.result;
+          } else {
+            const errors = 'errors' in message ? (message.errors as string[]) : [];
+            throw new Error(
+              `Claude Code execution ended with ${message.subtype}: ${errors.join('; ') || 'unknown error'}`,
+            );
           }
         }
       }
+
+      return resultText ?? '';
     } catch (error) {
       log.error('Claude Code execution failed', { error, phase: 'agent_execution' });
       throw error;
     }
-
-    return chunks.join('\n');
   }
 }
 
