@@ -50,18 +50,24 @@ export function formatStatusSummary(counts: Record<TaskStatus, number>): string 
 /**
  * /ap status サブコマンドのハンドラー
  *
- * ウォッチ対象プロジェクトのストーリーから status=Doing のものを抽出し、
+ * ウォッチ対象の全プロジェクトのストーリーから status=Doing のものを抽出し、
  * 各ストーリー配下のタスク状態を集計して Slack に返す。
  */
 export const handleStatus: SubcommandHandler = async (_args, respond) => {
   try {
-    const project = config.watchProject;
-    const storiesDir = vaultStoriesPath(project);
-    const pattern = path.join(storiesDir, '*.md');
-    const storyFiles = await glob(pattern);
+    const projects = config.watchProjects;
+
+    // 全プロジェクトのストーリーファイルを収集
+    const allStoryFiles: string[] = [];
+    for (const project of projects) {
+      const storiesDir = vaultStoriesPath(project);
+      const pattern = path.join(storiesDir, '*.md');
+      const files = await glob(pattern);
+      allStoryFiles.push(...files);
+    }
 
     // Doing のストーリーを抽出
-    const doingStories = storyFiles
+    const doingStories = allStoryFiles
       .map((fp) => readStoryFile(fp))
       .filter((s) => s.status === 'Doing');
 
@@ -78,6 +84,8 @@ export const handleStatus: SubcommandHandler = async (_args, respond) => {
       }),
     );
 
+    const multiProject = projects.length > 1;
+
     // Slack Block Kit mrkdwn でフォーマット
     const sections = storyDetails.map(({ story, tasks }) => {
       const taskStatuses = tasks.map((t) => t.status);
@@ -88,8 +96,9 @@ export const handleStatus: SubcommandHandler = async (_args, respond) => {
         .map((t) => `  ${STATUS_EMOJI[t.status]} \`${t.slug}\` — ${t.status}`)
         .join('\n');
 
+      const projectLabel = multiProject ? ` [${story.project}]` : '';
       return [
-        `*${story.slug}*  (${tasks.length} tasks)`,
+        `*${story.slug}*${projectLabel}  (${tasks.length} tasks)`,
         summary,
         taskLines,
       ]

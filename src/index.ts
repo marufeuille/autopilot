@@ -59,36 +59,49 @@ async function main(): Promise<void> {
   telemetry = initTelemetry();
 
   try {
-    // キューマネージャーを生成（全バックエンドで共有）
-    const queueManager = new StoryQueueManager({ readStoryBySlug, updateFileStatus });
+    // プロジェクトごとにキューマネージャーを生成
+    const queueManagers = new Map<string, StoryQueueManager>();
+    for (const project of config.watchProjects) {
+      queueManagers.set(
+        project,
+        new StoryQueueManager({
+          readStoryBySlug: (slug: string) => readStoryBySlug(slug, project),
+          updateFileStatus,
+        }),
+      );
+    }
 
     // ファクトリ経由で通知バックエンドを生成（環境変数 NOTIFY_BACKEND で切り替え）
-    // Slack バックエンドの場合、共有 QueueManager を Slack コマンドにも渡す
-    const notifier = await createNotificationBackend({ queueManager });
+    // Slack バックエンドの場合、共有 QueueManagers Map を Slack コマンドにも渡す
+    const notifier = await createNotificationBackend({ queueManagers });
     const backendType = process.env.NOTIFY_BACKEND ?? 'local';
     console.log(`[notification] backend started: ${backendType}`);
 
-    const project = config.watchProject;
-    const storiesPath = vaultStoriesPath(project);
+    // プロジェクトごとにウォッチャーを起動
+    for (const project of config.watchProjects) {
+      const storiesPath = vaultStoriesPath(project);
 
-    if (!fs.existsSync(storiesPath)) {
-      throw new Error(`[vault] stories dir not found: ${storiesPath}`);
+      if (!fs.existsSync(storiesPath)) {
+        console.log(`[vault] stories dir not found, skipping project: ${project} (${storiesPath})`);
+        continue;
+      }
+
+      console.log(`[vault] watching: ${storiesPath}`);
+
+      const queueManager = queueManagers.get(project)!;
+      const watcher = chokidar.watch(storiesPath, {
+        ignoreInitial: false,
+        depth: 1,
+      });
+
+      watcher.on('add', (filePath) => {
+        handleStoryFile(path.resolve(filePath), project, notifier, queueManager).catch(console.error);
+      });
+
+      watcher.on('change', (filePath) => {
+        handleStoryFile(path.resolve(filePath), project, notifier, queueManager).catch(console.error);
+      });
     }
-
-    console.log(`[vault] watching: ${storiesPath}`);
-
-    const watcher = chokidar.watch(storiesPath, {
-      ignoreInitial: false,
-      depth: 1,
-    });
-
-    watcher.on('add', (filePath) => {
-      handleStoryFile(path.resolve(filePath), project, notifier, queueManager).catch(console.error);
-    });
-
-    watcher.on('change', (filePath) => {
-      handleStoryFile(path.resolve(filePath), project, notifier, queueManager).catch(console.error);
-    });
 
     console.log('[orchestrator] ready');
   } catch (err) {

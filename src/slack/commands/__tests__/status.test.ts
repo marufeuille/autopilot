@@ -12,7 +12,7 @@ vi.mock('../../../vault/reader', () => ({
 }));
 
 vi.mock('../../../config', () => ({
-  config: { watchProject: 'test-project', vaultPath: '/vault' },
+  config: { watchProject: 'test-project', watchProjects: ['test-project'], vaultPath: '/vault' },
   vaultStoriesPath: vi.fn(() => '/vault/Projects/test-project/stories'),
 }));
 

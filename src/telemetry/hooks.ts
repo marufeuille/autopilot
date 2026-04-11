@@ -25,6 +25,7 @@ export class OtelPipelineHooks implements PipelineHooks {
     this.taskSpan = this.tracer.startSpan('task', {
       attributes: {
         'task.slug': ctx.task.slug,
+        'task.project': ctx.task.project,
       },
     });
     this.taskContext = trace.setSpan(context.active(), this.taskSpan);
@@ -172,6 +173,7 @@ export class OtelOrchestratorHooks implements OrchestratorHooks {
     this.storySpan = this.tracer.startSpan('story', {
       attributes: {
         'story.slug': _story.slug,
+        'story.project': _story.project,
         'story.task_count': info.taskCount,
       },
     });
@@ -209,6 +211,7 @@ export class OtelOrchestratorHooks implements OrchestratorHooks {
     this.taskSpan = this.tracer.startSpan('task', {
       attributes: {
         'task.slug': task.slug,
+        'task.project': task.project,
         'task.effort': String(task.frontmatter.effort ?? ''),
         'task.priority': String(task.frontmatter.priority ?? ''),
       },

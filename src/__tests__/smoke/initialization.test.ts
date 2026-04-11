@@ -182,7 +182,25 @@ describe('smoke: initialization', () => {
     const { StoryQueueManager } = await import('../../queue/queue-manager');
     const { createNotificationBackend } = await import('../../notification');
 
-    // main() と同じ初期化順序: queueManager → notifier
+    // main() と同じ初期化順序: queueManagers Map → notifier
+    const queueManagers = new Map([
+      ['test-project', new StoryQueueManager({
+        readStoryBySlug: vi.fn(),
+        updateFileStatus: vi.fn(),
+      })],
+    ]);
+    const notifier = await createNotificationBackend({ queueManagers });
+
+    expect(queueManagers.get('test-project')).toBeDefined();
+    expect(notifier).toBeDefined();
+    expect(queueManagers.get('test-project')!.isEmpty).toBe(true);
+    expect(notifier.notify).toBeTypeOf('function');
+  });
+
+  it('notification と queue の連携初期化が後方互換（単一 queueManager）で動作する', { timeout: 5000 }, async () => {
+    const { StoryQueueManager } = await import('../../queue/queue-manager');
+    const { createNotificationBackend } = await import('../../notification');
+
     const queueManager = new StoryQueueManager({
       readStoryBySlug: vi.fn(),
       updateFileStatus: vi.fn(),

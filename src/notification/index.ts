@@ -41,11 +41,17 @@ import type { StoryQueueManager } from '../queue/queue-manager';
  */
 export interface CreateNotificationBackendOptions {
   /**
-   * 外部から渡すキューマネージャー。
-   * Slack バックエンドで queue サブコマンドに使用する。
-   * 未指定の場合は Slack バックエンド内部で新規生成する。
+   * 外部から渡すキューマネージャー（単一）。
+   * 後方互換のために維持。queueManagers が指定された場合はそちらが優先される。
    */
   queueManager?: StoryQueueManager;
+
+  /**
+   * 外部から渡すプロジェクト別キューマネージャー Map。
+   * Slack バックエンドで queue サブコマンドに使用する。
+   * 未指定の場合は queueManager から単一プロジェクト用の Map を生成する。
+   */
+  queueManagers?: Map<string, StoryQueueManager>;
 }
 
 /**
@@ -86,17 +92,31 @@ export async function createNotificationBackend(
       registerSubcommand('retry', handleRetry);
       registerSubcommand('help', handleHelp);
 
-      // 外部から渡されたキューマネージャーを使うか、内部で新規生成する
-      let queueManager: StoryQueueManager;
-      if (options?.queueManager) {
-        queueManager = options.queueManager;
+      // 外部から渡されたキューマネージャー Map を使うか、内部で新規生成する
+      let queueManagers: Map<string, StoryQueueManager>;
+      if (options?.queueManagers) {
+        queueManagers = options.queueManagers;
+      } else if (options?.queueManager) {
+        // 後方互換: 単一 QueueManager を Map に変換
+        const { config } = await import('../config');
+        queueManagers = new Map([[config.watchProject, options.queueManager]]);
       } else {
         const { StoryQueueManager: QM } = await import('../queue/queue-manager');
         const { readStoryBySlug } = await import('../vault/reader');
         const { updateFileStatus } = await import('../vault/writer');
-        queueManager = new QM({ readStoryBySlug, updateFileStatus });
+        const { config } = await import('../config');
+        queueManagers = new Map<string, StoryQueueManager>();
+        for (const project of config.watchProjects) {
+          queueManagers.set(
+            project,
+            new QM({
+              readStoryBySlug: (slug: string) => readStoryBySlug(slug, project),
+              updateFileStatus,
+            }),
+          );
+        }
       }
-      registerSubcommand('queue', createQueueHandler(queueManager));
+      registerSubcommand('queue', createQueueHandler(queueManagers));
 
       const slackApp = createSlackApp();
       registerSubcommand('story', createStoryHandler(slackApp));

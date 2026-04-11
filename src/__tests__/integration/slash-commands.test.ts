@@ -8,6 +8,7 @@ import { createFakeVault, FakeVaultResult } from '../helpers/fake-vault';
 // ---------------------------------------------------------------------------
 const mockConfig = {
   watchProject: 'test-project',
+  watchProjects: ['test-project'],
   vaultPath: '', // 各テストで動的に設定
 };
 
